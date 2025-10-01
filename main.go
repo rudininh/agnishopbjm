@@ -12,9 +12,9 @@ import (
 func main() {
 
 	timest := strconv.FormatInt(time.Now().Unix(), 10)
-	host := "https://partner.test.shopeemobile.com"
+	host := "https://openplatform.sandbox.test-stable.shopee.sg"
 	path := "/api/v2/shop/auth_partner"
-	redirectUrl := "https://www.google.com/"
+	redirectUrl := "https://www.shopee.co.id/"
 	partnerId := strconv.Itoa(1189715)
 	partnerKey := "shpk6974696744505755436768596869596b646e704e54724258565457706276"
 	baseString := fmt.Sprintf("%s%s%s", partnerId, path, timest)
