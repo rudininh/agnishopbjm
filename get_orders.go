@@ -14,7 +14,7 @@ func main() {
 	partnerID := "1189715"
 	partnerKey := "shpk6974696744505755436768596869596b646e704e54724258565457706276" // yang asli dari Shopee
 	shopID := "225989475"
-	accessToken := "eyJhbGciOiJIUzI1NiJ9.CNPOSBABGOOm4WsgASi9xPPGBjCJsaLwCzgBQAE.aBZMVol_DlYNMmp4oDSK1VbVbmuoa9NtI9hmSURZi14"
+	accessToken := "eyJhbGciOiJIUzI1NiJ9.CNPOSBABGOOm4WsgASiG3vfGBjCe-vj-CzgBQAE.JPCdEvSu_j26lUmUogoL9q8zIHr3IXpuEgRSy2_vX6Y"
 	host := "https://openplatform.sandbox.test-stable.shopee.sg"
 	path := "/api/v2/order/get_order_list"
 	timestamp := time.Now().Unix()
