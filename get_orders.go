@@ -37,11 +37,11 @@ func main() {
 	timeRangeField := "create_time"
 
 	// ✅ tambahkan order_status agar filter-nya jelas
-	orderStatus := "READY_TO_SHIP"
+	// orderStatus := "READY_TO_SHIP"
 
 	url := fmt.Sprintf(
-		"%s%s?partner_id=%s&timestamp=%d&sign=%s&shop_id=%s&access_token=%s&time_range_field=%s&time_from=%d&time_to=%d&page_size=20&order_status=%s",
-		Host, path, PartnerID, timestamp, sign, ShopID, AccessToken, timeRangeField, timeFrom, timeTo, orderStatus)
+		"%s%s?partner_id=%s&timestamp=%d&sign=%s&shop_id=%s&access_token=%s&time_range_field=%s&time_from=%d&time_to=%d&page_size=20",
+		Host, path, PartnerID, timestamp, sign, ShopID, AccessToken, timeRangeField, timeFrom, timeTo)
 
 	fmt.Println("Base string :", baseString)
 	fmt.Println("Sign        :", sign)
