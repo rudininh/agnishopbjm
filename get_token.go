@@ -25,7 +25,7 @@ func generateSign(baseString, key string) string {
 }
 
 func main() {
-	code := "47664b675a56546b49524a4f5a7a716f" // kode hasil callback terbaru
+	code := "744745586b53784672556a7167764c61" // kode hasil callback terbaru
 	shopID := 380921117                        // shop_id hasil callback
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
