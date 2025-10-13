@@ -15,7 +15,7 @@ const (
 	PartnerKey  = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
 	Host        = "https://partner.shopeemobile.com" // gunakan .com, bukan .co.id
 	ShopID      = "380921117"
-	AccessToken = "7a51506441714971444c7a476b71456f"
+	AccessToken = "435045784556457a4b5164456247504b"
 )
 
 func GenerateSign(baseString, key string) string {
