@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
 const (
@@ -24,49 +24,30 @@ const (
 	Redirect   = "https://funny-haupia-0efca3.netlify.app/callback"
 )
 
-var db *sql.DB
-
-// 🔹 Fungsi generate sign Shopee
 func generateSign(baseString, key string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(baseString))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// 🔹 Inisialisasi koneksi database Neon
-func initDB() {
-	connStr := os.Getenv("DATABASE_URL") // ambil dari env
-	if connStr == "" {
-		log.Fatal("❌ DATABASE_URL environment variable belum diset")
+var db *sql.DB
+
+func main() {
+	// Ambil URL database dari environment
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL belum diset")
 	}
 
 	var err error
-	db, err = sql.Open("postgres", connStr)
+	db, err = sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Fatal("❌ Gagal konek ke database:", err)
+		log.Fatalf("Gagal konek ke database: %v", err)
 	}
-
-	// pastikan tabel ada
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS shopee_tokens (
-			id SERIAL PRIMARY KEY,
-			code TEXT,
-			shop_id TEXT,
-			access_token TEXT,
-			refresh_token TEXT,
-			expire_in INT,
-			raw_json JSONB,
-			created_at TIMESTAMP DEFAULT NOW()
-		)
-	`)
-	if err != nil {
-		log.Fatal("❌ Gagal buat tabel:", err)
-	}
-}
-
-func main() {
-	initDB()
 	defer db.Close()
+
+	// Buat tabel jika belum ada
+	createTable()
 
 	http.HandleFunc("/", handleIndex)
 	http.HandleFunc("/callback", handleCallback)
@@ -89,12 +70,10 @@ func main() {
 	log.Fatal(http.ListenAndServe(port, nil))
 }
 
-// halaman awal
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "Server aktif. Buka link di terminal untuk otorisasi Shopee.")
 }
 
-// callback URL dari Shopee
 func handleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	shopID := r.URL.Query().Get("shop_id")
@@ -112,50 +91,14 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// simpan token ke database
-	saveTokenToDB(code, shopID, tokenResp)
+	// Simpan ke database
+	saveToDatabase(shopID, tokenResp)
 
-	fmt.Fprintln(w, "\n✅ Access token berhasil disimpan ke database Neon")
+	fmt.Fprintln(w, "\n✅ Access token berhasil disimpan ke database")
 	fmt.Println("\n=== TOKEN DISIMPAN KE DATABASE ===")
 	fmt.Printf("%+v\n", tokenResp)
 }
 
-// 🔹 Simpan hasil token ke database
-func saveTokenToDB(shopID, code string, tokenResp map[string]interface{}) error {
-	db, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec(`
-        CREATE TABLE IF NOT EXISTS shopee_tokens (
-            id SERIAL PRIMARY KEY,
-            shop_id TEXT,
-            code TEXT,
-            access_token TEXT,
-            refresh_token TEXT,
-            expire_in INT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    `)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(`
-        INSERT INTO shopee_tokens (shop_id, code, access_token, refresh_token, expire_in)
-        VALUES ($1, $2, $3, $4, $5)
-    `, shopID, code,
-		tokenResp["access_token"],
-		tokenResp["refresh_token"],
-		int(tokenResp["expire_in"].(float64)),
-	)
-
-	return err
-}
-
-// 🔹 Ambil access token dari Shopee
 func getAccessToken(code, shopID string) (map[string]interface{}, error) {
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
@@ -189,4 +132,41 @@ func getAccessToken(code, shopID string) (map[string]interface{}, error) {
 	}
 
 	return result, nil
+}
+
+// Buat tabel jika belum ada
+func createTable() {
+	query := `
+	CREATE TABLE IF NOT EXISTS shopee_tokens (
+		id SERIAL PRIMARY KEY,
+		shop_id VARCHAR(50),
+		access_token TEXT,
+		refresh_token TEXT,
+		expire_in BIGINT,
+		created_at TIMESTAMP DEFAULT NOW()
+	)`
+	_, err := db.Exec(query)
+	if err != nil {
+		log.Fatalf("Gagal membuat tabel: %v", err)
+	}
+}
+
+// Simpan token ke database
+func saveToDatabase(shopID string, data map[string]interface{}) {
+	resp := data["response"].(map[string]interface{})
+
+	accessToken := resp["access_token"].(string)
+	refreshToken := resp["refresh_token"].(string)
+	expireIn := int64(resp["expire_in"].(float64))
+
+	_, err := db.Exec(`
+		INSERT INTO shopee_tokens (shop_id, access_token, refresh_token, expire_in)
+		VALUES ($1, $2, $3, $4)`,
+		shopID, accessToken, refreshToken, expireIn)
+
+	if err != nil {
+		log.Printf("Gagal simpan ke database: %v", err)
+	} else {
+		log.Println("✅ Data berhasil disimpan ke database.")
+	}
 }
