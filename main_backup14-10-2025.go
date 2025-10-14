@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,61 +12,22 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	_ "github.com/lib/pq"
 )
 
 const (
-	PartnerID  = 2013107
-	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+	PartnerID  = 2013107                                                            // Ganti dengan live partner_id kamu
+	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465" // Ganti dengan live partner key kamu
 	Host       = "https://partner.shopeemobile.com"
-	Redirect   = "https://funny-haupia-0efca3.netlify.app/callback"
+	Redirect   = "https://funny-haupia-0efca3.netlify.app/callback" // Callback ke server lokal kamu
 )
 
-var db *sql.DB
-
-// 🔹 Fungsi generate sign Shopee
 func generateSign(baseString, key string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(baseString))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// 🔹 Inisialisasi koneksi database Neon
-func initDB() {
-	connStr := os.Getenv("DATABASE_URL") // ambil dari env
-	if connStr == "" {
-		log.Fatal("❌ DATABASE_URL environment variable belum diset")
-	}
-
-	var err error
-	db, err = sql.Open("postgres", connStr)
-	if err != nil {
-		log.Fatal("❌ Gagal konek ke database:", err)
-	}
-
-	// pastikan tabel ada
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS shopee_tokens (
-			id SERIAL PRIMARY KEY,
-			code TEXT,
-			shop_id TEXT,
-			access_token TEXT,
-			refresh_token TEXT,
-			expire_in INT,
-			raw_json JSONB,
-			created_at TIMESTAMP DEFAULT NOW()
-		)
-	`)
-	if err != nil {
-		log.Fatal("❌ Gagal buat tabel:", err)
-	}
-}
-
 func main() {
-	initDB()
-	defer db.Close()
-
 	http.HandleFunc("/", handleIndex)
 	http.HandleFunc("/callback", handleCallback)
 
@@ -112,50 +72,16 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// simpan token ke database
-	saveTokenToDB(code, shopID, tokenResp)
+	// simpan token ke file JSON
+	file, _ := os.Create("token.json")
+	defer file.Close()
+	json.NewEncoder(file).Encode(tokenResp)
 
-	fmt.Fprintln(w, "\n✅ Access token berhasil disimpan ke database Neon")
-	fmt.Println("\n=== TOKEN DISIMPAN KE DATABASE ===")
+	fmt.Fprintln(w, "\n✅ Access token berhasil disimpan ke token.json")
+	fmt.Println("\n=== TOKEN DISIMPAN KE token.json ===")
 	fmt.Printf("%+v\n", tokenResp)
 }
 
-// 🔹 Simpan hasil token ke database
-func saveTokenToDB(shopID, code string, tokenResp map[string]interface{}) error {
-	db, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec(`
-        CREATE TABLE IF NOT EXISTS shopee_tokens (
-            id SERIAL PRIMARY KEY,
-            shop_id TEXT,
-            code TEXT,
-            access_token TEXT,
-            refresh_token TEXT,
-            expire_in INT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    `)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(`
-        INSERT INTO shopee_tokens (shop_id, code, access_token, refresh_token, expire_in)
-        VALUES ($1, $2, $3, $4, $5)
-    `, shopID, code,
-		tokenResp["access_token"],
-		tokenResp["refresh_token"],
-		int(tokenResp["expire_in"].(float64)),
-	)
-
-	return err
-}
-
-// 🔹 Ambil access token dari Shopee
 func getAccessToken(code, shopID string) (map[string]interface{}, error) {
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
