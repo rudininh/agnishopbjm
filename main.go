@@ -39,6 +39,9 @@ func main() {
 		log.Fatal("DATABASE_URL belum diset")
 	}
 
+	//setx DATABASE_URL "postgresql://neondb_owner:npg_eX9ETIsz8PiD@ep-muddy-frog-aeaxrm6y-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
+
 	var err error
 	db, err = sql.Open("postgres", dbURL)
 	if err != nil {
