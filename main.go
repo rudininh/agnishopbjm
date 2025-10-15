@@ -15,7 +15,7 @@ const (
 	PartnerID  = 2013107
 	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
 	Host       = "https://partner.shopeemobile.com"
-	Redirect   = "https://agnishopbjm.vercel.app/callback"
+	Redirect   = "https://agnishopbjm.vercel.app/api/callback"
 )
 
 func main() {
