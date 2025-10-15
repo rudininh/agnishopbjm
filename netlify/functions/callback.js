@@ -2,7 +2,7 @@ import { Client } from 'pg';
 
 export async function handler(event) {
   try {
-    // Ambil query string dari URL callback (misal ?code=123&shop_id=456)
+    // Ambil query string dari URL callback (?code=123&shop_id=456)
     const params = new URLSearchParams(event.rawQuery);
     const code = params.get("code");
     const shop_id = params.get("shop_id");
@@ -10,7 +10,7 @@ export async function handler(event) {
     if (!code || !shop_id) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: "Missing code or shop_id" }),
+        body: "Missing code or shop_id",
       };
     }
 
@@ -40,19 +40,17 @@ export async function handler(event) {
 
     await client.end();
 
+    // 🔁 Redirect ke halaman utama (tanpa tampil JSON)
     return {
-      statusCode: 200,
-      body: JSON.stringify({
-        success: true,
-        message: "Data tersimpan ke database!",
-        code,
-        shop_id,
-      }),
+      statusCode: 302, // redirect
+      headers: {
+        Location: "https://funny-haupia-0efca3.netlify.app/",
+      },
     };
   } catch (err) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
+      body: "Server Error: " + err.message,
     };
   }
 }
