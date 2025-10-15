@@ -1,9 +1,0 @@
-{
-  "redirects": [
-    {
-      "source": "/callback",
-      "destination": "/api/callback",
-      "permanent": false
-    }
-  ]
-}
