@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agni Shop Banjarmasin API</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 40px; }
+    .card {
+      max-width: 600px;
+      margin: auto;
+      padding: 20px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    h1 { color: #e44d26; }
+    p { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Agni Shop Banjarmasin API</h1>
+    <p>
+      Aplikasi internal untuk sinkronisasi stok & order dari berbagai marketplace:
+      <strong>Shopee, Tokopedia, Lazada, TikTok Shop, dan Blibli</strong>.
+    </p>
+    <p>
+      Fitur utama:
+      <ul>
+        <li>Ambil daftar order dari Shopee</li>
+        <li>Update stok produk secara otomatis</li>
+        <li>Integrasi multi marketplace</li>
+      </ul>
+    </p>
+    <p><em>Versi demo untuk keperluan verifikasi Shopee API.</em></p>
+  </div>
+  <div class="card">
+  <h2>Demo Order List (Shopee Sandbox)</h2>
+  <pre>
+  {
+    "order_list": [
+      {
+        "order_sn": "25100105SA4X3C",
+        "booking_sn": ""
+      }
+    ],
+    "more": false,
+    "next_cursor": ""
+  }
+  </pre>
+</div>
+
+</body>
+</html>
