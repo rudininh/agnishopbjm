@@ -95,6 +95,9 @@
 
 import { Client } from "pg";
 
+console.log("DATABASE_URL:", process.env.DATABASE_URL);
+
+
 export default async function handler(req, res) {
   try {
     const { code, shop_id } = req.query;
