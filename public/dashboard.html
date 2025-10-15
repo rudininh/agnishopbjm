@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard Admin</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Dashboard Admin</h1>
+    <p>Selamat datang di panel admin Agni Shop Banjarmasin!</p>
+    <button id="logout">Logout</button>
+  </div>
+
+  <script>
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      window.location.href = '/login.html';
+    }
+  </script>
+
+  <script>
+    document.getElementById('logout').onclick = () => {
+      localStorage.removeItem('authToken');
+      window.location.href = '/login.html';
+    };
+  </script>
+</body>
+</html>
