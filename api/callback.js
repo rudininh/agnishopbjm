@@ -44,7 +44,7 @@ export async function handler(event) {
     return {
       statusCode: 302, // redirect
       headers: {
-        Location: "https://funny-haupia-0efca3.netlify.app/",
+        Location: "https://agnishopbjm.vercel.app/",
       },
     };
   } catch (err) {
