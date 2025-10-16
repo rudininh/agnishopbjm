@@ -40,7 +40,27 @@
             </ul>
           </div>
 
-          <button class="btn-shopee">GET TOKEN SHOPEE</button>
+          <button id="btnShopee" class="btn-shopee">GET TOKEN SHOPEE</button>
+
+          <script>
+          document.getElementById('btnShopee').addEventListener('click', async () => {
+            const btn = document.getElementById('btnShopee');
+            btn.innerText = 'Mengambil token...';
+            btn.disabled = true;
+
+            try {
+              const res = await fetch('http://localhost:8080/get-token');
+              const data = await res.json();
+              alert('✅ Token berhasil diambil:\n' + JSON.stringify(data, null, 2));
+            } catch (err) {
+              alert('❌ Gagal: ' + err);
+            }
+
+            btn.innerText = 'GET TOKEN SHOPEE';
+            btn.disabled = false;
+          });
+          </script>
+
         </div>
       </div>
 
