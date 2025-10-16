@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/get-token.go": {
+      "runtime": "go1.x"
+    }
+  },
+  "routes": [
+    { "src": "/api/get-token", "dest": "/api/get-token.go" }
+  ]
+}
