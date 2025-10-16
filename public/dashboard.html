@@ -12,18 +12,6 @@
     <button id="logout">Logout</button>
   </div>
 
-  <script>
-    const token = localStorage.getItem('authToken');
-    if (!token) {
-      window.location.href = '/login.html';
-    }
-  </script>
 
-  <script>
-    document.getElementById('logout').onclick = () => {
-      localStorage.removeItem('authToken');
-      window.location.href = '/login.html';
-    };
-  </script>
 </body>
 </html>
