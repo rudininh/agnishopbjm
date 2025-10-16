@@ -15,19 +15,19 @@ body {
   top: 0;
   left: 0;
   width: 240px;
-  height: 100vh;
+  height: 100%;
   background: #1a73e8;
   color: white;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 20px 0;
+  padding-top: 20px;
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+  overflow-y: auto;
 }
 
 .sidebar-logo {
   text-align: center;
-  padding: 0 15px;
+  margin-bottom: 30px;
 }
 .sidebar-logo img {
   width: 80px;
@@ -44,17 +44,23 @@ body {
 .sidebar-menu {
   list-style: none;
   padding: 0;
-  margin-top: 30px;
+  margin: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
+
 .sidebar-menu li {
   padding: 15px 20px;
   cursor: pointer;
-  transition: background 0.3s, padding-left 0.3s;
+  transition: all 0.3s;
 }
+
 .sidebar-menu li:hover {
   background: rgba(255, 255, 255, 0.2);
   padding-left: 25px;
 }
+
 .sidebar-menu .active {
   background: rgba(255, 255, 255, 0.25);
   font-weight: 600;
@@ -62,7 +68,7 @@ body {
 
 /* === MAIN CONTENT === */
 .main-content {
-  margin-left: 240px; /* supaya tidak ketutupan sidebar */
+  margin-left: 240px;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -79,62 +85,4 @@ body {
   align-items: center;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
   position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.topbar h1 {
-  margin: 0;
-  font-size: 22px;
-  color: #333;
-}
-
-.admin-name {
-  color: #4b4b4b;
-  font-weight: 500;
-}
-
-/* === CONTENT AREA === */
-.content {
-  padding: 30px;
-  flex: 1;
-  background: #f4f6f8;
-}
-
-.content h2 {
-  margin-top: 0;
-  font-size: 20px;
-  color: #222;
-}
-
-/* === CARD === */
-.card {
-  background: white;
-  border-radius: 10px;
-  padding: 20px;
-  margin-top: 20px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-}
-
-.card h3 {
-  margin-top: 0;
-  color: #1a73e8;
-}
-
-.card p {
-  margin: 8px 0;
-  color: #333;
-  font-size: 15px;
-}
-
-/* === SCROLLBAR STYLING === */
-.main-content::-webkit-scrollbar {
-  width: 8px;
-}
-.main-content::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-}
-.main-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
-}
+  top:
