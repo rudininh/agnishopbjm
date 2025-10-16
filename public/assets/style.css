@@ -86,3 +86,61 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
   position: sticky;
   top:
+
+  /* === DASHBOARD CONTENT === */
+.dashboard-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: calc(100vh - 70px); /* sisakan topbar */
+  padding: 20px;
+}
+
+.dashboard-card {
+  background: white;
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+  max-width: 500px;
+  width: 100%;
+  text-align: center;
+}
+
+.dashboard-card h2 {
+  margin-bottom: 10px;
+  color: #222;
+}
+
+.status-box {
+  text-align: left;
+  margin-top: 20px;
+}
+
+.status-box h4 {
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.status-box ul {
+  list-style: none;
+  padding-left: 0;
+  line-height: 1.8;
+}
+
+/* === SHOPEE BUTTON === */
+.btn-shopee {
+  margin-top: 30px;
+  background-color: #ff5722;
+  color: white;
+  border: none;
+  padding: 15px 30px;
+  font-size: 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.btn-shopee:hover {
+  background-color: #e64a19;
+  transform: translateY(-2px);
+}
