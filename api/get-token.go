@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	PartnerID  = 2013107
-	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
-	Host       = "https://partner.shopeemobile.com"
+	PartnerID  = 2013107                                                            // pakai Partner ID Production
+	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465" // pakai Partner Key Production
+	Host       = "https://partner.shopeemobile.com"                                 // host untuk production
 )
 
 func generateSign(baseString, key string) string {
@@ -24,13 +24,13 @@ func generateSign(baseString, key string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func Handler(w http.ResponseWriter, r *http.Request) {
-	// Bisa diambil dari parameter kalau mau dinamis
-	code := "6268485a6d5a6b50674d64717a76514f"
-	shopID := 380921117
+func main() {
+	code := "6268485a6d5a6b50674d64717a76514f" // kode hasil callback terbaru
+	shopID := 380921117                        // shop_id hasil callback
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
 
+	// generate tanda tangan/sign
 	baseString := fmt.Sprintf("%d%s%d", PartnerID, path, timestamp)
 	sign := generateSign(baseString, PartnerKey)
 
@@ -49,14 +49,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Request gagal: %v", err), http.StatusInternalServerError)
-		return
+		panic(err)
 	}
 	defer resp.Body.Close()
 
 	responseBody, _ := io.ReadAll(resp.Body)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(responseBody)
+	fmt.Println(string(responseBody))
 }
