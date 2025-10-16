@@ -1,4 +1,4 @@
-package api
+package handler
 
 import (
 	"bytes"
@@ -24,7 +24,6 @@ func generateSign(baseString, key string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// ✅ Ini fungsi yang akan dipanggil Vercel
 func Handler(w http.ResponseWriter, r *http.Request) {
 	code := "6b687461727949627864627747756178"
 	shopID := 380921117
@@ -33,7 +32,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	baseString := fmt.Sprintf("%d%s%d", PartnerID, path, timestamp)
 	sign := generateSign(baseString, PartnerKey)
-	url := fmt.Sprintf("%s%s?partner_id=%d&timestamp=%d&sign=%s", Host, path, PartnerID, timestamp, sign)
+
+	url := fmt.Sprintf("%s%s?partner_id=%d&timestamp=%d&sign=%s",
+		Host, path, PartnerID, timestamp, sign)
 
 	body := map[string]interface{}{
 		"code":       code,
