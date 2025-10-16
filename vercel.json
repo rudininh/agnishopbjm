@@ -1,11 +1,12 @@
 {
   "version": 2,
+{
+  "version": 2,
   "builds": [
-    {
-      "src": "get_token.go",
-      "use": "@vercel/go@2.0.0"
-    }
-  ],
+    { "src": "api/*.go", "use": "@vercel/go@2.0.0" }
+  ]
+}
+
   "routes": [
     { "src": "/(.*)", "dest": "get_token.go" }
   ]
