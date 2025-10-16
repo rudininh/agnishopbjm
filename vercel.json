@@ -1,13 +1,9 @@
 {
   "version": 2,
-{
-  "version": 2,
   "builds": [
     { "src": "api/*.go", "use": "@vercel/go@2.0.0" }
-  ]
-}
-
+  ],
   "routes": [
-    { "src": "/(.*)", "dest": "get_token.go" }
+    { "src": "/api/(.*)", "dest": "/api/$1" }
   ]
 }
