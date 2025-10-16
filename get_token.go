@@ -87,7 +87,7 @@ func generateSign(baseString, key string) string {
 
 // ====== HANDLER UNTUK API /get-token ======
 func getTokenHandler(w http.ResponseWriter, r *http.Request) {
-	code := "4c636771635744754d736b5251547077" // hasil callback terbaru
+	code := "674a53654647677450536b666c654f4b" // hasil callback terbaru
 	shopID := 380921117                        // shop_id hasil callback
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
