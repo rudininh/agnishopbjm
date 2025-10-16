@@ -115,32 +115,27 @@
   </div>
 
   <script>
-    const form = document.getElementById('loginForm');
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('username').value;
-      const password = document.getElementById('password').value;
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
 
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        const data = await res.json();
+        if (data.success) {
+          // simpan status login dulu
+          localStorage.setItem("loggedIn", "true");
+          window.location.href = "dashboard.html"; // bukan "/dashboard.html"
+        } else {
+          alert(data.message || 'Login gagal!');
+        }
       });
 
-      const data = await res.json();
-      if (data.success) {
-        localStorage.setItem('token', data.token || 'authenticated');
-
-        // Animasi fade-out sebelum pindah halaman
-        document.body.classList.add('fade-out');
-        setTimeout(() => {
-          window.location.href = 'dashboard.html';
-        }, 500);
-      } else {
-        alert(data.message || 'Login gagal!');
-      }
-    });
   </script>
 </body>
 </html>
