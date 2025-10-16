@@ -1,27 +1,33 @@
+/* === GLOBAL === */
 body {
   margin: 0;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  display: flex;
-  height: 100vh;
   background: #f4f6f8;
+  height: 100vh;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
 }
 
+/* === SIDEBAR === */
 .sidebar {
-  position: fixed;         /* biar tetap di kiri */
-  top: 0;                  /* mulai dari atas */
-  left: 0;                 /* menempel ke kiri */
-  width: 220px;            /* lebar sidebar */
-  height: 100vh;           /* penuh tinggi layar */
-  background-color: #007bff;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 240px;
+  height: 100vh;
+  background: #1a73e8;
   color: white;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   padding: 20px 0;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
 }
 
 .sidebar-logo {
   text-align: center;
+  padding: 0 15px;
 }
 .sidebar-logo img {
   width: 80px;
@@ -31,47 +37,104 @@ body {
 .sidebar-logo h2 {
   margin-top: 10px;
   font-size: 18px;
+  font-weight: 600;
 }
 
+/* === MENU === */
 .sidebar-menu {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin-top: 30px;
 }
-
 .sidebar-menu li {
-  padding: 12px 20px;
+  padding: 15px 20px;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: background 0.3s, padding-left 0.3s;
 }
-
-.sidebar-menu li:hover,
-.sidebar-menu li.active {
+.sidebar-menu li:hover {
   background: rgba(255, 255, 255, 0.2);
+  padding-left: 25px;
+}
+.sidebar-menu .active {
+  background: rgba(255, 255, 255, 0.25);
+  font-weight: 600;
 }
 
+/* === MAIN CONTENT === */
 .main-content {
-  margin-left: 220px; /* sama seperti lebar sidebar */
-  padding: 20px;
+  margin-left: 240px; /* supaya tidak ketutupan sidebar */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow-y: auto;
 }
 
+/* === TOPBAR === */
 .topbar {
   background: white;
   padding: 15px 25px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
+.topbar h1 {
+  margin: 0;
+  font-size: 22px;
+  color: #333;
+}
+
+.admin-name {
+  color: #4b4b4b;
+  font-weight: 500;
+}
+
+/* === CONTENT AREA === */
 .content {
   padding: 30px;
+  flex: 1;
+  background: #f4f6f8;
 }
 
+.content h2 {
+  margin-top: 0;
+  font-size: 20px;
+  color: #222;
+}
+
+/* === CARD === */
 .card {
   background: white;
   border-radius: 10px;
   padding: 20px;
   margin-top: 20px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.card h3 {
+  margin-top: 0;
+  color: #1a73e8;
+}
+
+.card p {
+  margin: 8px 0;
+  color: #333;
+  font-size: 15px;
+}
+
+/* === SCROLLBAR STYLING === */
+.main-content::-webkit-scrollbar {
+  width: 8px;
+}
+.main-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.main-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
