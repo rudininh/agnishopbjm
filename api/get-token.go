@@ -26,7 +26,7 @@ func generateSign(baseString, key string) string {
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	// Bisa diambil dari parameter kalau mau dinamis
-	code := "4c636771635744754d736b5251547077"
+	code := "6268485a6d5a6b50674d64717a76514f"
 	shopID := 380921117
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
