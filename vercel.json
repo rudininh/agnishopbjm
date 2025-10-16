@@ -1,10 +1,12 @@
 {
-  "functions": {
-    "api/get-token.go": {
-      "runtime": "go1.x"
+  "version": 2,
+  "builds": [
+    {
+      "src": "get_token.go",
+      "use": "@vercel/go@2.0.0"
     }
-  },
+  ],
   "routes": [
-    { "src": "/api/get-token", "dest": "/api/get-token.go" }
+    { "src": "/(.*)", "dest": "get_token.go" }
   ]
 }
