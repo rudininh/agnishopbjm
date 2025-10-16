@@ -7,8 +7,12 @@ body {
 }
 
 .sidebar {
-  width: 240px;
-  background: #1a73e8;
+  position: fixed;         /* biar tetap di kiri */
+  top: 0;                  /* mulai dari atas */
+  left: 0;                 /* menempel ke kiri */
+  width: 220px;            /* lebar sidebar */
+  height: 100vh;           /* penuh tinggi layar */
+  background-color: #007bff;
   color: white;
   display: flex;
   flex-direction: column;
@@ -32,22 +36,23 @@ body {
 .sidebar-menu {
   list-style: none;
   padding: 0;
-  margin-top: 30px;
+  margin: 0;
 }
+
 .sidebar-menu li {
-  padding: 15px 20px;
+  padding: 12px 20px;
   cursor: pointer;
-  transition: background 0.3s;
+  transition: background 0.2s ease;
 }
+
 .sidebar-menu li:hover,
-.sidebar-menu .active {
+.sidebar-menu li.active {
   background: rgba(255, 255, 255, 0.2);
 }
 
 .main-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+  margin-left: 220px; /* sama seperti lebar sidebar */
+  padding: 20px;
 }
 
 .topbar {
