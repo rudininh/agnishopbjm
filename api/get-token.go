@@ -1,4 +1,4 @@
-package handler
+package api
 
 import (
 	"bytes"
@@ -24,26 +24,16 @@ func generateSign(baseString, key string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Handler adalah fungsi utama yang akan dipanggil Vercel
+// ✅ Ini fungsi yang akan dipanggil Vercel
 func Handler(w http.ResponseWriter, r *http.Request) {
-	// Ambil parameter dari URL (misal ?code=xxx&shop_id=xxx)
-	code := r.URL.Query().Get("code")
-	shopID := r.URL.Query().Get("shop_id")
-
-	if code == "" || shopID == "" {
-		http.Error(w, "Missing 'code' or 'shop_id' parameter", http.StatusBadRequest)
-		return
-	}
-
+	code := "6b687461727949627864627747756178"
+	shopID := 380921117
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
 
-	// generate sign
 	baseString := fmt.Sprintf("%d%s%d", PartnerID, path, timestamp)
 	sign := generateSign(baseString, PartnerKey)
-
-	url := fmt.Sprintf("%s%s?partner_id=%d&timestamp=%d&sign=%s",
-		Host, path, PartnerID, timestamp, sign)
+	url := fmt.Sprintf("%s%s?partner_id=%d&timestamp=%d&sign=%s", Host, path, PartnerID, timestamp, sign)
 
 	body := map[string]interface{}{
 		"code":       code,
@@ -58,14 +48,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, "Failed to request token: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
 	responseBody, _ := io.ReadAll(resp.Body)
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
 	w.Write(responseBody)
 }
