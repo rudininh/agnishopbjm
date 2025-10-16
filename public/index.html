@@ -15,6 +15,13 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      opacity: 0;
+      animation: fadeIn 0.8s ease forwards;
+      transition: opacity 0.5s ease;
+    }
+
+    .fade-out {
+      opacity: 0 !important;
     }
 
     .logo {
@@ -42,7 +49,7 @@
       box-shadow: 0 6px 25px rgba(0, 0, 0, 0.1);
       width: 320px;
       text-align: center;
-      animation: fadeIn 0.8s ease;
+      animation: slideUp 0.8s ease;
     }
 
     .login-box h2 {
@@ -84,8 +91,12 @@
     }
 
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
+      to { opacity: 1; }
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
     }
   </style>
 </head>
@@ -101,11 +112,12 @@
       <input id="password" type="password" placeholder="Password" required />
       <button type="submit">Login</button>
     </form>
+  </div>
 
+  <script>
+    const form = document.getElementById('loginForm');
 
-
-    <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('username').value;
       const password = document.getElementById('password').value;
@@ -118,14 +130,17 @@
 
       const data = await res.json();
       if (data.success) {
-        window.location.href = data.redirect;
+        localStorage.setItem('token', data.token || 'authenticated');
+
+        // Animasi fade-out sebelum pindah halaman
+        document.body.classList.add('fade-out');
+        setTimeout(() => {
+          window.location.href = 'dashboard.html';
+        }, 500);
       } else {
         alert(data.message || 'Login gagal!');
       }
     });
-    </script>
-
-
-  </div>
+  </script>
 </body>
 </html>
