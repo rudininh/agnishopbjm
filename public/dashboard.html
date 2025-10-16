@@ -1,85 +1,53 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard Admin</title>
-  <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #e3f2fd, #90caf9);
-      height: 100vh;
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      opacity: 0;
-      animation: fadeIn 0.8s ease forwards;
-      transition: opacity 0.5s ease;
-    }
-
-    .fade-out {
-      opacity: 0 !important;
-    }
-
-    .box {
-      background: white;
-      padding: 30px 40px;
-      border-radius: 10px;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.1);
-      text-align: center;
-      animation: slideUp 0.8s ease;
-    }
-
-    h1 {
-      color: #1976d2;
-      margin-bottom: 20px;
-    }
-
-    button {
-      background-color: #1976d2;
-      color: white;
-      border: none;
-      padding: 10px 20px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: background 0.3s;
-    }
-
-    button:hover {
-      background-color: #0d47a1;
-    }
-
-    @keyframes fadeIn {
-      to { opacity: 1; }
-    }
-
-    @keyframes slideUp {
-      from { transform: translateY(20px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-  </style>
+  <link rel="stylesheet" href="assets/style.css" />
 </head>
 <body>
-  <div class="box">
-    <h1>Selamat Datang di Dashboard</h1>
-    <p>Anda sudah login sebagai admin.</p>
-    <button id="logoutBtn">Logout</button>
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <img src="assets/logo.png" alt="Logo" />
+      <h2>Agni Admin</h2>
+    </div>
+    <ul class="sidebar-menu">
+      <li class="active">🏠 Dashboard</li>
+      <li>🛍️ Data Shopee</li>
+      <li>⚙️ Pengaturan</li>
+      <li id="logoutBtn">🚪 Logout</li>
+    </ul>
+  </div>
+
+  <div class="main-content">
+    <div class="topbar">
+      <h1>Dashboard</h1>
+      <span class="admin-name">👤 Admin</span>
+    </div>
+
+    <div class="content">
+      <h2>Selamat datang di Dashboard!</h2>
+      <p>Anda berhasil login sebagai admin.</p>
+      <div class="card">
+        <h3>Status Integrasi</h3>
+        <p>✅ Shopee API terhubung</p>
+        <p>✅ Database Neon aktif</p>
+        <p>✅ Login sistem aman</p>
+      </div>
+    </div>
   </div>
 
   <script>
-    const token = localStorage.getItem('token');
-    if (!token) {
-      window.location.href = 'index.html';
+    // Cek login
+    if (!localStorage.getItem("loggedIn")) {
+      window.location.href = "/";
     }
 
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      document.body.classList.add('fade-out');
-      setTimeout(() => {
-        localStorage.removeItem('token');
-        window.location.href = 'index.html';
-      }, 500);
+    // Logout
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+      localStorage.removeItem("loggedIn");
+      window.location.href = "/";
     });
   </script>
 </body>
