@@ -27,7 +27,7 @@ export default async function handler(req, res) {
         'Set-Cookie',
         `admin_logged_in=true; Path=/; HttpOnly; Max-Age=3600;`
       );
-      return res.status(200).json({ success: true, redirect: '/dashboard.html' });
+      return res.status(200).json({ success: true, redirect: 'dashboard.html' });
     } else {
       return res.status(401).json({ success: false, message: 'Username atau password salah!' });
     }
