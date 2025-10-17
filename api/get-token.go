@@ -25,7 +25,7 @@ func generateSign(baseString, key string) string {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	code := "76487862716570504c44425141506c75"
+	code := "46654279446d6c4e78466a6d7a4e7a55"
 	shopID := 380921117
 	timestamp := time.Now().Unix()
 	path := "/api/v2/auth/token/get"
