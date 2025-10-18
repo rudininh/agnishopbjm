@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="id">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard Admin</title>
   <link rel="stylesheet" href="./assets/style.css" />
 </head>
+
 <body>
   <div class="sidebar">
     <div class="sidebar-logo">
@@ -14,6 +16,11 @@
     </div>
     <ul class="sidebar-menu">
       <li class="active">🏠 Dashboard</li>
+      <li>
+        <a href="stok-shopee.html">
+          <i class="fa fa-box"></i> Stok Shopee
+        </a>
+      </li>
       <li>🛍️ Data Shopee</li>
       <li>⚙️ Pengaturan</li>
       <li id="logoutBtn">🚪 Logout</li>
@@ -26,23 +33,23 @@
       <span class="admin-name">👤 Admin</span>
     </div>
 
-      <div class="dashboard-container">
-        <div class="dashboard-card">
-          <h2>Selamat datang di Dashboard!</h2>
-          <p>Anda berhasil login sebagai admin.</p>
+    <div class="dashboard-container">
+      <div class="dashboard-card">
+        <h2>Selamat datang di Dashboard!</h2>
+        <p>Anda berhasil login sebagai admin.</p>
 
-          <div class="status-box">
-            <h4>Status Integrasi</h4>
-            <ul>
-              <li>✅ Shopee API terhubung</li>
-              <li>✅ Database Neon aktif</li>
-              <li>✅ Login sistem aman</li>
-            </ul>
-          </div>
+        <div class="status-box">
+          <h4>Status Integrasi</h4>
+          <ul>
+            <li>✅ Shopee API terhubung</li>
+            <li>✅ Database Neon aktif</li>
+            <li>✅ Login sistem aman</li>
+          </ul>
+        </div>
 
-          <button id="btnShopee" class="btn-shopee">GET TOKEN SHOPEE</button>
+        <button id="btnShopee" class="btn-shopee">GET TOKEN SHOPEE</button>
 
-          <script>
+        <script>
           document.getElementById('btnShopee').addEventListener('click', async () => {
             const btn = document.getElementById('btnShopee');
             btn.innerText = 'Mengambil token...';
@@ -59,11 +66,11 @@
             btn.innerText = 'GET TOKEN SHOPEE';
             btn.disabled = false;
           });
-          </script>
-            
+        </script>
 
-        </div>
+
       </div>
+    </div>
 
 
 
@@ -82,4 +89,5 @@
     });
   </script>
 </body>
+
 </html>
