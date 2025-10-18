@@ -16,6 +16,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ===== KONSTANTA SHOPEE =====
+const (
+	PartnerID  = int64(2013107)
+	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+	Host       = "https://partner.shopeemobile.com" // gunakan .com
+)
+
 // ===== Structs =====
 type TokenData struct {
 	ShopID      int64  `json:"shop_id"`
@@ -56,10 +63,10 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 }
 
 // ===== Generate Shopee Signature =====
-func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
+func generateShopeeSign(path, accessToken string, shopID, timestamp int64) string {
 	// base_string = partner_id + path + timestamp + access_token + shop_id
-	baseString := fmt.Sprintf("%d%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
-	h := hmac.New(sha256.New, []byte(partnerKey))
+	baseString := fmt.Sprintf("%d%s%d%s%d", PartnerID, path, timestamp, accessToken, shopID)
+	h := hmac.New(sha256.New, []byte(PartnerKey))
 	h.Write([]byte(baseString))
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -84,30 +91,22 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
-	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
-
-	fmt.Println("=== DEBUG ENV ===")
-	fmt.Println("partnerID =", partnerIDStr)
-	fmt.Println("partnerKey =", partnerKey)
-	fmt.Println("shopID =", token.ShopID)
-	fmt.Println("accessToken =", token.AccessToken)
-
-	var partnerID int64
-	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
+	fmt.Println("=== DEBUG CONFIG ===")
+	fmt.Println("PartnerID   =", PartnerID)
+	fmt.Println("PartnerKey  =", PartnerKey)
+	fmt.Println("ShopID      =", token.ShopID)
+	fmt.Println("AccessToken =", token.AccessToken)
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
-
-	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
+	sign := generateShopeeSign(path, token.AccessToken, token.ShopID, timestamp)
 
 	url := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
-		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign,
+		"%s%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
+		Host, path, PartnerID, timestamp, token.AccessToken, token.ShopID, sign,
 	)
 
-	// 🟢 DEBUG URL yang digunakan
 	fmt.Println("=== DEBUG STEP 1 ===")
 	fmt.Println("URL GET_ITEM_LIST:", url)
 
@@ -127,11 +126,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 🟡 Tambahkan debug parsed
 	fmt.Printf("DEBUG PARSED listRes: %+v\n", listRes)
 
 	if listRes.Error != "" {
-		fmt.Printf("DEBUG Shopee Error Response: %+v\n", listRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, listRes.Error, listRes.Message), http.StatusBadRequest)
 		return
 	}
@@ -153,11 +150,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
+	sign2 := generateShopeeSign(path2, token.AccessToken, token.ShopID, timestamp2)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
+		"%s%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
+		Host, path2, PartnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
 	)
 
 	fmt.Println("=== DEBUG STEP 2 ===")
@@ -187,7 +184,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("DEBUG PARSED infoRes: %+v\n", infoRes)
 
 	if infoRes.Error != "" {
-		fmt.Printf("DEBUG Shopee Error Info Response: %+v\n", infoRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, infoRes.Error, infoRes.Message), http.StatusBadRequest)
 		return
 	}
