@@ -2,59 +2,82 @@
 <html lang="id">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stok Shopee - Agni Admin</title>
-    <link rel="stylesheet" href="./assets/style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Admin</title>
+    <link rel="stylesheet" href="./assets/style.css" />
 </head>
 
 <body>
-    <div class="container">
-        <aside class="sidebar">
-            <h2>Agni Admin</h2>
-            <ul>
-                <li><a href="dashboard.html"><i class="fa fa-home"></i> Dashboard</a></li>
-                <li><a href="data-shopee.html"><i class="fa fa-folder"></i> Data Shopee</a></li>
-                <li class="active"><a href="stok-shopee.html"><i class="fa fa-box"></i> Stok Shopee</a></li>
-                <li><a href="pengaturan.html"><i class="fa fa-gear"></i> Pengaturan</a></li>
-                <li><a href="logout.html"><i class="fa fa-sign-out"></i> Logout</a></li>
-            </ul>
-        </aside>
+    <div id="sidebar"></div>
 
-        <main class="content">
-            <h1>Stok Shopee</h1>
-            <p>Daftar stok produk dari toko Shopee Anda.</p>
+    <div class="main-content">
+        <div id="header"></div>
 
-            <table border="1" cellspacing="0" cellpadding="8" style="width:100%; border-collapse: collapse;">
-                <thead style="background:#f2f2f2;">
-                    <tr>
-                        <th>No</th>
-                        <th>Nama Produk</th>
-                        <th>SKU</th>
-                        <th>Stok</th>
-                        <th>Harga</th>
-                    </tr>
-                </thead>
-                <tbody id="stok-table">
-                    <tr>
-                        <td>1</td>
-                        <td>Contoh Produk 1</td>
-                        <td>SKU123</td>
-                        <td>25</td>
-                        <td>Rp50.000</td>
-                    </tr>
-                    <tr>
-                        <td>2</td>
-                        <td>Contoh Produk 2</td>
-                        <td>SKU456</td>
-                        <td>10</td>
-                        <td>Rp30.000</td>
-                    </tr>
-                </tbody>
-            </table>
-        </main>
+        <div class="dashboard-container">
+            <div class="dashboard-card">
+                <h1>Stok Shopee</h1>
+                <p>Daftar stok produk dari toko Shopee Anda.</p>
+
+
+                <div class="status-box">
+                    table border="1" cellspacing="0" cellpadding="8" style="width:100%; border-collapse: collapse;">
+                    <thead style="background:#f2f2f2;">
+                        <tr>
+                            <th>No</th>
+                            <th>Nama Produk</th>
+                            <th>SKU</th>
+                            <th>Stok</th>
+                            <th>Harga</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stok-table">
+                        <tr>
+                            <td>1</td>
+                            <td>Contoh Produk 1</td>
+                            <td>SKU123</td>
+                            <td>25</td>
+                            <td>Rp50.000</td>
+                        </tr>
+                        <tr>
+                            <td>2</td>
+                            <td>Contoh Produk 2</td>
+                            <td>SKU456</td>
+                            <td>10</td>
+                            <td>Rp30.000</td>
+                        </tr>
+                    </tbody>
+                    </table>
+                </div>
+
+            </div>
+        </div>
+
+
+
+
+        <div id="footer"></div>
     </div>
+
+    <script>
+        // Fungsi untuk load komponen HTML eksternal
+        async function loadComponent(id, file) {
+            const res = await fetch(file);
+            const html = await res.text();
+            document.getElementById(id).innerHTML = html;
+        }
+
+        // Load sidebar, header, footer
+        loadComponent('sidebar', './component/sidebar.html');
+        loadComponent('header', './component/header.html');
+        loadComponent('footer', './component/footer.html');
+
+        // Cek login
+        if (!localStorage.getItem("loggedIn")) {
+            window.location.href = "/";
+        }
+
+    </script>
 </body>
 
 </html>
