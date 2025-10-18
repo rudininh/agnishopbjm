@@ -55,11 +55,10 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 	return conn, nil
 }
 
-// ===== HMAC Shopee =====
-func generateShopeeSign(partnerID, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
-	// FORMAT SESUAI DOKUMENTASI RESMI:
+// ===== Generate Shopee Signature =====
+func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
 	// base_string = partner_id + path + timestamp + access_token + shop_id
-	baseString := fmt.Sprintf("%s%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
+	baseString := fmt.Sprintf("%d%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
 	h := hmac.New(sha256.New, []byte(partnerKey))
 	h.Write([]byte(baseString))
 	return hex.EncodeToString(h.Sum(nil))
@@ -85,13 +84,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partnerID := os.Getenv("SHOPEE_PARTNER_ID")
+	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
 	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
-	// const (
-	// 	PartnerID  = 2013107
-	// 	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
-	// 	Host       = "https://partner.shopeemobile.com"
-	// )
+
+	var partnerID int64
+	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
@@ -99,8 +96,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
-	url := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
-		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign)
+	url := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
+		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign,
+	)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -140,8 +139,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	timestamp2 := time.Now().Unix()
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
-	url2 := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=2013107&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, timestamp2, token.AccessToken, token.ShopID, sign2)
+	url2 := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
+		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
+	)
 
 	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(itemIDsJSON))
 	req.Header.Set("Content-Type", "application/json")
