@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Admin</title>
+    <link rel="stylesheet" href="./assets/style.css" />
+</head>
+
+<body>
+    <div id="sidebar"></div>
+
+    <div class="main-content">
+        <div id="header"></div>
+
+        <div class="dashboard-container">
+            <div class="dashboard-card">
+                <h2>Selamat datang di Dashboard!</h2>
+                <p>Anda berhasil login sebagai admin.</p>
+
+                <div class="status-box">
+                    <h4>Status Integrasi</h4>
+                    <ul>
+                        <li>✅ Shopee API terhubung</li>
+                        <li>✅ Database Neon aktif</li>
+                        <li>✅ Login sistem aman</li>
+                    </ul>
+                </div>
+
+                <button id="btnShopee" class="btn-shopee">GET TOKEN SHOPEE</button>
+            </div>
+        </div>
+
+
+
+
+        <div id="footer"></div>
+    </div>
+
+    <script>
+        // Fungsi untuk load komponen HTML eksternal
+        async function loadComponent(id, file) {
+            const res = await fetch(file);
+            const html = await res.text();
+            document.getElementById(id).innerHTML = html;
+        }
+
+        // Load sidebar, header, footer
+        loadComponent('sidebar', './component/sidebar.html');
+        loadComponent('header', './component/header.html');
+        loadComponent('footer', './component/footer.html');
+
+        // Cek login
+        if (!localStorage.getItem("loggedIn")) {
+            window.location.href = "/";
+        }
+
+    </script>
+</body>
+
+</html>
