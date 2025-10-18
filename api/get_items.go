@@ -85,8 +85,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partnerID := os.Getenv("SHOPEE_PARTNER_ID")
-	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
+	// partnerID := os.Getenv("SHOPEE_PARTNER_ID")
+	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
+	const (
+		PartnerID  = 2013107
+		PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+		Host       = "https://partner.shopeemobile.com"
+	)
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
