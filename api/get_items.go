@@ -10,10 +10,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+)
+
+// ===== KONSTAN (langsung tertulis agar tidak kosong di Vercel) =====
+const (
+	PartnerID  = "2013107"
+	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+	Host       = "https://partner.shopeemobile.com"
+	PageSize   = 20
 )
 
 // ===== Structs =====
@@ -48,7 +55,7 @@ type ShopeeItemInfoResponse struct {
 
 // ===== Database Connection =====
 func getDBConn(ctx context.Context) (*pgx.Conn, error) {
-	conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	conn, err := pgx.Connect(ctx, "postgres://user:password@host:port/dbname") // <-- Ganti dengan DATABASE_URL kamu
 	if err != nil {
 		return nil, fmt.Errorf("gagal konek DB: %v", err)
 	}
@@ -56,10 +63,10 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 }
 
 // ===== Generate Shopee Signature =====
-func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
+func generateShopeeSign(path, accessToken string, shopID int64, timestamp int64) string {
 	// base_string = partner_id + path + timestamp + access_token + shop_id
-	baseString := fmt.Sprintf("%d%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
-	h := hmac.New(sha256.New, []byte(partnerKey))
+	baseString := fmt.Sprintf("%s%s%d%s%d", PartnerID, path, timestamp, accessToken, shopID)
+	h := hmac.New(sha256.New, []byte(PartnerKey))
 	h.Write([]byte(baseString))
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -84,27 +91,20 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
-	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
-
 	fmt.Println("=== DEBUG ENV ===")
-	fmt.Println("partnerID =", partnerIDStr)
-	fmt.Println("partnerKey =", partnerKey)
+	fmt.Println("partnerID =", PartnerID)
+	fmt.Println("partnerKey =", PartnerKey)
 	fmt.Println("shopID =", token.ShopID)
 	fmt.Println("accessToken =", token.AccessToken)
-
-	var partnerID int64
-	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
-
-	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
+	sign := generateShopeeSign(path, token.AccessToken, token.ShopID, timestamp)
 
 	url := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
-		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign,
+		"%s%s?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=%d",
+		Host, path, PartnerID, timestamp, token.AccessToken, token.ShopID, sign, PageSize,
 	)
 
 	// 🟢 DEBUG URL yang digunakan
@@ -153,11 +153,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
+	sign2 := generateShopeeSign(path2, token.AccessToken, token.ShopID, timestamp2)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
+		"%s%s?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
+		Host, path2, PartnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
 	)
 
 	fmt.Println("=== DEBUG STEP 2 ===")
