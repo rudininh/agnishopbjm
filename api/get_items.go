@@ -22,6 +22,11 @@ type TokenData struct {
 	AccessToken string `json:"access_token"`
 }
 
+type Config struct {
+	PartnerID  int64  `json:"partner_id"`
+	PartnerKey string `json:"partner_key"`
+}
+
 type ShopeeItemListResponse struct {
 	Response struct {
 		Item []struct {
@@ -84,8 +89,24 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
-	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
+	var partnerID Config
+	err1 = conn.QueryRow(ctx, "SELECT partner_id FROM shopee_config where id = 1").
+		Scan(&partnerID)
+	if err1 != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil partnerID dari DB: %v"}`, err1), http.StatusInternalServerError)
+		return
+	}
+
+	var partnerKey Config
+	er2 = conn.QueryRow(ctx, "SELECT partner_key FROM shopee_config where id = 1").
+		Scan(&partnerID)
+	if err2 != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil partnerID dari DB: %v"}`, err2), http.StatusInternalServerError)
+		return
+	}
+
+	// partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
+	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
 
 	fmt.Println("=== DEBUG ENV ===")
 	fmt.Println("partnerID =", partnerIDStr)
@@ -93,8 +114,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("shopID =", token.ShopID)
 	fmt.Println("accessToken =", token.AccessToken)
 
-	var partnerID int64
-	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
+	// fmt.Sscanf(partnerIDStr, "%d", &partnerID)
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
