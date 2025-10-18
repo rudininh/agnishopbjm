@@ -44,9 +44,9 @@
     }
 
     // Load sidebar, header, footer
-    loadComponent('sidebar', 'sidebar.html');
-    loadComponent('header', 'header.html');
-    loadComponent('footer', 'footer.html');
+    loadComponent('sidebar', './component/sidebar.html');
+    loadComponent('header', './component/header.html');
+    loadComponent('footer', './component/footer.html');
 
     // Cek login
     if (!localStorage.getItem("loggedIn")) {
