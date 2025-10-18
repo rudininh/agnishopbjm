@@ -90,11 +90,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// partnerID := os.Getenv("SHOPEE_PARTNER_ID")
 	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
 
-	fmt.Println("=== DEBUG ENV ===")
-	fmt.Println("partnerID =", partnerIDStr)
-	fmt.Println("partnerKey =", partnerKey)
-	fmt.Println("shopID =", token.ShopID)
-	fmt.Println("accessToken =", token.AccessToken)
+	fmt.Sprintf("=== DEBUG ENV ===")
+	fmt.Sprintf("partnerID =", partnerIDStr)
+	fmt.Sprintf("partnerKey =", partnerKey)
+	fmt.Sprintf("shopID =", token.ShopID)
+	fmt.Sprintf("accessToken =", token.AccessToken)
 
 	var partnerID int64
 	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
