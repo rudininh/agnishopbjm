@@ -85,13 +85,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// partnerID := os.Getenv("SHOPEE_PARTNER_ID")
-	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
-	const (
-		PartnerID  = 2013107
-		PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
-		Host       = "https://partner.shopeemobile.com"
-	)
+	partnerID := os.Getenv("SHOPEE_PARTNER_ID")
+	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
+	// const (
+	// 	PartnerID  = 2013107
+	// 	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+	// 	Host       = "https://partner.shopeemobile.com"
+	// )
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
@@ -140,8 +140,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	timestamp2 := time.Now().Unix()
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
-	url2 := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2)
+	url2 := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=2013107&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
+		path2, timestamp2, token.AccessToken, token.ShopID, sign2)
 
 	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(itemIDsJSON))
 	req.Header.Set("Content-Type", "application/json")
