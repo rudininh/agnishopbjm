@@ -129,6 +129,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("DEBUG PARSED listRes: %+v\n", listRes)
 
 	if listRes.Error != "" {
+		fmt.Printf("DEBUG Shopee Error Response: %+v\n", listRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, listRes.Error, listRes.Message), http.StatusBadRequest)
 		return
 	}
@@ -184,6 +185,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("DEBUG PARSED infoRes: %+v\n", infoRes)
 
 	if infoRes.Error != "" {
+		fmt.Printf("DEBUG Shopee Error Info Response: %+v\n", infoRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, infoRes.Error, infoRes.Message), http.StatusBadRequest)
 		return
 	}
