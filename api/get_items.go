@@ -87,14 +87,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
 	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
 
-	// partnerID := os.Getenv("SHOPEE_PARTNER_ID")
-	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
-
-	fmt.Sprintf("=== DEBUG ENV ===")
-	fmt.Sprintf("partnerID =", partnerIDStr)
-	fmt.Sprintf("partnerKey =", partnerKey)
-	fmt.Sprintf("shopID =", token.ShopID)
-	fmt.Sprintf("accessToken =", token.AccessToken)
+	fmt.Println("=== DEBUG ENV ===")
+	fmt.Println("partnerID =", partnerIDStr)
+	fmt.Println("partnerKey =", partnerKey)
+	fmt.Println("shopID =", token.ShopID)
+	fmt.Println("accessToken =", token.AccessToken)
 
 	var partnerID int64
 	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
@@ -110,6 +107,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign,
 	)
 
+	// 🟢 DEBUG URL yang digunakan
+	fmt.Println("=== DEBUG STEP 1 ===")
+	fmt.Println("URL GET_ITEM_LIST:", url)
+
 	resp, err := http.Get(url)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item list: %v"}`, err), http.StatusInternalServerError)
@@ -118,13 +119,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	fmt.Printf("DEBUG RAW Shopee GET_ITEM_LIST response: %s\n", string(body))
+
 	var listRes ShopeeItemListResponse
 	if err := json.Unmarshal(body, &listRes); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item list: %v","raw":%q}`, err, string(body)), http.StatusInternalServerError)
 		return
 	}
 
+	// 🟡 Tambahkan debug parsed
+	fmt.Printf("DEBUG PARSED listRes: %+v\n", listRes)
+
 	if listRes.Error != "" {
+		fmt.Printf("DEBUG Shopee Error Response: %+v\n", listRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, listRes.Error, listRes.Message), http.StatusBadRequest)
 		return
 	}
@@ -153,6 +160,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
 	)
 
+	fmt.Println("=== DEBUG STEP 2 ===")
+	fmt.Println("URL GET_ITEM_INFO:", url2)
+	fmt.Println("Body JSON:", string(itemIDsJSON))
+
 	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(itemIDsJSON))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -165,13 +176,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer resp2.Body.Close()
 
 	body2, _ := io.ReadAll(resp2.Body)
+	fmt.Printf("DEBUG RAW Shopee GET_ITEM_INFO response: %s\n", string(body2))
+
 	var infoRes ShopeeItemInfoResponse
 	if err := json.Unmarshal(body2, &infoRes); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item info: %v","raw":%q}`, err, string(body2)), http.StatusInternalServerError)
 		return
 	}
 
+	fmt.Printf("DEBUG PARSED infoRes: %+v\n", infoRes)
+
 	if infoRes.Error != "" {
+		fmt.Printf("DEBUG Shopee Error Info Response: %+v\n", infoRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, infoRes.Error, infoRes.Message), http.StatusBadRequest)
 		return
 	}
