@@ -57,8 +57,9 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 	return conn, nil
 }
 
-func createShopeeSign(path string, partnerID string, partnerKey string, accessToken string, shopID int64, timestamp int64) string {
-	baseString := fmt.Sprintf("%s/api/v2%s%s%d", partnerID, path, accessToken, timestamp)
+// Format signature sesuai dokumentasi Shopee v2
+func createShopeeSign(path, partnerID, partnerKey, accessToken string, shopID int64, timestamp int64) string {
+	baseString := fmt.Sprintf("%s%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
 	h := hmac.New(sha256.New, []byte(partnerKey))
 	h.Write([]byte(baseString))
 	return hex.EncodeToString(h.Sum(nil))
@@ -77,7 +78,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// === Ambil token dari database ===
 	var token TokenData
 	err = conn.QueryRow(ctx, "SELECT shop_id, access_token FROM shopee_tokens ORDER BY created_at DESC LIMIT 1").
 		Scan(&token.ShopID, &token.AccessToken)
@@ -91,13 +91,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// === STEP 1: Ambil daftar item ID ===
 	timestamp := time.Now().Unix()
-	sign := createShopeeSign("/product/get_item_list", partnerID, partnerKey, token.AccessToken, token.ShopID, timestamp)
-	url := fmt.Sprintf("https://partner.shopeemobile.com/api/v2/product/get_item_list?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
-		partnerID, timestamp, token.AccessToken, token.ShopID, sign)
+	path := "/api/v2/product/get_item_list"
+	sign := createShopeeSign(path, partnerID, partnerKey, token.AccessToken, token.ShopID, timestamp)
+	url := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
+		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign)
 
 	fmt.Println("=== [STEP 1] Ambil item list ===")
 	fmt.Println("URL:", url)
-	fmt.Println("Sign:", sign)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -126,7 +126,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(listRes.Response.Item) == 0 {
-		fmt.Println("Tidak ada item ditemukan dari Shopee")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": []interface{}{},
 			"note":  "Tidak ada item ditemukan dari Shopee",
@@ -139,18 +138,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	for _, item := range listRes.Response.Item {
 		itemIDs = append(itemIDs, item.ItemID)
 	}
-
 	itemIDsJSON, _ := json.Marshal(map[string][]int64{"item_id_list": itemIDs})
 
 	timestamp2 := time.Now().Unix()
-	sign2 := createShopeeSign("/product/get_item_base_info", partnerID, partnerKey, token.AccessToken, token.ShopID, timestamp2)
-	url2 := fmt.Sprintf("https://partner.shopeemobile.com/api/v2/product/get_item_base_info?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		partnerID, timestamp2, token.AccessToken, token.ShopID, sign2)
+	path2 := "/api/v2/product/get_item_base_info"
+	sign2 := createShopeeSign(path2, partnerID, partnerKey, token.AccessToken, token.ShopID, timestamp2)
+	url2 := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
+		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2)
 
 	fmt.Println("=== [STEP 2] Ambil detail item ===")
 	fmt.Println("URL:", url2)
 	fmt.Println("Body:", string(itemIDsJSON))
-	fmt.Println("Sign:", sign2)
 
 	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(itemIDsJSON))
 	req.Header.Set("Content-Type", "application/json")
@@ -176,9 +174,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item info: %v","raw":%q}`, err, string(body2)), http.StatusInternalServerError)
 		return
 	}
-
-	// === STEP 3: Kirim hasil ke frontend ===
-	fmt.Printf("Berhasil ambil %d item dari Shopee\n", len(infoRes.Response.ItemList))
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"items": infoRes.Response.ItemList,
