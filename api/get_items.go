@@ -74,7 +74,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	ctx := context.Background()
-	conn, err := getDBConn(ctx)
+	conn, err, err1, err2 := getDBConn(ctx)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusInternalServerError)
 		return
@@ -98,10 +98,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var partnerKey Config
-	er2 = conn.QueryRow(ctx, "SELECT partner_key FROM shopee_config where id = 1").
+	err2 = conn.QueryRow(ctx, "SELECT partner_key FROM shopee_config where id = 1").
 		Scan(&partnerID)
 	if err2 != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil partnerID dari DB: %v"}`, err2), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil partnerKey dari DB: %v"}`, err2), http.StatusInternalServerError)
 		return
 	}
 
@@ -109,7 +109,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
 
 	fmt.Println("=== DEBUG ENV ===")
-	fmt.Println("partnerID =", partnerIDStr)
+	fmt.Println("partnerID =", partnerID)
 	fmt.Println("partnerKey =", partnerKey)
 	fmt.Println("shopID =", token.ShopID)
 	fmt.Println("accessToken =", token.AccessToken)
@@ -131,7 +131,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("=== DEBUG STEP 1 ===")
 	fmt.Println("URL GET_ITEM_LIST:", url)
 
-	resp, err := http.Get(url)
+	resp, err, err1, err2 := http.Get(url)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item list: %v"}`, err), http.StatusInternalServerError)
 		return
