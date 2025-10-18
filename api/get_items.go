@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"bytes"
@@ -70,7 +70,6 @@ func generateShopeeSign(path, accessToken string, shopID, timestamp int64) strin
 	h.Write([]byte(baseString))
 	return hex.EncodeToString(h.Sum(nil))
 }
-func main() {}
 
 // ===== Handler utama =====
 func Handler(w http.ResponseWriter, r *http.Request) {
@@ -195,3 +194,4 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		"count": len(infoRes.Response.ItemList),
 	})
 }
+func main() {}
