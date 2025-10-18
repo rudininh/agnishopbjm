@@ -9,11 +9,7 @@
       "src": "/(.*)",
       "dest": "/public/$1"
     }
-  ]
-}
-
-
-{
+  ],
   "functions": {
     "api/**/*.go": {
       "runtime": "vercel-go@2.1.0"
