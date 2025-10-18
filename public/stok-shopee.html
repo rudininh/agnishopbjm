@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dashboard Admin</title>
+    <title>Dashboard Admin - Stok Shopee</title>
     <link rel="stylesheet" href="./assets/style.css" />
 </head>
 
@@ -15,12 +15,11 @@
         <div id="header"></div>
 
         <div class="dashboard-container">
-            <div class="dashboard-card">
+            <div class="dashboard-card" id="stok-box">
                 <h1>Stok Shopee</h1>
                 <p>Daftar stok produk dari toko Shopee Anda.</p>
 
-
-                <div class="status-box">
+                <div class="status-box" style="overflow-x:auto;">
                     <table border="1" cellspacing="0" cellpadding="8" style="width:100%; border-collapse: collapse;">
                         <thead style="background:#f2f2f2;">
                             <tr>
@@ -33,29 +32,13 @@
                         </thead>
                         <tbody id="stok-table">
                             <tr>
-                                <td>1</td>
-                                <td>Contoh Produk 1</td>
-                                <td>SKU123</td>
-                                <td>25</td>
-                                <td>Rp50.000</td>
-                            </tr>
-                            <tr>
-                                <td>2</td>
-                                <td>Contoh Produk 2</td>
-                                <td>SKU456</td>
-                                <td>10</td>
-                                <td>Rp30.000</td>
+                                <td colspan="5" style="text-align:center;">🔄 Memuat data...</td>
                             </tr>
                         </tbody>
                     </table>
-
                 </div>
-
             </div>
         </div>
-
-
-
 
         <div id="footer"></div>
     </div>
@@ -63,15 +46,20 @@
     <script>
         // Fungsi untuk load komponen HTML eksternal
         async function loadComponent(id, file) {
-            const res = await fetch(file);
-            const html = await res.text();
-            document.getElementById(id).innerHTML = html;
+            try {
+                const res = await fetch(file);
+                if (!res.ok) throw new Error("Gagal load " + file);
+                const html = await res.text();
+                document.getElementById(id).innerHTML = html;
+            } catch (err) {
+                console.error("❌ Error load component:", file, err);
+            }
         }
 
         // Load sidebar, header, footer
-        loadComponent('sidebar', './component/sidebar.html');
-        loadComponent('header', './component/header.html');
-        loadComponent('footer', './component/footer.html');
+        loadComponent("sidebar", "./component/sidebar.html");
+        loadComponent("header", "./component/header.html");
+        loadComponent("footer", "./component/footer.html");
 
         // Cek login
         if (!localStorage.getItem("loggedIn")) {
@@ -79,39 +67,46 @@
         }
 
         document.addEventListener("DOMContentLoaded", async () => {
-            const box = document.querySelector(".dashboard-card");
-            box.innerHTML = "<p>🔄 Mengambil data stok dari Shopee...</p>";
+            const tableBody = document.getElementById("stok-table");
+            tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center;">🔄 Mengambil data stok dari Shopee...</td></tr>`;
 
             try {
                 const res = await fetch("/api/get-stok");
-                const data = await res.json();
+                const text = await res.text();
 
-                let html = `
-      <h2>Stok Shopee</h2>
-      <p>Daftar stok produk dari toko Shopee Anda.</p>
-      <table border="1" cellspacing="0" cellpadding="8" style="width:100%; border-collapse:collapse;">
-        <tr><th>No</th><th>Nama Produk</th><th>SKU</th><th>Stok</th><th>Harga</th></tr>
-    `;
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    console.error("❌ Respons bukan JSON valid:", text);
+                    tableBody.innerHTML = `<tr><td colspan="5" style="color:red; text-align:center;">❌ Respons tidak valid dari server.<br><small>${text.slice(0, 200)}...</small></td></tr>`;
+                    return;
+                }
 
+                if (!data.items || data.items.length === 0) {
+                    tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center;">📭 Tidak ada data stok ditemukan</td></tr>`;
+                    return;
+                }
+
+                // isi tabel
+                let rows = "";
                 data.items.forEach((item, i) => {
-                    html += `
-        <tr>
-          <td>${i + 1}</td>
-          <td>${item.item_name}</td>
-          <td>${item.item_sku || '-'}</td>
-          <td>${item.stock}</td>
-          <td>Rp${item.price}</td>
-        </tr>`;
+                    rows += `
+            <tr>
+              <td>${i + 1}</td>
+              <td>${item.item_name || "-"}</td>
+              <td>${item.item_sku || "-"}</td>
+              <td>${item.stock ?? "-"}</td>
+              <td>Rp${item.price || "-"}</td>
+            </tr>`;
                 });
-                html += "</table>";
-                box.innerHTML = html;
+                tableBody.innerHTML = rows;
 
             } catch (err) {
-                box.innerHTML = `<p style="color:red;">❌ Gagal ambil data: ${err.message}</p>`;
+                console.error("❌ Error ambil data stok:", err);
+                tableBody.innerHTML = `<tr><td colspan="5" style="color:red; text-align:center;">❌ Gagal ambil data: ${err.message}</td></tr>`;
             }
         });
-
-
     </script>
 </body>
 
