@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ===== Struktur Data =====
+
 type TokenData struct {
 	ShopID      int64  `json:"shop_id"`
 	AccessToken string `json:"access_token"`
@@ -45,6 +47,8 @@ type ShopeeItemInfoResponse struct {
 	Message string `json:"message"`
 }
 
+// ===== Utility Fungsi =====
+
 func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 	conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -52,6 +56,25 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 	}
 	return conn, nil
 }
+
+func createShopeeSign(basePath, partnerID, partnerKey, accessToken string, shopID int64, timestamp int64) string {
+	// format base string sesuai dokumentasi resmi Shopee Partner v2
+	baseString := fmt.Sprintf("%s%s/api/v2/%s%s%d",
+		partnerID,
+		basePath,
+		"", // basePath sudah termasuk endpoint (contoh: "/product/get_item_list")
+		accessToken,
+		timestamp,
+	)
+
+	// Namun Shopee sebenarnya minta format:
+	// baseString := fmt.Sprintf("%s/api/v2%s%s%d", partnerID, basePath, accessToken, timestamp)
+	h := hmac.New(sha256.New, []byte(partnerKey))
+	h.Write([]byte(fmt.Sprintf("%s/api/v2%s%s%d", partnerID, basePath, accessToken, timestamp)))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ====== Handler Utama ======
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -64,6 +87,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
+	// === Ambil token dari database ===
 	var token TokenData
 	err = conn.QueryRow(ctx, "SELECT shop_id, access_token FROM shopee_tokens ORDER BY created_at DESC LIMIT 1").
 		Scan(&token.ShopID, &token.AccessToken)
@@ -77,10 +101,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// === STEP 1: Ambil daftar item ID ===
 	timestamp := time.Now().Unix()
-	baseString := fmt.Sprintf("%s/api/v2/product/get_item_list%s%d", partnerID, token.AccessToken, timestamp)
-	h := hmac.New(sha256.New, []byte(partnerKey))
-	h.Write([]byte(baseString))
-	sign := hex.EncodeToString(h.Sum(nil))
+	sign := createShopeeSign("/product/get_item_list", partnerID, partnerKey, token.AccessToken, token.ShopID, timestamp)
 
 	url := fmt.Sprintf("https://partner.shopeemobile.com/api/v2/product/get_item_list?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
 		partnerID, timestamp, token.AccessToken, token.ShopID, sign)
@@ -93,9 +114,21 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+
+	// Cek apakah respons bukan JSON
+	if len(body) == 0 || body[0] != '{' {
+		http.Error(w, fmt.Sprintf(`{"error":"Respons Shopee tidak valid","raw":%q}`, string(body)), http.StatusBadGateway)
+		return
+	}
+
 	var listRes ShopeeItemListResponse
 	if err := json.Unmarshal(body, &listRes); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item list: %v", "raw": %q}`, err, string(body)), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item list: %v","raw":%q}`, err, string(body)), http.StatusInternalServerError)
+		return
+	}
+
+	if listRes.Error != "" {
+		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":"%s"}`, listRes.Error, listRes.Message), http.StatusBadGateway)
 		return
 	}
 
@@ -116,10 +149,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	itemIDsJSON, _ := json.Marshal(map[string][]int64{"item_id_list": itemIDs})
 
 	timestamp2 := time.Now().Unix()
-	baseString2 := fmt.Sprintf("%s/api/v2/product/get_item_base_info%s%d", partnerID, token.AccessToken, timestamp2)
-	h2 := hmac.New(sha256.New, []byte(partnerKey))
-	h2.Write([]byte(baseString2))
-	sign2 := hex.EncodeToString(h2.Sum(nil))
+	sign2 := createShopeeSign("/product/get_item_base_info", partnerID, partnerKey, token.AccessToken, token.ShopID, timestamp2)
 
 	url2 := fmt.Sprintf("https://partner.shopeemobile.com/api/v2/product/get_item_base_info?partner_id=%s&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
 		partnerID, timestamp2, token.AccessToken, token.ShopID, sign2)
@@ -136,9 +166,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer resp2.Body.Close()
 
 	body2, _ := io.ReadAll(resp2.Body)
+	if len(body2) == 0 || body2[0] != '{' {
+		http.Error(w, fmt.Sprintf(`{"error":"Respons Shopee item info tidak valid","raw":%q}`, string(body2)), http.StatusBadGateway)
+		return
+	}
+
 	var infoRes ShopeeItemInfoResponse
 	if err := json.Unmarshal(body2, &infoRes); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item info: %v", "raw": %q}`, err, string(body2)), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item info: %v","raw":%q}`, err, string(body2)), http.StatusInternalServerError)
 		return
 	}
 
