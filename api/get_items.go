@@ -22,11 +22,6 @@ type TokenData struct {
 	AccessToken string `json:"access_token"`
 }
 
-type ConfigData struct {
-	PartnerID  int64  `json:"partner_id"`
-	PartnerKey string `json:"partner_key"`
-}
-
 type ShopeeItemListResponse struct {
 	Response struct {
 		Item []struct {
@@ -62,6 +57,7 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 
 // ===== Generate Shopee Signature =====
 func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
+	// base_string = partner_id + path + timestamp + access_token + shop_id
 	baseString := fmt.Sprintf("%d%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
 	h := hmac.New(sha256.New, []byte(partnerKey))
 	h.Write([]byte(baseString))
@@ -80,16 +76,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(ctx)
 
-	// Ambil partner_id dan partner_key dari tabel shopee_config
-	var config ConfigData
-	err = conn.QueryRow(ctx, "SELECT partner_id, partner_key FROM shopee_config LIMIT 1").
-		Scan(&config.PartnerID, &config.PartnerKey)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil konfigurasi Shopee: %v"}`, err), http.StatusInternalServerError)
-		return
-	}
-
-	// Ambil shop_id dan access_token dari tabel shopee_tokens
 	var token TokenData
 	err = conn.QueryRow(ctx, "SELECT shop_id, access_token FROM shopee_tokens ORDER BY created_at DESC LIMIT 1").
 		Scan(&token.ShopID, &token.AccessToken)
@@ -98,23 +84,30 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println("=== DEBUG CONFIG ===")
-	fmt.Println("PartnerID:", config.PartnerID)
-	fmt.Println("PartnerKey:", config.PartnerKey)
-	fmt.Println("ShopID:", token.ShopID)
-	fmt.Println("AccessToken:", token.AccessToken)
+	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
+	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
+
+	fmt.Println("=== DEBUG ENV ===")
+	fmt.Println("partnerID =", partnerIDStr)
+	fmt.Println("partnerKey =", partnerKey)
+	fmt.Println("shopID =", token.ShopID)
+	fmt.Println("accessToken =", token.AccessToken)
+
+	var partnerID int64
+	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
 
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
 
-	sign := generateShopeeSign(config.PartnerID, path, token.AccessToken, token.ShopID, timestamp, config.PartnerKey)
+	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
 		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s&page_size=20",
-		path, config.PartnerID, timestamp, token.AccessToken, token.ShopID, sign,
+		path, partnerID, timestamp, token.AccessToken, token.ShopID, sign,
 	)
 
+	// 🟢 DEBUG URL yang digunakan
 	fmt.Println("=== DEBUG STEP 1 ===")
 	fmt.Println("URL GET_ITEM_LIST:", url)
 
@@ -134,6 +127,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 🟡 Tambahkan debug parsed
 	fmt.Printf("DEBUG PARSED listRes: %+v\n", listRes)
 
 	if listRes.Error != "" {
@@ -159,11 +153,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(config.PartnerID, path2, token.AccessToken, token.ShopID, timestamp2, config.PartnerKey)
+	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
 		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, config.PartnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
+		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
 	)
 
 	fmt.Println("=== DEBUG STEP 2 ===")
