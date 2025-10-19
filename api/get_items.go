@@ -103,7 +103,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&offset=0&page_size=10&item_status=NORMAL",
+		"https://partner.shopeemobile.com%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&offset=0&page_size=100&item_status=NORMAL",
 		path, partnerID, sign, timestamp, token.ShopID, token.AccessToken,
 	)
 
@@ -156,9 +156,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&access_token=%s&timestamp=%d&shop_id=%d&sign=%s",
-		path2, partnerID, token.AccessToken, timestamp2, token.ShopID, sign2,
+		"https://partner.shopeemobile.com%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&item_id_list=50&need_tax_info=true&need_complaint_policy=true",
+		path2, partnerID, sign2, timestamp2, token.ShopID, token.AccessToken,
 	)
+
+	{
+	}
 
 	fmt.Println("=== DEBUG STEP 2 ===")
 	fmt.Println("URL GET_ITEM_INFO:", url2)
