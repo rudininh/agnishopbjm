@@ -156,8 +156,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
+		"https://partner.shopeemobile.com%s?partner_id=%d&access_token=%s&timestamp=%d&shop_id=%d&sign=%s",
+		path2, partnerID, token.AccessToken, timestamp2, token.ShopID, sign2,
 	)
 
 	fmt.Println("=== DEBUG STEP 2 ===")
