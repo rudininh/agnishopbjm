@@ -100,7 +100,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
-		"https://partner.shopee.co.id%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL&update_time_from=%d&update_time_to=%d",
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL&update_time_from=%d&update_time_to=%d",
 		path, partnerID, token.ShopID, timestamp, token.AccessToken, sign, updateTimeFrom, updateTimeTo,
 	)
 
@@ -154,7 +154,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopee.co.id%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s",
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s",
 		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2,
 	)
 
