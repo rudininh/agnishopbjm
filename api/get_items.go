@@ -109,8 +109,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
 
 	const (
-		PartnerID  = "2013107"
-		PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+		PartnerID  int64  = 2013107
+		PartnerKey string = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
 	)
 
 	fmt.Println("=== DEBUG ENV ===")
@@ -178,11 +178,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
+	sign2 := generateShopeeSign(PartnerID, path2, token.AccessToken, token.ShopID, timestamp2, PartnerKey)
 
 	url2 := fmt.Sprintf(
 		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&access_token=%s&shop_id=%d&sign=%s",
-		path2, partnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
+		path2, PartnerID, timestamp2, token.AccessToken, token.ShopID, sign2,
 	)
 
 	fmt.Println("=== DEBUG STEP 2 ===")
