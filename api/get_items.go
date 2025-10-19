@@ -188,4 +188,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": infoRes.Respon
+		"items": infoRes.Response.ItemList,
+		"count": len(infoRes.Response.ItemList),
+	})
+}
