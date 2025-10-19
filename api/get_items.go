@@ -57,7 +57,6 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 
 // ===== Generate Shopee Signature =====
 func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
-	// base_string = partner_id + path + timestamp + access_token + shop_id
 	baseString := fmt.Sprintf("%d%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
 	h := hmac.New(sha256.New, []byte(partnerKey))
 	h.Write([]byte(baseString))
@@ -87,12 +86,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	partnerIDStr := "2013107"
 	partnerKey := "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
 
-	fmt.Println("=== DEBUG ENV ===")
-	fmt.Println("partnerID =", partnerIDStr)
-	fmt.Println("partnerKey =", partnerKey)
-	fmt.Println("shopID =", token.ShopID)
-	fmt.Println("accessToken =", token.AccessToken)
-
 	var partnerID int64
 	fmt.Sscanf(partnerIDStr, "%d", &partnerID)
 
@@ -100,14 +93,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
 
+	// waktu dari kemarin sampai sekarang
+	updateTimeTo := time.Now().Unix()
+	updateTimeFrom := updateTimeTo - 86400 // 24 jam ke belakang
+
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&offset=0&page_size=100&item_status=NORMAL",
-		path, partnerID, sign, timestamp, token.ShopID, token.AccessToken,
+		"https://partner.shopee.co.id%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL&update_time_from=%d&update_time_to=%d",
+		path, partnerID, token.ShopID, timestamp, token.AccessToken, sign, updateTimeFrom, updateTimeTo,
 	)
 
-	// 🟢 DEBUG URL yang digunakan
 	fmt.Println("=== DEBUG STEP 1 ===")
 	fmt.Println("URL GET_ITEM_LIST:", url)
 
@@ -127,11 +123,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 🟡 Tambahkan debug parsed
-	fmt.Printf("DEBUG PARSED listRes: %+v\n", listRes)
-
 	if listRes.Error != "" {
-		fmt.Printf("DEBUG Shopee Error Response: %+v\n", listRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, listRes.Error, listRes.Message), http.StatusBadRequest)
 		return
 	}
@@ -139,7 +131,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	if len(listRes.Response.Item) == 0 {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": []interface{}{},
-			"note":  "Tidak ada item ditemukan dari Shopee",
+			"note":  "Tidak ada item diupdate dalam 24 jam terakhir",
 		})
 		return
 	}
@@ -162,7 +154,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s",
+		"https://partner.shopee.co.id%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s",
 		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2,
 	)
 
@@ -190,17 +182,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("DEBUG PARSED infoRes: %+v\n", infoRes)
-
 	if infoRes.Error != "" {
-		fmt.Printf("DEBUG Shopee Error Info Response: %+v\n", infoRes)
 		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, infoRes.Error, infoRes.Message), http.StatusBadRequest)
 		return
 	}
 
-	// === STEP 3: RETURN RESULT ===
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": infoRes.Response.ItemList,
-		"count": len(infoRes.Response.ItemList),
-	})
-}
+		"items": infoRes.Respon
