@@ -84,8 +84,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partnerIDStr := os.Getenv("SHOPEE_PARTNER_ID")
-	partnerKey := os.Getenv("SHOPEE_PARTNER_KEY")
+	partnerIDStr := "2013107"
+	partnerKey := "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
 
 	fmt.Println("=== DEBUG ENV ===")
 	fmt.Println("partnerID =", partnerIDStr)
