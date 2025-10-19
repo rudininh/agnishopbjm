@@ -94,8 +94,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	path := "/api/v2/product/get_item_list"
 
 	// waktu dari kemarin sampai sekarang
-	updateTimeTo := time.Now().Unix()
-	updateTimeFrom := updateTimeTo - 86400 // 24 jam ke belakang
+	// updateTimeTo := time.Now().Unix()
+	// updateTimeFrom := updateTimeTo - 86400 // 24 jam ke belakang
 
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
