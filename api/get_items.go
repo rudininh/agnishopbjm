@@ -160,11 +160,33 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		path2, partnerID, sign2, timestamp2, token.ShopID, token.AccessToken,
 	)
 
+	// === STEP 2: GET ITEM INFO ===
+	var itemIDs []int64
+	for _, item := range listRes.Response.Item {
+		itemIDs = append(itemIDs, item.ItemID)
+	}
+
+	bodyData := map[string]interface{}{
+		"item_id_list":          itemIDs,
+		"need_tax_info":         true,
+		"need_complaint_policy": true,
+	}
+	jsonBody, _ := json.Marshal(bodyData)
+
+	path2 := "/api/v2/product/get_item_base_info"
+	timestamp2 := time.Now().Unix()
+	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
+
+	url2 := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s",
+		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2,
+	)
+
 	fmt.Println("=== DEBUG STEP 2 ===")
 	fmt.Println("URL GET_ITEM_INFO:", url2)
-	fmt.Println("Body JSON:", string(itemIDsJSON))
+	fmt.Println("Body JSON:", string(jsonBody))
 
-	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(itemIDsJSON))
+	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
