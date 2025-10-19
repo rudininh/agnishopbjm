@@ -149,22 +149,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	for _, item := range listRes.Response.Item {
 		itemIDs = append(itemIDs, item.ItemID)
 	}
-	itemIDsJSON, _ := json.Marshal(map[string][]int64{"item_id_list": itemIDs})
-
-	path2 := "/api/v2/product/get_item_base_info"
-	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
-
-	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&item_id_list=40&need_tax_info=true&need_complaint_policy=true",
-		path2, partnerID, sign2, timestamp2, token.ShopID, token.AccessToken,
-	)
-
-	// === STEP 2: GET ITEM INFO ===
-	var itemIDs []int64
-	for _, item := range listRes.Response.Item {
-		itemIDs = append(itemIDs, item.ItemID)
-	}
 
 	bodyData := map[string]interface{}{
 		"item_id_list":          itemIDs,
