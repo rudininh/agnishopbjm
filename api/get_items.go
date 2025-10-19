@@ -46,6 +46,15 @@ type ShopeeItemInfoResponse struct {
 	Message string `json:"message"`
 }
 
+// ===== Struct untuk Output =====
+type ProductRow struct {
+	No         int    `json:"no"`
+	NamaProduk string `json:"nama_produk"`
+	SKU        string `json:"sku"`
+	Stok       int64  `json:"stok"`
+	Harga      string `json:"harga"`
+}
+
 // ===== Database Connection =====
 func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 	conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
@@ -93,10 +102,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
 
-	// waktu dari kemarin sampai sekarang
-	// updateTimeTo := time.Now().Unix()
-	// updateTimeFrom := updateTimeTo - 86400 // 24 jam ke belakang
-
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
@@ -131,7 +136,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	if len(listRes.Response.Item) == 0 {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": []interface{}{},
-			"note":  "Tidak ada item diupdate dalam 24 jam terakhir",
+			"note":  "Tidak ada item ditemukan",
 		})
 		return
 	}
@@ -187,8 +192,23 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": infoRes.Response.ItemList,
-		"count": len(infoRes.Response.ItemList),
-	})
+	// === STEP 3: FORMAT OUTPUT ===
+	var result []ProductRow
+	for i, item := range infoRes.Response.ItemList {
+		result = append(result, ProductRow{
+			No:         i + 1,
+			NamaProduk: item.ItemName,
+			SKU:        item.SKU,
+			Stok:       item.Stock,
+			Harga:      item.Price,
+		})
+	}
+
+	output := map[string]interface{}{
+		"data":  result,
+		"total": len(result),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(output)
 }
