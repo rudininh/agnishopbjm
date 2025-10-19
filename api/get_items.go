@@ -103,7 +103,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
-		"https://ppartner.shopee.co.id%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&offset=0&page_size=100&item_status=NORMAL",
+		"https://partner.shopee.co.id%s?partner_id=%d&sign=%s&timestamp=%d&shop_id=%d&access_token=%s&offset=0&page_size=100&item_status=NORMAL",
 		path, partnerID, sign, timestamp, token.ShopID, token.AccessToken,
 	)
 
