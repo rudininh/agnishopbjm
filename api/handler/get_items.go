@@ -177,6 +177,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			ItemList []struct {
 				ItemID   int64  `json:"item_id"`
 				ItemName string `json:"item_name"`
+				ItemSKU  string `json:"item_sku"`
+				Stock    int64  `json:"stock"`
+				Price    string `json:"price"`
 			} `json:"item_list"`
 		} `json:"response"`
 	}
@@ -189,5 +192,31 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Printf("Hasil tanpa warning: %+v\n", result)
+
+	// ===== Kirim data ke frontend =====
+	type Item struct {
+		No       int    `json:"no"`
+		ItemName string `json:"nama"`
+		SKU      string `json:"sku"`
+		Stock    int64  `json:"stok"`
+		Price    string `json:"harga"`
+	}
+
+	var items []Item
+	for i, v := range result.Response.ItemList {
+		items = append(items, Item{
+			No:       i + 1,
+			ItemName: v.ItemName,
+			SKU:      v.ItemSKU,
+			Stock:    v.Stock,
+			Price:    v.Price,
+		})
+
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"items": items,
+		"count": len(items),
+	})
 
 }
