@@ -167,3 +167,48 @@ th {
 tr:nth-child(even) {
   background-color: #fafafa;
 }
+
+/* === TABEL PRODUK SHOPEE === */
+#produkTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+  font-size: 14px;
+  background: #fff;
+}
+
+#produkTable th,
+#produkTable td {
+  border: 1px solid #ddd;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+#produkTable th {
+  background-color: #f4f4f4;
+  font-weight: bold;
+  text-align: center;
+}
+
+#produkTable tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+#produkTable tr:hover {
+  background-color: #f1f1f1;
+}
+
+/* Supaya deskripsi panjang tidak bikin tabel melebar */
+#produkTable td:nth-child(2) {
+  max-width: 300px;
+  word-wrap: break-word;
+  white-space: normal;
+}
+
+#produkTable td:nth-child(1),
+#produkTable td:nth-child(4),
+#produkTable td:nth-child(5) {
+  text-align: center;
+  width: 60px;
+}

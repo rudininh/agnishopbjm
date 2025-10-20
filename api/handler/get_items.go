@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -28,20 +27,6 @@ type ShopeeItemListResponse struct {
 		Item []struct {
 			ItemID int64 `json:"item_id"`
 		} `json:"item"`
-	} `json:"response"`
-	Error   string `json:"error"`
-	Message string `json:"message"`
-}
-
-type ShopeeItemInfoResponse struct {
-	Response struct {
-		ItemList []struct {
-			ItemID   int64  `json:"item_id"`
-			ItemName string `json:"item_name"`
-			Stock    int64  `json:"stock"`
-			Price    string `json:"price"`
-			SKU      string `json:"item_sku"`
-		} `json:"item_list"`
 	} `json:"response"`
 	Error   string `json:"error"`
 	Message string `json:"message"`
@@ -93,16 +78,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
-
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
 		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL",
 		path, partnerID, token.ShopID, timestamp, token.AccessToken, sign,
 	)
-
-	fmt.Println("=== DEBUG STEP 1 ===")
-	fmt.Println("URL GET_ITEM_LIST:", url)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -112,8 +93,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	fmt.Printf("DEBUG RAW Shopee GET_ITEM_LIST response: %s\n", string(body))
-
 	var listRes ShopeeItemListResponse
 	if err := json.Unmarshal(body, &listRes); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item list: %v","raw":%q}`, err, string(body)), http.StatusInternalServerError)
@@ -128,7 +107,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	if len(listRes.Response.Item) == 0 {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": []interface{}{},
-			"note":  "Tidak ada item diupdate dalam 24 jam terakhir",
+			"note":  "Tidak ada item ditemukan di toko",
 		})
 		return
 	}
@@ -138,42 +117,31 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	for _, item := range listRes.Response.Item {
 		itemIDs = append(itemIDs, item.ItemID)
 	}
-
-	// Ubah slice []int64 jadi string "28525635095,27474912433,..."
-	var itemIDStrings []string
+	var idStrings []string
 	for _, id := range itemIDs {
-		itemIDStrings = append(itemIDStrings, fmt.Sprintf("%d", id))
+		idStrings = append(idStrings, fmt.Sprintf("%d", id))
 	}
-	itemIDJoined := strings.Join(itemIDStrings, ",")
+	itemIDJoined := strings.Join(idStrings, ",")
 
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s&need_tax_info=true&need_complaint_policy=true",
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
 		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2, itemIDJoined,
 	)
 
-	fmt.Println("URL GET_ITEM_BASE_INFO:", url2)
-
-	// === REQUEST KE SHOPEE API ===
 	resp2, err := http.Get(url2)
 	if err != nil {
-		log.Fatal("Gagal GET item info:", err)
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item base info: %v"}`, err), http.StatusInternalServerError)
+		return
 	}
 	defer resp2.Body.Close()
 
 	body2, _ := io.ReadAll(resp2.Body)
-	fmt.Println("DEBUG RAW Shopee GET_ITEM_INFO response:", string(body2))
-
-	// Struct untuk decode JSON Shopee
-	var result struct {
-		Error     string `json:"error"`
-		Message   string `json:"message"`
-		Warning   string `json:"warning"`
-		RequestID string `json:"request_id"`
-		Response  struct {
+	var baseInfo struct {
+		Response struct {
 			ItemList []struct {
 				ItemID   int64  `json:"item_id"`
 				ItemName string `json:"item_name"`
@@ -183,40 +151,71 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			} `json:"item_list"`
 		} `json:"response"`
 	}
+	json.Unmarshal(body2, &baseInfo)
 
-	json.Unmarshal(body2, &result)
+	// === STEP 3: GET MODEL LIST ===
+	path3 := "/api/v2/product/get_model_list"
+	timestamp3 := time.Now().Unix()
+	sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
 
-	// 🔧 Hapus warning yang tidak penting
-	if strings.Contains(result.Warning, "fail to get channel estimated_shipping_fee") {
-		result.Warning = ""
+	url3 := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
+		path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, itemIDJoined,
+	)
+
+	resp3, err := http.Get(url3)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil model list: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer resp3.Body.Close()
+
+	body3, _ := io.ReadAll(resp3.Body)
+	var modelRes struct {
+		Response struct {
+			Item []struct {
+				ItemID    int64 `json:"item_id"`
+				ModelList []struct {
+					ModelID   int64  `json:"model_id"`
+					SKU       string `json:"model_sku"`
+					StockInfo struct {
+						NormalStock int64 `json:"normal_stock"`
+					} `json:"stock_info"`
+					PriceInfo struct {
+						OriginalPrice string `json:"original_price"`
+					} `json:"price_info"`
+				} `json:"model"`
+			} `json:"item"`
+		} `json:"response"`
+	}
+	json.Unmarshal(body3, &modelRes)
+
+	// === Gabungkan hasil base info + model info ===
+	finalItems := []map[string]interface{}{}
+	for _, base := range baseInfo.Response.ItemList {
+		itemData := map[string]interface{}{
+			"nama":  base.ItemName,
+			"sku":   base.ItemSKU,
+			"stok":  base.Stock,
+			"harga": base.Price,
+		}
+
+		// Override jika ada model
+		for _, m := range modelRes.Response.Item {
+			if m.ItemID == base.ItemID && len(m.ModelList) > 0 {
+				itemData["sku"] = m.ModelList[0].SKU
+				itemData["stok"] = m.ModelList[0].StockInfo.NormalStock
+				itemData["harga"] = m.ModelList[0].PriceInfo.OriginalPrice
+				break
+			}
+		}
+
+		finalItems = append(finalItems, itemData)
 	}
 
-	fmt.Printf("Hasil tanpa warning: %+v\n", result)
-
-	// ===== Kirim data ke frontend =====
-	type Item struct {
-		No       int    `json:"no"`
-		ItemName string `json:"nama"`
-		SKU      string `json:"sku"`
-		Stock    int64  `json:"stok"`
-		Price    string `json:"harga"`
-	}
-
-	var items []Item
-	for i, v := range result.Response.ItemList {
-		items = append(items, Item{
-			No:       i + 1,
-			ItemName: v.ItemName,
-			SKU:      v.ItemSKU,
-			Stock:    v.Stock,
-			Price:    v.Price,
-		})
-
-	}
-
+	// === Kirim hasil akhir ke frontend ===
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": items,
-		"count": len(items),
+		"count": len(finalItems),
+		"items": finalItems,
 	})
-
 }

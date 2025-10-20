@@ -1,22 +1,23 @@
 package main
 
 import (
-	"agnishopbjm/api/handler"
-
 	"fmt"
 	"log"
 	"net/http"
-	"os"
+
+	"agnishopbjm/api/handler"
 )
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	// === Serve file statis (HTML, CSS, JS, gambar, dll) ===
+	fs := http.FileServer(http.Dir("./public"))
+	http.Handle("/", fs)
 
-	http.HandleFunc("/", handler.Handler)
+	// === API route ===
+	http.HandleFunc("/api/handler/get-items", handler.Handler)
+	// http.HandleFunc("/api/get-token", handler.GetTokenHandler) // kalau kamu punya handler token
 
-	fmt.Println("Server running on port", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	// === Jalankan server ===
+	fmt.Println("🚀 Server berjalan di http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
