@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -138,53 +139,55 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		itemIDs = append(itemIDs, item.ItemID)
 	}
 
-	bodyData := map[string]interface{}{
-		"item_id_list":          itemIDs,
-		"need_tax_info":         true,
-		"need_complaint_policy": true,
+	// Ubah slice []int64 jadi string "28525635095,27474912433,..."
+	var itemIDStrings []string
+	for _, id := range itemIDs {
+		itemIDStrings = append(itemIDStrings, fmt.Sprintf("%d", id))
 	}
-	jsonBody, _ := json.Marshal(bodyData)
+	itemIDJoined := strings.Join(itemIDStrings, ",")
 
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=1&need_tax_info=true&need_complaint_policy=true",
-		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2,
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s&need_tax_info=true&need_complaint_policy=true",
+		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2, itemIDJoined,
 	)
 
-	fmt.Println("=== DEBUG STEP 2 ===")
-	fmt.Println("URL GET_ITEM_INFO:", url2)
-	fmt.Println("Body JSON:", string(jsonBody))
+	fmt.Println("URL GET_ITEM_BASE_INFO:", url2)
 
-	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp2, err := client.Do(req)
+	// === REQUEST KE SHOPEE API ===
+	resp2, err := http.Get(url2)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item info: %v"}`, err), http.StatusInternalServerError)
-		return
+		log.Fatal("Gagal GET item info:", err)
 	}
 	defer resp2.Body.Close()
 
 	body2, _ := io.ReadAll(resp2.Body)
-	fmt.Printf("DEBUG RAW Shopee GET_ITEM_INFO response: %s\n", string(body2))
+	fmt.Println("DEBUG RAW Shopee GET_ITEM_INFO response:", string(body2))
 
-	var infoRes ShopeeItemInfoResponse
-	if err := json.Unmarshal(body2, &infoRes); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item info: %v","raw":%q}`, err, string(body2)), http.StatusInternalServerError)
-		return
+	// Struct untuk decode JSON Shopee
+	var result struct {
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Warning   string `json:"warning"`
+		RequestID string `json:"request_id"`
+		Response  struct {
+			ItemList []struct {
+				ItemID   int64  `json:"item_id"`
+				ItemName string `json:"item_name"`
+			} `json:"item_list"`
+		} `json:"response"`
 	}
 
-	if infoRes.Error != "" {
-		http.Error(w, fmt.Sprintf(`{"error":"Shopee API error: %s","message":%q}`, infoRes.Error, infoRes.Message), http.StatusBadRequest)
-		return
+	json.Unmarshal(body2, &result)
+
+	// 🔧 Hapus warning yang tidak penting
+	if strings.Contains(result.Warning, "fail to get channel estimated_shipping_fee") {
+		result.Warning = ""
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": infoRes.Response.ItemList,
-		"count": len(infoRes.Response.ItemList),
-	})
+	fmt.Printf("Hasil tanpa warning: %+v\n", result)
+
 }
