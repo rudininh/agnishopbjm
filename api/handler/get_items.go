@@ -41,6 +41,8 @@ func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64,
 }
 
 // ===== Helper functions =====
+
+// parseNumber tries to interpret v as float64/int64/or string numeric and returns int64 value (no decimals)
 func parseNumber(v interface{}) (int64, bool) {
 	if v == nil {
 		return 0, false
@@ -65,14 +67,17 @@ func parseNumber(v interface{}) (int64, bool) {
 		}
 		return 0, false
 	case string:
+		// remove commas, currency signs, etc
 		s := strings.ReplaceAll(t, ",", "")
 		s = strings.TrimSpace(s)
 		if s == "" {
 			return 0, false
 		}
+		// try int
 		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return i, true
 		}
+		// try float
 		if f, err := strconv.ParseFloat(s, 64); err == nil {
 			return int64(f), true
 		}
@@ -82,10 +87,16 @@ func parseNumber(v interface{}) (int64, bool) {
 	}
 }
 
+// rupiahFromMicros attempts to convert a "micros" price to rupiah integer.
+// Many Shopee fields store price in micros (e.g., 123450000 -> Rp 1,234,500).
+// We'll try dividing by 100000 (common) and also fallback to other heuristics.
 func rupiahFromMicros(m int64) int64 {
+	// guard: if micros looks huge, divide; otherwise return as-is
+	// Common conversion factor from Shopee: price in micros (1e5) -> divide by 100000
 	if m == 0 {
 		return 0
 	}
+	// If number length > 6, divide
 	abs := m
 	if abs < 0 {
 		abs = -abs
@@ -93,9 +104,11 @@ func rupiahFromMicros(m int64) int64 {
 	if abs > 1000000 {
 		return m / 100000
 	}
+	// small numbers: maybe already in rupiah
 	return m
 }
 
+// formatRupiah adds thousand separators. Example: 1234500 -> "Rp 1.234.500"
 func formatRupiah(v int64) string {
 	neg := v < 0
 	if neg {
@@ -120,6 +133,7 @@ func formatRupiah(v int64) string {
 	return fmt.Sprintf("Rp %s", out)
 }
 
+// tryGetFromMap walks nested maps safely: m["response"]["item_list"]
 func tryGetMap(m map[string]interface{}, keys ...string) (interface{}, bool) {
 	var cur interface{} = m
 	for _, k := range keys {
@@ -171,8 +185,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		path, partnerID, token.ShopID, timestamp, token.AccessToken, sign,
 	)
 
-	fmt.Println("📦 URL Get Item List:", url)
-
 	resp, err := http.Get(url)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item list: %v"}`, err), http.StatusInternalServerError)
@@ -187,8 +199,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ambil item_id list
 	itemListRaw, ok := tryGetMap(listRes, "response", "item")
 	if !ok {
+		// fallback: kalau struktur lain
 		itemListRaw, _ = listRes["response"]
 	}
 	itemsArray, ok := itemListRaw.([]interface{})
@@ -211,6 +225,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// join item IDs
 	var idStrings []string
 	for _, id := range itemIDs {
 		idStrings = append(idStrings, fmt.Sprintf("%d", id))
@@ -223,12 +238,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s&need_tax_info=true&need_complaint_policy=true",
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
 		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2, itemIDJoined,
 	)
-
-	// CETAK URL ASLINYA DI CMD
-	fmt.Println("🧾 URL Get Item Base Info:", url2)
 
 	resp2, err := http.Get(url2)
 	if err != nil {
@@ -244,10 +256,213 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Tampilkan hasil final
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"url_used": url2,
-		"message":  "URL Shopee berhasil dibuat dan dikirim",
-	})
+	// === STEP 3: GET MODEL LIST ===
+	path3 := "/api/v2/product/get_model_list"
+	timestamp3 := time.Now().Unix()
+	sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
+
+	url3 := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
+		path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, itemIDJoined,
+	)
+
+	resp3, err := http.Get(url3)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil model list: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer resp3.Body.Close()
+
+	body3, _ := io.ReadAll(resp3.Body)
+	var modelInfo map[string]interface{}
+	if err := json.Unmarshal(body3, &modelInfo); err != nil {
+		// non-fatal: kita lanjut tanpa model info
+		modelInfo = map[string]interface{}{}
+	}
+
+	// Build quick lookup: itemID -> first model (map)
+	modelLookup := map[int64]map[string]interface{}{}
+	if respItems, ok := tryGetMap(modelInfo, "response", "item"); ok {
+		if arr, ok := respItems.([]interface{}); ok {
+			for _, it := range arr {
+				if imap, ok := it.(map[string]interface{}); ok {
+					var iid int64
+					if idv, ok := imap["item_id"]; ok {
+						if idnum, ok := parseNumber(idv); ok {
+							iid = idnum
+						}
+					}
+					// model list
+					if ml, ok := imap["model"].([]interface{}); ok && len(ml) > 0 {
+						if firstModel, ok := ml[0].(map[string]interface{}); ok {
+							modelLookup[iid] = firstModel
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Ambil item_list dari baseInfo
+	var baseItems []interface{}
+	if b, ok := tryGetMap(baseInfo, "response", "item_list"); ok {
+		if arr, ok := b.([]interface{}); ok {
+			baseItems = arr
+		}
+	}
+	// fallback: kadang bernama "item_list" di root response differently
+	if baseItems == nil {
+		if v, ok := baseInfo["response"]; ok {
+			if rv, ok := v.(map[string]interface{}); ok {
+				for _, candidate := range []string{"item_list", "item", "items"} {
+					if x, ok := rv[candidate]; ok {
+						if arr, ok := x.([]interface{}); ok {
+							baseItems = arr
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// prepare final items
+	finalItems := []map[string]interface{}{}
+	for idx, bi := range baseItems {
+		var itemName string
+		var itemID int64
+		var baseSku string
+		var priceInt int64
+		var stockInt int64
+
+		if bimap, ok := bi.(map[string]interface{}); ok {
+			// name
+			if v, ok := bimap["item_name"]; ok {
+				if s, ok := v.(string); ok {
+					itemName = s
+				}
+			}
+			// item_id
+			if v, ok := bimap["item_id"]; ok {
+				if id, ok := parseNumber(v); ok {
+					itemID = id
+				}
+			}
+			// sku possibly item_sku
+			if v, ok := bimap["item_sku"]; ok {
+				if s, ok := v.(string); ok {
+					baseSku = s
+				}
+			}
+			// try price from price_info.current_price or price or price_info.original_price
+			// handle nested map price_info
+			if pi, ok := bimap["price_info"].(map[string]interface{}); ok {
+				if cp, ok := pi["current_price"]; ok {
+					if n, ok := parseNumber(cp); ok {
+						priceInt = rupiahFromMicros(n)
+					}
+				}
+				if priceInt == 0 {
+					if op, ok := pi["original_price"]; ok {
+						if n, ok := parseNumber(op); ok {
+							priceInt = rupiahFromMicros(n)
+						}
+					}
+				}
+			}
+			// fallback if there's top-level "price"
+			if priceInt == 0 {
+				if pv, ok := bimap["price"]; ok {
+					if n, ok := parseNumber(pv); ok {
+						priceInt = rupiahFromMicros(n)
+					}
+				}
+			}
+			// stock from stock_info.normal_stock or "stock"
+			if si, ok := bimap["stock_info"].(map[string]interface{}); ok {
+				if ns, ok := si["normal_stock"]; ok {
+					if n, ok := parseNumber(ns); ok {
+						stockInt = n
+					}
+				}
+			}
+			if stockInt == 0 {
+				if sv, ok := bimap["stock"]; ok {
+					if n, ok := parseNumber(sv); ok {
+						stockInt = n
+					}
+				}
+			}
+		}
+
+		// override with model info if available
+		if m, ok := modelLookup[itemID]; ok {
+			// model SKU
+			if v, ok := m["model_sku"]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					baseSku = s
+				}
+			}
+			// model price (price_info.current_price or price_info.original_price)
+			if pi, ok := m["price_info"].(map[string]interface{}); ok {
+				if cp, ok := pi["current_price"]; ok {
+					if n, ok := parseNumber(cp); ok {
+						priceInt = rupiahFromMicros(n)
+					}
+				}
+				if priceInt == 0 {
+					if op, ok := pi["original_price"]; ok {
+						if n, ok := parseNumber(op); ok {
+							priceInt = rupiahFromMicros(n)
+						}
+					}
+				}
+			}
+			// model stock
+			if si, ok := m["stock_info"].(map[string]interface{}); ok {
+				// try multiple keys
+				if ns, ok := si["normal_stock"]; ok {
+					if n, ok := parseNumber(ns); ok {
+						stockInt = n
+					}
+				} else if tot, ok := si["total_reserved_stock"]; ok {
+					if n, ok := parseNumber(tot); ok {
+						stockInt = n
+					}
+				}
+			}
+			// fallback top-level model fields
+			if stockInt == 0 {
+				if v, ok := m["stock"]; ok {
+					if n, ok := parseNumber(v); ok {
+						stockInt = n
+					}
+				}
+			}
+		}
+
+		// finalize harga string (if priceInt==0, keep empty)
+		hargaStr := ""
+		if priceInt != 0 {
+			hargaStr = formatRupiah(priceInt)
+		}
+		// finalize sku (if empty remain "")
+		skuStr := baseSku
+
+		item := map[string]interface{}{
+			"no":    idx + 1,
+			"nama":  itemName,
+			"sku":   skuStr,
+			"stok":  stockInt,
+			"harga": hargaStr,
+		}
+		finalItems = append(finalItems, item)
+	}
+
+	// kirim hasil akhir
+	out := map[string]interface{}{
+		"count": len(finalItems),
+		"items": finalItems,
+	}
+	json.NewEncoder(w).Encode(out)
 }
