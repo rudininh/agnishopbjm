@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -127,16 +128,31 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	if len(listRes.Response.Item) == 0 {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": []interface{}{},
-			"note":  "Tidak ada item diupdate dalam 24 jam terakhir",
+			"note":  "Tidak ada item ditemukan.",
 		})
 		return
 	}
 
 	// === STEP 2: GET ITEM INFO ===
-	var itemIDs []int64
+	var itemIDs []string
 	for _, item := range listRes.Response.Item {
-		itemIDs = append(itemIDs, item.ItemID)
+		itemIDs = append(itemIDs, fmt.Sprintf("%d", item.ItemID))
 	}
+
+	itemIDParam := strings.Join(itemIDs, ",")
+
+	path2 := "/api/v2/product/get_item_base_info"
+	timestamp2 := time.Now().Unix()
+	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
+
+	// URL asli seperti yang kamu inginkan
+	url2 := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s&need_tax_info=true&need_complaint_policy=true",
+		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2, itemIDParam,
+	)
+
+	fmt.Println("=== DEBUG STEP 2 ===")
+	fmt.Println("URL GET_ITEM_INFO:", url2)
 
 	bodyData := map[string]interface{}{
 		"item_id_list":          itemIDs,
@@ -145,17 +161,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonBody, _ := json.Marshal(bodyData)
 
-	path2 := "/api/v2/product/get_item_base_info"
-	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
-
-	url2 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=28525635095&need_tax_info=true&need_complaint_policy=true",
-		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2,
-	)
-
-	fmt.Println("=== DEBUG STEP 2 ===")
-	fmt.Println("URL GET_ITEM_INFO:", url2)
 	fmt.Println("Body JSON:", string(jsonBody))
 
 	req, _ := http.NewRequest("POST", url2, bytes.NewBuffer(jsonBody))
@@ -183,8 +188,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Output akhir
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": infoRes.Response.ItemList,
-		"count": len(infoRes.Response.ItemList),
+		"url_get_item_list": url,
+		"url_get_item_info": url2,
+		"items":             infoRes.Response.ItemList,
+		"count":             len(infoRes.Response.ItemList),
 	})
 }
