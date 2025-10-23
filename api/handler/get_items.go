@@ -138,8 +138,8 @@ func tryGetMap(m map[string]interface{}, keys ...string) (interface{}, bool) {
 // ===== Handler utama =====
 func Handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	ctx := context.Background()
 
+	ctx := context.Background()
 	conn, err := getDBConn(ctx)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusInternalServerError)
@@ -166,8 +166,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	path := "/api/v2/product/get_item_list"
 	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
-	url := fmt.Sprintf("https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL",
-		path, partnerID, token.ShopID, timestamp, token.AccessToken, sign)
+	url := fmt.Sprintf(
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL",
+		path, partnerID, token.ShopID, timestamp, token.AccessToken, sign,
+	)
+
+	fmt.Println("📦 URL Get Item List:", url)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -213,7 +217,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	itemIDJoined := strings.Join(idStrings, ",")
 
-	// === STEP 2: GET ITEM BASE INFO (menampilkan URL lengkap) ===
+	// === STEP 2: GET ITEM BASE INFO ===
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
 	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
@@ -222,6 +226,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s&need_tax_info=true&need_complaint_policy=true",
 		path2, partnerID, token.ShopID, timestamp2, token.AccessToken, sign2, itemIDJoined,
 	)
+
+	// CETAK URL ASLINYA DI CMD
+	fmt.Println("🧾 URL Get Item Base Info:", url2)
 
 	resp2, err := http.Get(url2)
 	if err != nil {
@@ -237,12 +244,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Kirim hasil URL ke response JSON agar bisa dilihat
-	result := map[string]interface{}{
+	// Tampilkan hasil final
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":  true,
 		"url_used": url2,
-		"response": baseInfo,
-	}
-
-	json.NewEncoder(w).Encode(result)
+		"message":  "URL Shopee berhasil dibuat dan dikirim",
+	})
 }
