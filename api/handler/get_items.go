@@ -262,7 +262,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
 
 	url3 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
+		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id=%s",
 		path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, itemIDJoined,
 	)
 
@@ -458,6 +458,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 		finalItems = append(finalItems, item)
 	}
+	fmt.Println("📦 URL Get Item List:", url)
+	fmt.Println("🧾 URL Get Item Base Info:", url2)
+	fmt.Println("🧾 URL Get Item Model Info:", url3)
 
 	// kirim hasil akhir
 	out := map[string]interface{}{
@@ -465,4 +468,5 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		"items": finalItems,
 	}
 	json.NewEncoder(w).Encode(out)
+
 }
