@@ -5,8 +5,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dashboard Admin - Stok Shopee</title>
-
-    <!-- Bootstrap -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 
     <style>
@@ -17,7 +15,6 @@
             margin: 0;
         }
 
-        /* Sidebar */
         #sidebar {
             width: 220px;
             background-color: #0d6efd;
@@ -43,10 +40,8 @@
             text-decoration: underline;
         }
 
-        /* Konten utama */
         .main-content {
             margin-left: 240px;
-            /* geser agar tidak tertutup sidebar */
             flex-grow: 1;
             padding: 30px;
         }
@@ -63,21 +58,32 @@
             font-size: 13px;
             color: #777;
         }
+
+        .child-row {
+            background-color: #f9f9f9;
+            display: none;
+        }
+
+        .toggle-row {
+            cursor: pointer;
+        }
+
+        .toggle-row:hover {
+            background-color: #eaf2ff !important;
+        }
     </style>
 </head>
 
 <body>
-    <!-- Sidebar -->
     <div id="sidebar">
         <h4 class="mb-4">Dashboard</h4>
         <a href="#">🏠 Beranda</a>
         <a href="#">⚙️ Pengaturan</a>
-        <a href="#">📦 Stok Shopee</a>
+        <a href="#" class="fw-bold text-warning">📦 Stok Shopee</a>
         <hr class="border-light" />
         <a href="#" style="color: #ffc107;">🚪 Logout</a>
     </div>
 
-    <!-- Konten utama -->
     <div class="main-content">
         <div class="card p-4">
             <h2 class="mb-3">📦 Stok Shopee</h2>
@@ -110,37 +116,58 @@
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const btn = document.getElementById('btnLoadItems');
-            const tbody = document.querySelector('#produkTable tbody');
+        function toggleChild(id) {
+            const child = document.getElementById(`child-${id}`);
+            child.style.display = child.style.display === "none" ? "table-row" : "none";
+        }
 
-            btn.addEventListener('click', async () => {
-                btn.innerText = '⏳ Memuat produk...';
+        document.addEventListener("DOMContentLoaded", () => {
+            const btn = document.getElementById("btnLoadItems");
+            const tbody = document.querySelector("#produkTable tbody");
+
+            btn.addEventListener("click", async () => {
+                btn.innerText = "⏳ Memuat produk...";
                 btn.disabled = true;
                 tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Sedang memuat...</td></tr>`;
 
                 try {
-                    const res = await fetch('/api/handler/get-items');
+                    const res = await fetch("/api/handler/get-items");
                     const data = await res.json();
 
                     if (!data.items || data.items.length === 0) {
                         tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Tidak ada produk ditemukan.</td></tr>`;
                     } else {
-                        tbody.innerHTML = data.items.map((item, i) => `
-              <tr>
-                <td class="text-center">${i + 1}</td>
-                <td>${item.nama}</td>
-                <td>${item.sku || '-'}</td>
-                <td class="text-center">${item.stok}</td>
-                <td class="text-end">Rp ${parseInt(item.harga).toLocaleString('id-ID')}</td>
-              </tr>
-            `).join('');
+                        let html = "";
+                        data.items.forEach((item, i) => {
+                            html += `
+                <tr class="toggle-row" onclick="toggleChild(${i})">
+                  <td class="text-center">${i + 1}</td>
+                  <td>${item.nama}</td>
+                  <td>${item.sku || "-"}</td>
+                  <td class="text-center">${item.stok}</td>
+                  <td class="text-end">Rp ${parseInt(item.harga).toLocaleString("id-ID")}</td>
+                </tr>
+
+                <tr id="child-${i}" class="child-row">
+                  <td colspan="5">
+                    <b>Detail Varian:</b>
+                    <ul class="mb-0">
+                      <li>Contoh Varian 1 - Stok: 5 - Harga: Rp 45.000</li>
+                      <li>Contoh Varian 2 - Stok: 3 - Harga: Rp 46.000</li>
+                      <li>Contoh Varian 3 - Stok: 2 - Harga: Rp 47.000</li>
+                    </ul>
+                  </td>
+                </tr>
+              `;
+                        });
+
+                        tbody.innerHTML = html;
                     }
                 } catch (err) {
                     tbody.innerHTML = `<tr><td colspan="5" class="text-danger text-center">❌ Gagal memuat produk: ${err.message}</td></tr>`;
                 }
 
-                btn.innerText = '📦 TAMPILKAN PRODUK';
+                btn.innerText = "📦 TAMPILKAN PRODUK";
                 btn.disabled = false;
             });
         });

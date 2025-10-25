@@ -256,51 +256,62 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// === STEP 3: GET MODEL LIST ===
-	path3 := "/api/v2/product/get_model_list"
-	timestamp3 := time.Now().Unix()
-	sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
-
-	url3 := fmt.Sprintf(
-		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
-		path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, itemIDJoined,
-	)
-
-	resp3, err := http.Get(url3)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil model list: %v"}`, err), http.StatusInternalServerError)
-		return
-	}
-	defer resp3.Body.Close()
-
-	body3, _ := io.ReadAll(resp3.Body)
-	var modelInfo map[string]interface{}
-	if err := json.Unmarshal(body3, &modelInfo); err != nil {
-		// non-fatal: kita lanjut tanpa model info
-		modelInfo = map[string]interface{}{}
-	}
-
-	// Build quick lookup: itemID -> first model (map)
+	// === STEP 3: GET MODEL LIST (per item) ===
 	modelLookup := map[int64]map[string]interface{}{}
-	if respItems, ok := tryGetMap(modelInfo, "response", "item"); ok {
-		if arr, ok := respItems.([]interface{}); ok {
-			for _, it := range arr {
-				if imap, ok := it.(map[string]interface{}); ok {
-					var iid int64
-					if idv, ok := imap["item_id"]; ok {
-						if idnum, ok := parseNumber(idv); ok {
-							iid = idnum
+
+	for _, id := range itemIDs { // itemIDs hasil dari step sebelumnya
+		path3 := "/api/v2/product/get_model_list"
+		timestamp3 := time.Now().Unix()
+		sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
+
+		url3 := fmt.Sprintf(
+			"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id=%d",
+			path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, id,
+		)
+
+		// ✅ CETAK di CMD setiap kali loop
+		fmt.Println("ö URL Get Item Model:", url3)
+
+		resp3, err := http.Get(url3)
+		if err != nil {
+			fmt.Println("❌ Gagal ambil model list:", err)
+			continue
+		}
+		body3, _ := io.ReadAll(resp3.Body)
+		resp3.Body.Close()
+
+		var modelInfo map[string]interface{}
+		if err := json.Unmarshal(body3, &modelInfo); err != nil {
+			fmt.Println("⚠️ Gagal parse JSON model list:", err)
+			continue
+		}
+
+		// Ambil isi response->item->model
+		if respItem, ok := tryGetMap(modelInfo, "response", "item"); ok {
+			if arr, ok := respItem.([]interface{}); ok {
+				for _, it := range arr {
+					if imap, ok := it.(map[string]interface{}); ok {
+						var iid int64
+						if idv, ok := imap["item_id"]; ok {
+							if idnum, ok := parseNumber(idv); ok {
+								iid = idnum
+							}
 						}
-					}
-					// model list
-					if ml, ok := imap["model"].([]interface{}); ok && len(ml) > 0 {
-						if firstModel, ok := ml[0].(map[string]interface{}); ok {
-							modelLookup[iid] = firstModel
+						if iid == 0 {
+							continue
+						}
+
+						if ml, ok := imap["model"].([]interface{}); ok && len(ml) > 0 {
+							if firstModel, ok := ml[0].(map[string]interface{}); ok {
+								modelLookup[iid] = firstModel
+							}
 						}
 					}
 				}
 			}
 		}
+
+		time.Sleep(500 * time.Millisecond) // beri jeda agar tidak kena rate limit
 	}
 
 	// Ambil item_list dari baseInfo
@@ -468,6 +479,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("📦 URL Get Item List:", url)
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
-	fmt.Println("ö URL Get Item Model:", url3)
+	// fmt.Println("ö URL Get Item Model:", url3)
 
 }
