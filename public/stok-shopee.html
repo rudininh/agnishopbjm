@@ -115,6 +115,8 @@
         </footer>
     </div>
 
+
+
     <script>
         function toggleChild(id) {
             const child = document.getElementById(`child-${id}`);
@@ -139,30 +141,39 @@
                     } else {
                         let html = "";
                         data.items.forEach((item, i) => {
-                            html += `
-                <tr class="toggle-row" onclick="toggleChild(${i})">
-                  <td class="text-center">${i + 1}</td>
-                  <td>${item.nama}</td>
-                  <td>${item.sku || "-"}</td>
-                  <td class="text-center">${item.stok}</td>
-                  <td class="text-end">Rp ${parseInt(item.harga).toLocaleString("id-ID")}</td>
-                </tr>
+                            // 🔹 Hitung total stok dari semua varian
+                            const totalStok = item.models && item.models.length > 0
+                                ? item.models.reduce((sum, m) => sum + (parseInt(m.stock) || 0), 0)
+                                : (parseInt(item.stok) || 0);
 
-                            <tr id="child-${i}" class="child-row">
-                <td colspan="5">
-                    <b>Detail Varian:</b>
-                    <ul class="mb-0">
-                    ${item.models && item.models.length > 0
+                            // 🔹 Gunakan harga varian pertama jika ada (fallback ke item.harga)
+                            const hargaTampil = item.models && item.models.length > 0
+                                ? parseInt(item.models[0].price)
+                                : parseInt(item.harga);
+
+                            html += `
+                            <tr class="toggle-row" onclick="toggleChild(${i})">
+                                <td class="text-center">${i + 1}</td>
+                                <td>${item.nama}</td>
+                                <td>${item.sku || "-"}</td>
+                                <td class="text-center">${totalStok}</td>
+                                <td class="text-end">Rp ${isNaN(hargaTampil) ? '-' : hargaTampil.toLocaleString("id-ID")}</td>
+                            </tr>
+
+                            <tr id="child-${i}" class="child-row" style="display:none;">
+                                <td colspan="5">
+                                    <b>Detail Varian:</b>
+                                    <ul class="mb-0">
+                                        ${item.models && item.models.length > 0
                                     ? item.models.map(m => `
-                        <li>${m.name} - Stok: ${m.stock} - Harga: Rp ${parseInt(m.price).toLocaleString("id-ID")}</li>
-                        `).join('')
+                                                <li>${m.name} - Stok: ${m.stock} - Harga: Rp ${parseInt(m.price).toLocaleString("id-ID")}</li>
+                                            `).join('')
                                     : '<li><i>Tidak ada varian</i></li>'
                                 }
-                    </ul>
-                </td>
-                </tr>
-
-              `;
+                                    </ul>
+                                </td>
+                            </tr>
+                        `;
                         });
 
                         tbody.innerHTML = html;
@@ -176,6 +187,8 @@
             });
         });
     </script>
+
+
 </body>
 
 </html>
