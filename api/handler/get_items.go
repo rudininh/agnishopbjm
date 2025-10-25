@@ -257,9 +257,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// === STEP 3: GET MODEL LIST (per item) ===
-	modelLookup := map[int64]map[string]interface{}{}
+	modelLookup := map[int64][]map[string]interface{}{}
 
-	for _, id := range itemIDs { // itemIDs hasil dari step sebelumnya
+	for _, id := range itemIDs {
 		path3 := "/api/v2/product/get_model_list"
 		timestamp3 := time.Now().Unix()
 		sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
@@ -269,8 +269,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, id,
 		)
 
-		// ✅ CETAK di CMD setiap kali loop
-		fmt.Println("ö URL Get Item Model:", url3)
+		// ✅ Cetak URL di CMD
+		fmt.Println("🔍 URL Get Item Model:", url3)
 
 		resp3, err := http.Get(url3)
 		if err != nil {
@@ -286,32 +286,61 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Ambil isi response->item->model
-		if respItem, ok := tryGetMap(modelInfo, "response", "item"); ok {
-			if arr, ok := respItem.([]interface{}); ok {
-				for _, it := range arr {
-					if imap, ok := it.(map[string]interface{}); ok {
-						var iid int64
-						if idv, ok := imap["item_id"]; ok {
-							if idnum, ok := parseNumber(idv); ok {
-								iid = idnum
+		// Ambil isi response -> model
+		respMap, ok := tryGetMap(modelInfo, "response")
+		if !ok {
+			fmt.Println("⚠️ Struktur model list tidak sesuai:", string(body3))
+			continue
+		}
+
+		if item, ok := respMap.(map[string]interface{})["model"]; ok {
+			if arr, ok := item.([]interface{}); ok {
+				var models []map[string]interface{}
+				for _, m := range arr {
+					if mMap, ok := m.(map[string]interface{}); ok {
+						// Ambil data model
+						name := mMap["name"]
+						priceRaw := mMap["price_info"]
+						var price int64
+						if pm, ok := priceRaw.(map[string]interface{}); ok {
+							if cp, ok := pm["current_price"]; ok {
+								if n, ok := parseNumber(cp); ok {
+									price = rupiahFromMicros(n)
+								}
 							}
 						}
-						if iid == 0 {
-							continue
+						if price == 0 {
+							if p, ok := mMap["price"]; ok {
+								if n, ok := parseNumber(p); ok {
+									price = rupiahFromMicros(n)
+								}
+							}
 						}
 
-						if ml, ok := imap["model"].([]interface{}); ok && len(ml) > 0 {
-							if firstModel, ok := ml[0].(map[string]interface{}); ok {
-								modelLookup[iid] = firstModel
+						stock := int64(0)
+						if s, ok := mMap["stock_info_v2"].(map[string]interface{}); ok {
+							if si, ok := s["stock_number"]; ok {
+								if n, ok := parseNumber(si); ok {
+									stock = n
+								}
 							}
 						}
+
+						// ✅ Cetak ke CMD
+						fmt.Printf("   ➜ Varian: %v | Harga: %s | Stok: %d\n", name, formatRupiah(price), stock)
+
+						models = append(models, map[string]interface{}{
+							"name":  name,
+							"price": price,
+							"stock": stock,
+						})
 					}
 				}
+				modelLookup[id] = models
 			}
 		}
 
-		time.Sleep(500 * time.Millisecond) // beri jeda agar tidak kena rate limit
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	// Ambil item_list dari baseInfo
