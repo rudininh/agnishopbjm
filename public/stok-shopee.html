@@ -148,16 +148,20 @@
                   <td class="text-end">Rp ${parseInt(item.harga).toLocaleString("id-ID")}</td>
                 </tr>
 
-                <tr id="child-${i}" class="child-row">
-                  <td colspan="5">
+                            <tr id="child-${i}" class="child-row">
+                <td colspan="5">
                     <b>Detail Varian:</b>
                     <ul class="mb-0">
-                      <li>Contoh Varian 1 - Stok: 5 - Harga: Rp 45.000</li>
-                      <li>Contoh Varian 2 - Stok: 3 - Harga: Rp 46.000</li>
-                      <li>Contoh Varian 3 - Stok: 2 - Harga: Rp 47.000</li>
+                    ${item.models && item.models.length > 0
+                                    ? item.models.map(m => `
+                        <li>${m.name} - Stok: ${m.stock} - Harga: Rp ${parseInt(m.price).toLocaleString("id-ID")}</li>
+                        `).join('')
+                                    : '<li><i>Tidak ada varian</i></li>'
+                                }
                     </ul>
-                  </td>
+                </td>
                 </tr>
+
               `;
                         });
 

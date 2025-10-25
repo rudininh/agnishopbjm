@@ -286,60 +286,62 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Ambil isi response -> model
-		respMap, ok := tryGetMap(modelInfo, "response")
+		responseData, ok := modelInfo["response"].(map[string]interface{})
 		if !ok {
-			fmt.Println("⚠️ Struktur model list tidak sesuai:", string(body3))
+			fmt.Println("⚠️ Tidak ada field 'response' pada model list:", string(body3))
 			continue
 		}
 
-		if item, ok := respMap.(map[string]interface{})["model"]; ok {
-			if arr, ok := item.([]interface{}); ok {
-				var models []map[string]interface{}
-				for _, m := range arr {
-					if mMap, ok := m.(map[string]interface{}); ok {
-						// Ambil data model
-						name := mMap["name"]
-						priceRaw := mMap["price_info"]
-						var price int64
-						if pm, ok := priceRaw.(map[string]interface{}); ok {
-							if cp, ok := pm["current_price"]; ok {
-								if n, ok := parseNumber(cp); ok {
-									price = rupiahFromMicros(n)
-								}
+		modelArr, ok := responseData["model"].([]interface{})
+		if !ok {
+			fmt.Println("⚠️ Tidak ada array 'model' pada response:", string(body3))
+			continue
+		}
+
+		var models []map[string]interface{}
+		for _, m := range modelArr {
+			if mMap, ok := m.(map[string]interface{}); ok {
+				modelSKU, _ := mMap["model_sku"].(string)
+				modelName, _ := mMap["model_name"].(string)
+
+				// === Ambil harga dari array price_info ===
+				var price int64
+				if priceList, ok := mMap["price_info"].([]interface{}); ok && len(priceList) > 0 {
+					if pInfo, ok := priceList[0].(map[string]interface{}); ok {
+						if cp, ok := pInfo["current_price"]; ok {
+							if n, ok := parseNumber(cp); ok {
+								price = rupiahFromMicros(n)
 							}
 						}
-						if price == 0 {
-							if p, ok := mMap["price"]; ok {
-								if n, ok := parseNumber(p); ok {
-									price = rupiahFromMicros(n)
-								}
-							}
-						}
-
-						stock := int64(0)
-						if s, ok := mMap["stock_info_v2"].(map[string]interface{}); ok {
-							if si, ok := s["stock_number"]; ok {
-								if n, ok := parseNumber(si); ok {
-									stock = n
-								}
-							}
-						}
-
-						// ✅ Cetak ke CMD
-						fmt.Printf("   ➜ Varian: %v | Harga: %s | Stok: %d\n", name, formatRupiah(price), stock)
-
-						models = append(models, map[string]interface{}{
-							"name":  name,
-							"price": price,
-							"stock": stock,
-						})
 					}
 				}
-				modelLookup[id] = models
+
+				// === Ambil stok dari stock_info_v2.summary_info.total_available_stock ===
+				var stock int64
+				if stockV2, ok := mMap["stock_info_v2"].(map[string]interface{}); ok {
+					if summary, ok := stockV2["summary_info"].(map[string]interface{}); ok {
+						if sa, ok := summary["total_available_stock"]; ok {
+							if n, ok := parseNumber(sa); ok {
+								stock = n
+							}
+						}
+					}
+				}
+
+				// ✅ Cetak ke CMD
+				fmt.Printf("   ➜ SKU: %s | Varian: %s | Harga: %s | Stok: %d\n",
+					modelSKU, modelName, formatRupiah(price), stock)
+
+				models = append(models, map[string]interface{}{
+					"model_sku": modelSKU,
+					"name":      modelName,
+					"price":     price,
+					"stock":     stock,
+				})
 			}
 		}
 
+		modelLookup[id] = models
 		time.Sleep(500 * time.Millisecond)
 	}
 
@@ -366,8 +368,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// prepare final items
+	// === Siapkan hasil akhir ===
 	finalItems := []map[string]interface{}{}
+
 	for idx, bi := range baseItems {
 		var itemName string
 		var itemID int64
@@ -376,7 +379,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		var stockInt int64
 
 		if bimap, ok := bi.(map[string]interface{}); ok {
-			// name
+			// nama produk
 			if v, ok := bimap["item_name"]; ok {
 				if s, ok := v.(string); ok {
 					itemName = s
@@ -388,14 +391,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					itemID = id
 				}
 			}
-			// sku possibly item_sku
+			// SKU produk
 			if v, ok := bimap["item_sku"]; ok {
 				if s, ok := v.(string); ok {
 					baseSku = s
 				}
 			}
-			// try price from price_info.current_price or price or price_info.original_price
-			// handle nested map price_info
+			// harga utama
 			if pi, ok := bimap["price_info"].(map[string]interface{}); ok {
 				if cp, ok := pi["current_price"]; ok {
 					if n, ok := parseNumber(cp); ok {
@@ -410,7 +412,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// fallback if there's top-level "price"
+			// fallback jika ada top-level "price"
 			if priceInt == 0 {
 				if pv, ok := bimap["price"]; ok {
 					if n, ok := parseNumber(pv); ok {
@@ -418,7 +420,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// stock from stock_info.normal_stock or "stock"
+			// stok utama
 			if si, ok := bimap["stock_info"].(map[string]interface{}); ok {
 				if ns, ok := si["normal_stock"]; ok {
 					if n, ok := parseNumber(ns); ok {
@@ -435,71 +437,36 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// override with model info if available
-		if m, ok := modelLookup[itemID]; ok {
-			// model SKU
-			if v, ok := m["model_sku"]; ok {
-				if s, ok := v.(string); ok && s != "" {
-					baseSku = s
-				}
-			}
-			// model price (price_info.current_price or price_info.original_price)
-			if pi, ok := m["price_info"].(map[string]interface{}); ok {
-				if cp, ok := pi["current_price"]; ok {
-					if n, ok := parseNumber(cp); ok {
-						priceInt = rupiahFromMicros(n)
-					}
-				}
-				if priceInt == 0 {
-					if op, ok := pi["original_price"]; ok {
-						if n, ok := parseNumber(op); ok {
-							priceInt = rupiahFromMicros(n)
-						}
-					}
-				}
-			}
-			// model stock
-			if si, ok := m["stock_info"].(map[string]interface{}); ok {
-				// try multiple keys
-				if ns, ok := si["normal_stock"]; ok {
-					if n, ok := parseNumber(ns); ok {
-						stockInt = n
-					}
-				} else if tot, ok := si["total_reserved_stock"]; ok {
-					if n, ok := parseNumber(tot); ok {
-						stockInt = n
-					}
-				}
-			}
-			// fallback top-level model fields
-			if stockInt == 0 {
-				if v, ok := m["stock"]; ok {
-					if n, ok := parseNumber(v); ok {
-						stockInt = n
-					}
-				}
-			}
+		// Ambil daftar varian (model)
+		var variants []map[string]interface{}
+		if models, ok := modelLookup[itemID]; ok {
+			variants = models
 		}
 
-		// finalize harga string (if priceInt==0, keep empty)
+		// Cetak ke CMD untuk debugging
+		fmt.Printf("📦 Produk: %s | SKU: %s | Harga: %s | Stok: %d | Jumlah Varian: %d\n",
+			itemName, baseSku, formatRupiah(priceInt), stockInt, len(variants))
+
+		// Format harga ke string
 		hargaStr := ""
 		if priceInt != 0 {
 			hargaStr = formatRupiah(priceInt)
 		}
-		// finalize sku (if empty remain "")
-		skuStr := baseSku
 
+		// Simpan hasil ke array final
 		item := map[string]interface{}{
-			"no":    idx + 1,
-			"nama":  itemName,
-			"sku":   skuStr,
-			"stok":  stockInt,
-			"harga": hargaStr,
+			"no":     idx + 1,
+			"nama":   itemName,
+			"sku":    baseSku,
+			"stok":   stockInt,
+			"harga":  hargaStr,
+			"models": variants, // ✅ tambahkan varian ke JSON
 		}
+
 		finalItems = append(finalItems, item)
 	}
 
-	// kirim hasil akhir
+	// Kirim hasil akhir ke browser (JSON)
 	out := map[string]interface{}{
 		"count": len(finalItems),
 		"items": finalItems,
@@ -508,6 +475,5 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("📦 URL Get Item List:", url)
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
-	// fmt.Println("ö URL Get Item Model:", url3)
 
 }
