@@ -465,4 +465,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		"items": finalItems,
 	}
 	json.NewEncoder(w).Encode(out)
+
+	fmt.Println("📦 URL Get Item List:", url)
+	fmt.Println("🧾 URL Get Item Base Info:", url2)
+	fmt.Println("ö URL Get Item Model:", url3)
+
 }
