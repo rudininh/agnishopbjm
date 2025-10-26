@@ -16,7 +16,7 @@ func main() {
 	http.Handle("/", fs)
 
 	// === API route ===
-	http.HandleFunc("/api/handler/get-items", handler.Handler)
+	http.HandleFunc("/api/get-items", handler.Handler)
 	// http.HandleFunc("/api/get-token", handler.GetTokenHandler) // kalau kamu punya handler token
 
 	// === Jalankan server ===
