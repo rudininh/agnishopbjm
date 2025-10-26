@@ -1,64 +1,50 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log"
+	"net/http"
 	"os/exec"
 	"runtime"
-	"time"
-)
 
-const (
-	PartnerID  = 2013107
-	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
-	Host       = "https://partner.shopeemobile.com"
-	Redirect   = "https://agnishopbjm.vercel.app/api/callback"
+	"agnishopbjm/api/handler"
 )
 
 func main() {
-	timestamp := time.Now().Unix()
-	path := "/api/v2/shop/auth_partner"
-	baseString := fmt.Sprintf("%d%s%d", PartnerID, path, timestamp)
-	sign := generateSign(baseString, PartnerKey)
+	// === Serve file statis (HTML, CSS, JS, gambar, dll) ===
+	fs := http.FileServer(http.Dir("./public"))
+	http.Handle("/", fs)
 
-	authURL := fmt.Sprintf(
-		"%s%s?partner_id=%d&timestamp=%d&sign=%s&redirect=%s",
-		Host, path, PartnerID, timestamp, sign, Redirect,
-	)
+	// === API route ===
+	http.HandleFunc("/api/handler/get-items", handler.Handler)
+	// http.HandleFunc("/api/get-token", handler.GetTokenHandler) // kalau kamu punya handler token
 
-	fmt.Println("=== Shopee Authorization URL ===")
-	fmt.Println(authURL)
-	fmt.Println("===============================")
+	// === Jalankan server ===
+	url := "http://localhost:8080/stok-shopee.html"
+	fmt.Println("🚀 Server berjalan di", url)
 
-	openBrowser(authURL)
+	// === Otomatis buka browser ===
+	openBrowser(url)
+
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func generateSign(baseString, key string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(baseString))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
+// Fungsi untuk buka browser otomatis
 func openBrowser(url string) {
-	var cmd string
-	var args []string
+	var err error
 
 	switch runtime.GOOS {
 	case "windows":
-		cmd = "rundll32"
-		args = []string{"url.dll,FileProtocolHandler", url}
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
 	case "darwin":
-		cmd = "open"
-		args = []string{url}
-	default: // linux, freebsd, dll
-		cmd = "xdg-open"
-		args = []string{url}
+		err = exec.Command("open", url).Start()
+	default:
+		fmt.Println("❌ Tidak bisa membuka browser otomatis di OS ini.")
 	}
 
-	if err := exec.Command(cmd, args...).Start(); err != nil {
-		log.Printf("Gagal membuka browser: %v", err)
+	if err != nil {
+		fmt.Println("❌ Gagal membuka browser:", err)
 	}
 }
