@@ -16,6 +16,10 @@
       "dest": "/api/$1"
     },
     {
+      "src": "/api/(*js)",
+      "dest": "/api/callback.js"
+    },
+    {
       "src": "/$",
       "dest": "/public/stok-shopee.html"
     },
