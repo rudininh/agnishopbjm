@@ -1,3 +1,33 @@
+<style>
+    #sidebar {
+        width: 220px;
+        background-color: #0d6efd;
+        color: white;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        padding: 20px;
+    }
+
+    #sidebar a {
+        color: #fff;
+        text-decoration: none;
+        display: block;
+        margin: 10px 0;
+    }
+
+    #sidebar a:hover {
+        text-decoration: underline;
+    }
+</style>
+
+
+
+
 <div class="sidebar">
     <div class="sidebar-logo">
         <img src="./assets/logo.png" alt="Logo" />
@@ -9,8 +39,17 @@
         <li>🛍️ Data Shopee</li>
         <li>⚙️ Pengaturan</li>
         <li id="logoutBtn">🚪 Logout</li>
+
+        <h4 class="mb-4">Dashboard</h4>
+        <a href="#">🏠 Beranda</a>
+        <a href="#">⚙️ Pengaturan</a>
+        <a href="#" class="fw-bold text-warning">📦 Stok Shopee</a>
+        <hr class="border-light" />
+        <a href="#" style="color: #ffc107;">🚪 Logout</a>
     </ul>
 </div>
+
+
 
 <script>
     // Logout handler

@@ -15,30 +15,7 @@
             margin: 0;
         }
 
-        #sidebar {
-            width: 220px;
-            background-color: #0d6efd;
-            color: white;
-            flex-shrink: 0;
-            display: flex;
-            flex-direction: column;
-            position: fixed;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            padding: 20px;
-        }
 
-        #sidebar a {
-            color: #fff;
-            text-decoration: none;
-            display: block;
-            margin: 10px 0;
-        }
-
-        #sidebar a:hover {
-            text-decoration: underline;
-        }
 
         .main-content {
             margin-left: 240px;
@@ -110,85 +87,26 @@
             </div>
         </div>
 
-        <footer>
-            © 2025 Agni Shop Banjarmasin | All rights reserved.
-        </footer>
+        <div id="footer"></div>
+
     </div>
 
 
+    <script>
 
-    <!-- <script>
-        function toggleChild(id) {
-            const child = document.getElementById(`child-${id}`);
-            child.style.display = child.style.display === "none" ? "table-row" : "none";
+
+        // Fungsi untuk load komponen HTML eksternal
+        async function loadComponent(id, file) {
+            const res = await fetch(file);
+            const html = await res.text();
+            document.getElementById(id).innerHTML = html;
         }
 
-        document.addEventListener("DOMContentLoaded", () => {
-            const btn = document.getElementById("btnLoadItems");
-            const tbody = document.querySelector("#produkTable tbody");
+        // Load sidebar, header, footer
+        loadComponent('sidebar', './component/sidebar.html');
+        loadComponent('header', './component/header.html');
+        loadComponent('footer', './component/footer.html');
 
-            btn.addEventListener("click", async () => {
-                btn.innerText = "⏳ Memuat produk...";
-                btn.disabled = true;
-                tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Sedang memuat...</td></tr>`;
-
-                try {
-                    const res = await fetch("/api/handler/get-items");
-                    const data = await res.json();
-
-                    if (!data.items || data.items.length === 0) {
-                        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Tidak ada produk ditemukan.</td></tr>`;
-                    } else {
-                        let html = "";
-                        data.items.forEach((item, i) => {
-                            // 🔹 Hitung total stok dari semua varian
-                            const totalStok = item.models && item.models.length > 0
-                                ? item.models.reduce((sum, m) => sum + (parseInt(m.stock) || 0), 0)
-                                : (parseInt(item.stok) || 0);
-
-                            // 🔹 Gunakan harga varian pertama jika ada (fallback ke item.harga)
-                            const hargaTampil = item.models && item.models.length > 0
-                                ? parseInt(item.models[0].price)
-                                : parseInt(item.harga);
-
-                            html += `
-                            <tr class="toggle-row" onclick="toggleChild(${i})">
-                                <td class="text-center">${i + 1}</td>
-                                <td>${item.nama}</td>
-                                <td>${item.sku || "-"}</td>
-                                <td class="text-center">${totalStok}</td>
-                                <td class="text-end">Rp ${isNaN(hargaTampil) ? '-' : hargaTampil.toLocaleString("id-ID")}</td>
-                            </tr>
-
-                            <tr id="child-${i}" class="child-row" style="display:none;">
-                                <td colspan="5">
-                                    <b>Detail Varian:</b>
-                                    <ul class="mb-0">
-                                        ${item.models && item.models.length > 0
-                                    ? item.models.map(m => `
-                                                <li>${m.name} - Stok: ${m.stock} - Harga: Rp ${parseInt(m.price).toLocaleString("id-ID")}</li>
-                                            `).join('')
-                                    : '<li><i>Tidak ada varian</i></li>'
-                                }
-                                    </ul>
-                                </td>
-                            </tr>
-                        `;
-                        });
-
-                        tbody.innerHTML = html;
-                    }
-                } catch (err) {
-                    tbody.innerHTML = `<tr><td colspan="5" class="text-danger text-center">❌ Gagal memuat produk: ${err.message}</td></tr>`;
-                }
-
-                btn.innerText = "📦 TAMPILKAN PRODUK";
-                btn.disabled = false;
-            });
-        });
-    </script> -->
-
-    <script>
         function toggleChild(id) {
             const child = document.getElementById(`child-${id}`);
             child.style.display = child.style.display === "none" ? "table-row" : "none";

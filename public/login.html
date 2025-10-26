@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="id">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Login Admin - Agni Shop Banjarmasin</title>
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
   <div class="login-container">
     <h1>Login Admin</h1>
@@ -19,28 +21,29 @@
     <p id="error" class="error"></p>
   </div>
 
-<script>
-  document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
 
-    const res = await fetch('/.netlify/functions/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      const res = await fetch('/.netlify/functions/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        localStorage.setItem('authToken', data.token);
+        window.location.href = '/dashboard.html';
+      } else {
+        document.getElementById('error').textContent = data.message;
+      }
     });
-    const data = await res.json();
-
-    if (data.success) {
-      localStorage.setItem('authToken', data.token);
-      window.location.href = '/dashboard.html';
-    } else {
-      document.getElementById('error').textContent = data.message;
-    }
-  });
-</script>
+  </script>
 
 
 </body>
+
 </html>
