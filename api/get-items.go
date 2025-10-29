@@ -466,6 +466,22 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		finalItems = append(finalItems, item)
 	}
 
+	// === Simpan hasil ke file JSON agar bisa diproses oleh Node.js ===
+	outputFile := "items.json"
+	dataBytes, _ := json.MarshalIndent(finalItems, "", "  ")
+	if err := os.WriteFile(outputFile, dataBytes, 0644); err != nil {
+		fmt.Println("❌ Gagal menulis file:", err)
+	} else {
+		fmt.Printf("✅ Data tersimpan di %s (%d item)\n", outputFile, len(finalItems))
+	}
+
+	// kirim juga response JSON ke browser
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"total":   len(finalItems),
+		"message": fmt.Sprintf("Data tersimpan di %s", outputFile),
+	})
+
 	// Kirim hasil akhir ke browser (JSON)
 	out := map[string]interface{}{
 		"count": len(finalItems),
