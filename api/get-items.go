@@ -466,28 +466,175 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		finalItems = append(finalItems, item)
 	}
 
-	// === Simpan hasil ke file JSON agar bisa diproses oleh Node.js ===
-	outputFile := "items.json"
-	dataBytes, _ := json.MarshalIndent(finalItems, "", "  ")
-	if err := os.WriteFile(outputFile, dataBytes, 0644); err != nil {
-		fmt.Println("❌ Gagal menulis file:", err)
-	} else {
-		fmt.Printf("✅ Data tersimpan di %s (%d item)\n", outputFile, len(finalItems))
-	}
-
-	// kirim juga response JSON ke browser
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "ok",
-		"total":   len(finalItems),
-		"message": fmt.Sprintf("Data tersimpan di %s", outputFile),
-	})
-
 	// Kirim hasil akhir ke browser (JSON)
 	out := map[string]interface{}{
 		"count": len(finalItems),
 		"items": finalItems,
 	}
 	json.NewEncoder(w).Encode(out)
+
+	// Ambil item_list dari baseInfo
+	var baseItems []interface{}
+	if b, ok := tryGetMap(baseInfo, "response", "item_list"); ok {
+		if arr, ok := b.([]interface{}); ok {
+			baseItems = arr
+		}
+	}
+	// fallback: kadang bernama "item_list" di root response differently
+	if baseItems == nil {
+		if v, ok := baseInfo["item_list"].([]interface{}); ok {
+			baseItems = v
+		}
+	}
+
+	// Loop tiap item
+	for _, itemRaw := range baseItems {
+		item, ok := itemRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		itemID := tryGetInt64(item, "item_id")
+		shopID := tryGetInt64(item, "shopid")
+		name := tryGetString(item, "name")
+		description := tryGetString(item, "description")
+		categoryID := tryGetInt64(item, "category_id")
+		priceMin := tryGetFloat64(item, "price_min")
+		priceMax := tryGetFloat64(item, "price_max")
+		priceBeforeDiscount := tryGetFloat64(item, "price_before_discount")
+		currency := tryGetString(item, "currency")
+		stock := tryGetInt64(item, "stock")
+		sold := tryGetInt64(item, "sold")
+		likedCount := tryGetInt64(item, "liked_count")
+		rating := tryGetFloat64(item, "rating_star")
+		historicalSold := tryGetInt64(item, "historical_sold")
+		status := tryGetString(item, "status")
+		createTime := tryGetInt64(item, "ctime")
+		updateTime := tryGetInt64(item, "update_time")
+
+		// is_active: aktif kalau status = "NORMAL" atau "LIVE"
+		isActive := (status == "NORMAL" || status == "LIVE")
+
+		// === Insert ke tabel product ===
+		_, err = db.ExecContext(ctx, `
+		INSERT INTO product (
+			item_id, shop_id, name, description, category_id,
+			price_min, price_max, price_before_discount, currency,
+			stock, sold, liked_count, rating, historical_sold,
+			status, create_time, update_time, is_active
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,
+			$10,$11,$12,$13,$14,
+			$15,$16,$17,$18
+		)
+		ON CONFLICT (item_id) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			price_min = EXCLUDED.price_min,
+			price_max = EXCLUDED.price_max,
+			price_before_discount = EXCLUDED.price_before_discount,
+			currency = EXCLUDED.currency,
+			stock = EXCLUDED.stock,
+			sold = EXCLUDED.sold,
+			liked_count = EXCLUDED.liked_count,
+			rating = EXCLUDED.rating,
+			historical_sold = EXCLUDED.historical_sold,
+			status = EXCLUDED.status,
+			update_time = EXCLUDED.update_time,
+			is_active = EXCLUDED.is_active;
+	`, itemID, shopID, name, description, categoryID,
+			priceMin, priceMax, priceBeforeDiscount, currency,
+			stock, sold, likedCount, rating, historicalSold,
+			status, createTime, updateTime, isActive)
+		if err != nil {
+			fmt.Println("❌ Gagal insert product:", err)
+			continue
+		}
+
+		// === Insert ke tabel product_image ===
+		if images, ok := tryGetSlice(item, "images"); ok {
+			for _, img := range images {
+				imageURL := fmt.Sprintf("%v", img)
+				if imageURL == "" {
+					continue
+				}
+				_, err = db.ExecContext(ctx, `
+				INSERT INTO product_image (item_id, image_url)
+				VALUES ($1, $2)
+				ON CONFLICT (item_id, image_url) DO NOTHING;
+			`, itemID, imageURL)
+				if err != nil {
+					fmt.Println("⚠️ Gagal insert product_image:", err)
+				}
+			}
+		}
+
+		// === Insert ke tabel product_attribute ===
+		if attrs, ok := tryGetSlice(item, "attributes"); ok {
+			for _, attrRaw := range attrs {
+				attr, _ := attrRaw.(map[string]interface{})
+				attrName := tryGetString(attr, "attribute_name")
+				attrValue := tryGetString(attr, "attribute_value")
+				if attrName == "" {
+					continue
+				}
+				_, err = db.ExecContext(ctx, `
+				INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (item_id, attribute_name) DO UPDATE
+				SET attribute_value = EXCLUDED.attribute_value;
+			`, itemID, attrName, attrValue)
+				if err != nil {
+					fmt.Println("⚠️ Gagal insert product_attribute:", err)
+				}
+			}
+		}
+
+		// === Ambil model list ===
+		modelsURL := fmt.Sprintf("%s/api/v2/product/get_model_list?item_id=%d&shop_id=%d", host, itemID, shopID)
+		reqModel, _ := http.NewRequest("GET", modelsURL, nil)
+		reqModel.Header.Set("Content-Type", "application/json")
+		respModel, err := client.Do(reqModel)
+		if err != nil {
+			fmt.Println("⚠️ Gagal ambil model list:", err)
+			continue
+		}
+		defer respModel.Body.Close()
+
+		var modelResp map[string]interface{}
+		bodyModel, _ := io.ReadAll(respModel.Body)
+		json.Unmarshal(bodyModel, &modelResp)
+
+		if modelList, ok := tryGetSlice(modelResp, "response", "model"); ok {
+			for _, m := range modelList {
+				model, _ := m.(map[string]interface{})
+				modelID := tryGetInt64(model, "model_id")
+				modelName := tryGetString(model, "name")
+				modelPrice := tryGetFloat64(model, "price")
+				modelStock := tryGetInt64(model, "stock")
+				modelSold := tryGetInt64(model, "sold")
+				modelStatus := tryGetString(model, "status")
+				modelSKU := tryGetString(model, "model_sku")
+
+				_, err = db.ExecContext(ctx, `
+				INSERT INTO product_model (model_id, item_id, name, price, stock, sold, sku, status)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+				ON CONFLICT (model_id) DO UPDATE SET
+					name = EXCLUDED.name,
+					price = EXCLUDED.price,
+					stock = EXCLUDED.stock,
+					sold = EXCLUDED.sold,
+					sku = EXCLUDED.sku,
+					status = EXCLUDED.status;
+			`, modelID, itemID, modelName, modelPrice, modelStock, modelSold, modelSKU, modelStatus)
+				if err != nil {
+					fmt.Println("⚠️ Gagal insert product_model:", err)
+				}
+			}
+		}
+	}
+
+	fmt.Println("✅ Semua produk berhasil diproses dan dimasukkan ke database.")
 
 	fmt.Println("📦 URL Get Item List:", url)
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
