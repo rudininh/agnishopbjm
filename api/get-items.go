@@ -579,49 +579,37 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			for _, raw := range models {
+			for _, m := range models {
 				var (
-					modelID    int64
 					modelName  string
 					modelSKU   string
 					modelPrice int64
 					modelStock int64
 				)
 
-				if m, ok := raw.(map[string]interface{}); ok {
-					if v, ok := parseNumber(m["model_id"]); ok {
-						modelID = v
-					}
-					modelName, _ = m["name"].(string)
-					if modelName == "" {
-						modelName, _ = m["model_name"].(string)
-					}
-					modelSKU, _ = m["model_sku"].(string)
-					if v, ok := parseNumber(m["price"]); ok {
-						modelPrice = rupiahFromMicros(v)
-					}
-					if v, ok := parseNumber(m["stock"]); ok {
-						modelStock = v
-					}
+				modelName, _ = m["name"].(string)
+				if modelName == "" {
+					modelName, _ = m["model_name"].(string)
 				}
-
-				if modelID == 0 {
-					fmt.Printf("⚠️ Lewati varian tanpa model_id untuk item %d (%s)\n", itemID, modelName)
-					continue
+				modelSKU, _ = m["model_sku"].(string)
+				if v, ok := parseNumber(m["price"]); ok {
+					modelPrice = rupiahFromMicros(v)
+				}
+				if v, ok := parseNumber(m["stock"]); ok {
+					modelStock = v
 				}
 
 				fmt.Printf("🟢 [MODEL] Menyimpan varian %s (SKU: %s) untuk item_id=%d\n", modelName, modelSKU, itemID)
 
 				_, err := conn.Exec(ctx, `
-				INSERT INTO product_model (model_id, item_id, name, price, stock, sku, status)
-				VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
-				ON CONFLICT (model_id) DO UPDATE
-				SET price = EXCLUDED.price,
-					stock = EXCLUDED.stock,
-					name = EXCLUDED.name,
-					status = 'ACTIVE';
-			`,
-					modelID,
+		INSERT INTO product_model (item_id, name, price, stock, sku, status)
+		VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+		ON CONFLICT (item_id, sku) DO UPDATE
+		SET price = EXCLUDED.price,
+			stock = EXCLUDED.stock,
+			name = EXCLUDED.name,
+			status = 'ACTIVE';
+	`,
 					itemID,
 					modelName,
 					modelPrice,
@@ -632,7 +620,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					fmt.Printf("⚠️ Gagal insert model: %v\n", err)
 				} else {
-					fmt.Printf("✅ Varian model_id=%d berhasil disimpan\n", modelID)
+					fmt.Printf("✅ Varian [%s] berhasil disimpan\n", modelName)
 				}
 			}
 
