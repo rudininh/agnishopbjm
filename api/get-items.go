@@ -477,4 +477,70 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
 	// ===== Helper Functions =====
 
+	// === Simpan ke database ===
+	_, err = conn.Exec(ctx, `
+  INSERT INTO product (
+    item_id, shop_id, name, category_id, price_min, price_max,
+    currency, stock, sold, status, create_time, update_time, is_active
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10, NOW(), NOW(), TRUE
+  )
+  ON CONFLICT (item_id) DO UPDATE
+  SET name = EXCLUDED.name,
+      price_min = EXCLUDED.price_min,
+      price_max = EXCLUDED.price_max,
+      stock = EXCLUDED.stock,
+      update_time = NOW();
+`,
+		itemID, token.ShopID, itemName, nil, priceInt, priceInt,
+		"IDR", stockInt, 0, "NORMAL",
+	)
+	if err != nil {
+		fmt.Printf("❌ Gagal insert ke product: %v\n", err)
+		continue
+	}
+
+	// === Simpan varian ke tabel product_model ===
+	for _, model := range variants {
+		_, err := conn.Exec(ctx, `
+    INSERT INTO product_model (item_id, name, price, stock, sku, status)
+    VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+    ON CONFLICT (model_id) DO NOTHING;
+  `,
+			itemID,
+			model["name"],
+			model["price"],
+			model["stock"],
+			model["model_sku"],
+		)
+		if err != nil {
+			fmt.Printf("⚠️ Gagal insert model: %v\n", err)
+		}
+	}
+
+	// Simpan gambar
+	if imgs, ok := bimap["image"].(map[string]interface{}); ok {
+		if imgList, ok := imgs["image_url_list"].([]interface{}); ok {
+			for _, iurl := range imgList {
+				if s, ok := iurl.(string); ok {
+					conn.Exec(ctx, `INSERT INTO product_image (item_id, image_url) VALUES ($1, $2)`, itemID, s)
+				}
+			}
+		}
+	}
+
+	// Simpan atribut
+	if attrs, ok := bimap["attribute_list"].([]interface{}); ok {
+		for _, a := range attrs {
+			if amap, ok := a.(map[string]interface{}); ok {
+				name, _ := amap["attribute_name"].(string)
+				val, _ := amap["attribute_value"].(string)
+				conn.Exec(ctx, `
+        INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+        VALUES ($1, $2, $3)`, itemID, name, val)
+			}
+		}
+	}
+
 }
