@@ -476,8 +476,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("📦 URL Get Item List:", url)
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
 	// ===== Helper Functions =====
-
 	for idx, bi := range baseItems {
+		fmt.Printf("\n🟡 [DEBUG] Base item index %d: %+v\n", idx, bi)
+
 		var (
 			itemName, description, currency, status string
 			itemID, categoryID, priceMin, priceMax, priceBeforeDiscount,
@@ -522,7 +523,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				rating = v
 			}
 
-			// === Insert ke tabel product ===
+			// === INSERT KE TABEL PRODUCT ===
+			fmt.Printf("🟢 [PRODUCT] Inserting item_id=%d, name=%s\n", itemID, itemName)
 			_, err := conn.Exec(ctx, `
 			INSERT INTO product (
 				item_id, shop_id, name, description, category_id,
@@ -559,70 +561,129 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				historicalSold, status,
 			)
 			if err != nil {
-				fmt.Printf("❌ Gagal insert ke product %d: %v\n", itemID, err)
-				continue
+				fmt.Printf("❌ Gagal insert ke product item_id=%d: %v\n", itemID, err)
+			} else {
+				fmt.Printf("✅ Sukses insert ke product item_id=%d\n", itemID)
 			}
 
-			// === Simpan varian produk (product_model) ===
-			if models, ok := modelLookup[itemID]; ok {
-				for _, m := range models {
-					_, err := conn.Exec(ctx, `
-					INSERT INTO product_model (item_id, name, price, stock, sku, status)
-					VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
-					ON CONFLICT (item_id, sku) DO UPDATE
-					SET price = EXCLUDED.price, stock = EXCLUDED.stock, status = 'ACTIVE';
-				`,
-						itemID,
-						m["name"],
-						m["price"],
-						m["stock"],
-						m["model_sku"],
-					)
-					if err != nil {
-						fmt.Printf("⚠️ Gagal insert model: %v\n", err)
+			// === PRODUCT_MODEL (VARIAN) ===
+			models, ok := modelLookup[itemID]
+			if !ok || len(models) == 0 {
+				// fallback: beberapa produk simpan varian di "models"
+				if mlist, ok := bimap["models"].([]interface{}); ok {
+					for _, mm := range mlist {
+						if mmap, ok := mm.(map[string]interface{}); ok {
+							models = append(models, mmap)
+						}
 					}
 				}
 			}
 
-			// === Simpan gambar produk (product_image) ===
+			for _, raw := range models {
+				var (
+					modelID    int64
+					modelName  string
+					modelSKU   string
+					modelPrice int64
+					modelStock int64
+				)
+
+				if m, ok := raw.(map[string]interface{}); ok {
+					if v, ok := parseNumber(m["model_id"]); ok {
+						modelID = v
+					}
+					modelName, _ = m["name"].(string)
+					if modelName == "" {
+						modelName, _ = m["model_name"].(string)
+					}
+					modelSKU, _ = m["model_sku"].(string)
+					if v, ok := parseNumber(m["price"]); ok {
+						modelPrice = rupiahFromMicros(v)
+					}
+					if v, ok := parseNumber(m["stock"]); ok {
+						modelStock = v
+					}
+				}
+
+				if modelID == 0 {
+					fmt.Printf("⚠️ Lewati varian tanpa model_id untuk item %d (%s)\n", itemID, modelName)
+					continue
+				}
+
+				fmt.Printf("🟢 [MODEL] Menyimpan varian %s (SKU: %s) untuk item_id=%d\n", modelName, modelSKU, itemID)
+
+				_, err := conn.Exec(ctx, `
+				INSERT INTO product_model (model_id, item_id, name, price, stock, sku, status)
+				VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
+				ON CONFLICT (model_id) DO UPDATE
+				SET price = EXCLUDED.price,
+					stock = EXCLUDED.stock,
+					name = EXCLUDED.name,
+					status = 'ACTIVE';
+			`,
+					modelID,
+					itemID,
+					modelName,
+					modelPrice,
+					modelStock,
+					modelSKU,
+				)
+
+				if err != nil {
+					fmt.Printf("⚠️ Gagal insert model: %v\n", err)
+				} else {
+					fmt.Printf("✅ Varian model_id=%d berhasil disimpan\n", modelID)
+				}
+			}
+
+			// === PRODUCT_IMAGE (GAMBAR) ===
+			fmt.Printf("🟡 [DEBUG] Mengecek gambar & atribut untuk item_id=%d\n", itemID)
 			if imgInfo, ok := bimap["image"].(map[string]interface{}); ok {
+				fmt.Printf("🟢 [IMAGE] Ada image map untuk item_id=%d\n", itemID)
 				if imgList, ok := imgInfo["image_url_list"].([]interface{}); ok {
+					fmt.Printf("🟢 [IMAGE] Jumlah gambar: %d\n", len(imgList))
 					for _, img := range imgList {
 						if url, ok := img.(string); ok {
-							_, err := conn.Exec(ctx,
-								`INSERT INTO product_image (item_id, image_url) VALUES ($1, $2)
-							 ON CONFLICT (item_id, image_url) DO NOTHING;`,
-								itemID, url)
+							_, err := conn.Exec(ctx, `
+							INSERT INTO product_image (item_id, image_url)
+							VALUES ($1, $2)
+							ON CONFLICT DO NOTHING;
+						`, itemID, url)
 							if err != nil {
-								fmt.Printf("⚠️ Gagal insert image: %v\n", err)
+								fmt.Printf("❌ Gagal insert gambar: %v\n", err)
+							} else {
+								fmt.Printf("✅ Gambar disimpan: %s\n", url)
 							}
 						}
 					}
 				}
 			}
 
-			// === Simpan atribut produk (product_attribute) ===
-			if attrList, ok := bimap["attribute_list"].([]interface{}); ok {
-				for _, a := range attrList {
+			// === PRODUCT_ATTRIBUTE (ATRIBUT) ===
+			if attrs, ok := bimap["attribute_list"].([]interface{}); ok {
+				fmt.Printf("🟢 [ATTR] Jumlah atribut: %d\n", len(attrs))
+				for _, a := range attrs {
 					if amap, ok := a.(map[string]interface{}); ok {
 						name, _ := amap["attribute_name"].(string)
 						value, _ := amap["attribute_value"].(string)
-						if name != "" && value != "" {
-							_, err := conn.Exec(ctx,
-								`INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
-							 VALUES ($1, $2, $3)
-							 ON CONFLICT (item_id, attribute_name) DO UPDATE
-							 SET attribute_value = EXCLUDED.attribute_value;`,
-								itemID, name, value)
-							if err != nil {
-								fmt.Printf("⚠️ Gagal insert attribute: %v\n", err)
-							}
+						if name == "" && value == "" {
+							continue
+						}
+						_, err := conn.Exec(ctx, `
+						INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+						VALUES ($1, $2, $3)
+						ON CONFLICT DO NOTHING;
+					`, itemID, name, value)
+						if err != nil {
+							fmt.Printf("❌ Gagal insert atribut: %v\n", err)
+						} else {
+							fmt.Printf("✅ Atribut disimpan: %s = %s\n", name, value)
 						}
 					}
 				}
 			}
 
-			fmt.Printf("✅ Produk #%d [%s] disimpan\n", idx+1, itemName)
+			fmt.Printf("✅ Produk #%d [%s] disimpan lengkap\n", idx+1, itemName)
 		}
 	}
 
