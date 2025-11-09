@@ -473,21 +473,107 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(out)
 
-	// Ambil item_list dari baseInfo
+	fmt.Println("📦 URL Get Item List:", url)
+	fmt.Println("🧾 URL Get Item Base Info:", url2)
+// ===== Helper Functions =====
+// ===== Helper Functions =====
+func tryGet(m map[string]interface{}, keys ...string) interface{} {
+	current := m
+	for i, k := range keys {
+		v, ok := current[k]
+		if !ok {
+			return nil
+		}
+		if i == len(keys)-1 {
+			return v
+		}
+		next, ok := v.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		current = next
+	}
+	return nil
+}
+
+func tryGetString(m map[string]interface{}, keys ...string) string {
+	v := tryGet(m, keys...)
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		return fmt.Sprintf("%.0f", val)
+	case int64:
+		return fmt.Sprintf("%d", val)
+	default:
+		return ""
+	}
+}
+
+func tryGetInt64(m map[string]interface{}, keys ...string) int64 {
+	v := tryGet(m, keys...)
+	switch val := v.(type) {
+	case float64:
+		return int64(val)
+	case int64:
+		return val
+	case string:
+		i, err := strconv.ParseInt(val, 10, 64)
+		if err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
+func tryGetFloat64(m map[string]interface{}, keys ...string) float64 {
+	v := tryGet(m, keys...)
+	switch val := v.(type) {
+	case float64:
+		return val
+	case int64:
+		return float64(val)
+	case string:
+		f, err := strconv.ParseFloat(val, 64)
+		if err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+func tryGetSlice(m map[string]interface{}, keys ...string) ([]interface{}, bool) {
+	v := tryGet(m, keys...)
+	if arr, ok := v.([]interface{}); ok {
+		return arr, true
+	}
+	return nil, false
+}
+
+func tryGetMap(m map[string]interface{}, keys ...string) (map[string]interface{}, bool) {
+	v := tryGet(m, keys...)
+	if mm, ok := v.(map[string]interface{}); ok {
+		return mm, true
+	}
+	return nil, false
+}
+
+// ====== Main Logic ======
+func ProcessItems(ctx context.Context, db *pgx.Conn, baseInfo map[string]interface{}, host string, client *http.Client) error {
 	var baseItems []interface{}
+
 	if b, ok := tryGetMap(baseInfo, "response", "item_list"); ok {
-		if arr, ok := b.([]interface{}); ok {
+		if arr, ok := b["item_list"].([]interface{}); ok {
 			baseItems = arr
 		}
 	}
-	// fallback: kadang bernama "item_list" di root response differently
+
 	if baseItems == nil {
 		if v, ok := baseInfo["item_list"].([]interface{}); ok {
 			baseItems = v
 		}
 	}
 
-	// Loop tiap item
 	for _, itemRaw := range baseItems {
 		item, ok := itemRaw.(map[string]interface{})
 		if !ok {
@@ -512,37 +598,35 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		createTime := tryGetInt64(item, "ctime")
 		updateTime := tryGetInt64(item, "update_time")
 
-		// is_active: aktif kalau status = "NORMAL" atau "LIVE"
 		isActive := (status == "NORMAL" || status == "LIVE")
 
-		// === Insert ke tabel product ===
-		_, err = db.ExecContext(ctx, `
-		INSERT INTO product (
-			item_id, shop_id, name, description, category_id,
-			price_min, price_max, price_before_discount, currency,
-			stock, sold, liked_count, rating, historical_sold,
-			status, create_time, update_time, is_active
-		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,
-			$10,$11,$12,$13,$14,
-			$15,$16,$17,$18
-		)
-		ON CONFLICT (item_id) DO UPDATE SET
-			name = EXCLUDED.name,
-			description = EXCLUDED.description,
-			price_min = EXCLUDED.price_min,
-			price_max = EXCLUDED.price_max,
-			price_before_discount = EXCLUDED.price_before_discount,
-			currency = EXCLUDED.currency,
-			stock = EXCLUDED.stock,
-			sold = EXCLUDED.sold,
-			liked_count = EXCLUDED.liked_count,
-			rating = EXCLUDED.rating,
-			historical_sold = EXCLUDED.historical_sold,
-			status = EXCLUDED.status,
-			update_time = EXCLUDED.update_time,
-			is_active = EXCLUDED.is_active;
-	`, itemID, shopID, name, description, categoryID,
+		_, err := db.Exec(ctx, `
+			INSERT INTO product (
+				item_id, shop_id, name, description, category_id,
+				price_min, price_max, price_before_discount, currency,
+				stock, sold, liked_count, rating, historical_sold,
+				status, create_time, update_time, is_active
+			) VALUES (
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,
+				$10,$11,$12,$13,$14,
+				$15,$16,$17,$18
+			)
+			ON CONFLICT (item_id) DO UPDATE SET
+				name = EXCLUDED.name,
+				description = EXCLUDED.description,
+				price_min = EXCLUDED.price_min,
+				price_max = EXCLUDED.price_max,
+				price_before_discount = EXCLUDED.price_before_discount,
+				currency = EXCLUDED.currency,
+				stock = EXCLUDED.stock,
+				sold = EXCLUDED.sold,
+				liked_count = EXCLUDED.liked_count,
+				rating = EXCLUDED.rating,
+				historical_sold = EXCLUDED.historical_sold,
+				status = EXCLUDED.status,
+				update_time = EXCLUDED.update_time,
+				is_active = EXCLUDED.is_active;
+		`, itemID, shopID, name, description, categoryID,
 			priceMin, priceMax, priceBeforeDiscount, currency,
 			stock, sold, likedCount, rating, historicalSold,
 			status, createTime, updateTime, isActive)
@@ -551,25 +635,25 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// === Insert ke tabel product_image ===
+		// product_image
 		if images, ok := tryGetSlice(item, "images"); ok {
 			for _, img := range images {
 				imageURL := fmt.Sprintf("%v", img)
 				if imageURL == "" {
 					continue
 				}
-				_, err = db.ExecContext(ctx, `
-				INSERT INTO product_image (item_id, image_url)
-				VALUES ($1, $2)
-				ON CONFLICT (item_id, image_url) DO NOTHING;
-			`, itemID, imageURL)
+				_, err = db.Exec(ctx, `
+					INSERT INTO product_image (item_id, image_url)
+					VALUES ($1, $2)
+					ON CONFLICT (item_id, image_url) DO NOTHING;
+				`, itemID, imageURL)
 				if err != nil {
 					fmt.Println("⚠️ Gagal insert product_image:", err)
 				}
 			}
 		}
 
-		// === Insert ke tabel product_attribute ===
+		// product_attribute
 		if attrs, ok := tryGetSlice(item, "attributes"); ok {
 			for _, attrRaw := range attrs {
 				attr, _ := attrRaw.(map[string]interface{})
@@ -578,19 +662,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				if attrName == "" {
 					continue
 				}
-				_, err = db.ExecContext(ctx, `
-				INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
-				VALUES ($1, $2, $3)
-				ON CONFLICT (item_id, attribute_name) DO UPDATE
-				SET attribute_value = EXCLUDED.attribute_value;
-			`, itemID, attrName, attrValue)
+				_, err = db.Exec(ctx, `
+					INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (item_id, attribute_name) DO UPDATE
+					SET attribute_value = EXCLUDED.attribute_value;
+				`, itemID, attrName, attrValue)
 				if err != nil {
 					fmt.Println("⚠️ Gagal insert product_attribute:", err)
 				}
 			}
 		}
 
-		// === Ambil model list ===
+		// model list
 		modelsURL := fmt.Sprintf("%s/api/v2/product/get_model_list?item_id=%d&shop_id=%d", host, itemID, shopID)
 		reqModel, _ := http.NewRequest("GET", modelsURL, nil)
 		reqModel.Header.Set("Content-Type", "application/json")
@@ -616,17 +700,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				modelStatus := tryGetString(model, "status")
 				modelSKU := tryGetString(model, "model_sku")
 
-				_, err = db.ExecContext(ctx, `
-				INSERT INTO product_model (model_id, item_id, name, price, stock, sold, sku, status)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-				ON CONFLICT (model_id) DO UPDATE SET
-					name = EXCLUDED.name,
-					price = EXCLUDED.price,
-					stock = EXCLUDED.stock,
-					sold = EXCLUDED.sold,
-					sku = EXCLUDED.sku,
-					status = EXCLUDED.status;
-			`, modelID, itemID, modelName, modelPrice, modelStock, modelSold, modelSKU, modelStatus)
+				_, err = db.Exec(ctx, `
+					INSERT INTO product_model (model_id, item_id, name, price, stock, sold, sku, status)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+					ON CONFLICT (model_id) DO UPDATE SET
+						name = EXCLUDED.name,
+						price = EXCLUDED.price,
+						stock = EXCLUDED.stock,
+						sold = EXCLUDED.sold,
+						sku = EXCLUDED.sku,
+						status = EXCLUDED.status;
+				`, modelID, itemID, modelName, modelPrice, modelStock, modelSold, modelSKU, modelStatus)
 				if err != nil {
 					fmt.Println("⚠️ Gagal insert product_model:", err)
 				}
@@ -635,8 +719,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println("✅ Semua produk berhasil diproses dan dimasukkan ke database.")
-
-	fmt.Println("📦 URL Get Item List:", url)
-	fmt.Println("🧾 URL Get Item Base Info:", url2)
-
+	return nil
+}
 }
