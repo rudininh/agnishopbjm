@@ -477,69 +477,152 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
 	// ===== Helper Functions =====
 
-	// === Simpan ke database ===
-	_, err = conn.Exec(ctx, `
-  INSERT INTO product (
-    item_id, shop_id, name, category_id, price_min, price_max,
-    currency, stock, sold, status, create_time, update_time, is_active
-  ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, NOW(), NOW(), TRUE
-  )
-  ON CONFLICT (item_id) DO UPDATE
-  SET name = EXCLUDED.name,
-      price_min = EXCLUDED.price_min,
-      price_max = EXCLUDED.price_max,
-      stock = EXCLUDED.stock,
-      update_time = NOW();
-`,
-		itemID, token.ShopID, itemName, nil, priceInt, priceInt,
-		"IDR", stockInt, 0, "NORMAL",
-	)
-	if err != nil {
-		fmt.Printf("❌ Gagal insert ke product: %v\n", err)
-		continue
-	}
-
-	// === Simpan varian ke tabel product_model ===
-	for _, model := range variants {
-		_, err := conn.Exec(ctx, `
-    INSERT INTO product_model (item_id, name, price, stock, sku, status)
-    VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
-    ON CONFLICT (model_id) DO NOTHING;
-  `,
-			itemID,
-			model["name"],
-			model["price"],
-			model["stock"],
-			model["model_sku"],
+	for idx, bi := range baseItems {
+		var (
+			itemName, description, currency, status string
+			itemID, categoryID, priceMin, priceMax, priceBeforeDiscount,
+			stock, sold, likedCount, historicalSold int64
+			rating float64
 		)
-		if err != nil {
-			fmt.Printf("⚠️ Gagal insert model: %v\n", err)
-		}
-	}
 
-	// Simpan gambar
-	if imgs, ok := bimap["image"].(map[string]interface{}); ok {
-		if imgList, ok := imgs["image_url_list"].([]interface{}); ok {
-			for _, iurl := range imgList {
-				if s, ok := iurl.(string); ok {
-					conn.Exec(ctx, `INSERT INTO product_image (item_id, image_url) VALUES ($1, $2)`, itemID, s)
+		if bimap, ok := bi.(map[string]interface{}); ok {
+			itemName, _ = bimap["item_name"].(string)
+			description, _ = bimap["description"].(string)
+			currency, _ = bimap["currency"].(string)
+			status, _ = bimap["item_status"].(string)
+
+			if v, ok := parseNumber(bimap["item_id"]); ok {
+				itemID = v
+			}
+			if v, ok := parseNumber(bimap["category_id"]); ok {
+				categoryID = v
+			}
+			if v, ok := parseNumber(bimap["price_min"]); ok {
+				priceMin = rupiahFromMicros(v)
+			}
+			if v, ok := parseNumber(bimap["price_max"]); ok {
+				priceMax = rupiahFromMicros(v)
+			}
+			if v, ok := parseNumber(bimap["price_before_discount"]); ok {
+				priceBeforeDiscount = rupiahFromMicros(v)
+			}
+			if v, ok := parseNumber(bimap["stock"]); ok {
+				stock = v
+			}
+			if v, ok := parseNumber(bimap["sold"]); ok {
+				sold = v
+			}
+			if v, ok := parseNumber(bimap["liked_count"]); ok {
+				likedCount = v
+			}
+			if v, ok := parseNumber(bimap["historical_sold"]); ok {
+				historicalSold = v
+			}
+			if v, ok := bimap["rating_star"].(float64); ok {
+				rating = v
+			}
+
+			// === Insert ke tabel product ===
+			_, err := conn.Exec(ctx, `
+			INSERT INTO product (
+				item_id, shop_id, name, description, category_id,
+				price_min, price_max, price_before_discount,
+				currency, stock, sold, liked_count, rating,
+				historical_sold, status, create_time, update_time, is_active
+			)
+			VALUES (
+				$1,$2,$3,$4,$5,
+				$6,$7,$8,
+				$9,$10,$11,$12,$13,
+				$14,$15,NOW(),NOW(),TRUE
+			)
+			ON CONFLICT (item_id) DO UPDATE
+			SET
+				name=$3,
+				description=$4,
+				category_id=$5,
+				price_min=$6,
+				price_max=$7,
+				price_before_discount=$8,
+				currency=$9,
+				stock=$10,
+				sold=$11,
+				liked_count=$12,
+				rating=$13,
+				historical_sold=$14,
+				status=$15,
+				update_time=NOW();
+		`,
+				itemID, token.ShopID, itemName, description, categoryID,
+				priceMin, priceMax, priceBeforeDiscount,
+				currency, stock, sold, likedCount, rating,
+				historicalSold, status,
+			)
+			if err != nil {
+				fmt.Printf("❌ Gagal insert ke product %d: %v\n", itemID, err)
+				continue
+			}
+
+			// === Simpan varian produk (product_model) ===
+			if models, ok := modelLookup[itemID]; ok {
+				for _, m := range models {
+					_, err := conn.Exec(ctx, `
+					INSERT INTO product_model (item_id, name, price, stock, sku, status)
+					VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+					ON CONFLICT (item_id, sku) DO UPDATE
+					SET price = EXCLUDED.price, stock = EXCLUDED.stock, status = 'ACTIVE';
+				`,
+						itemID,
+						m["name"],
+						m["price"],
+						m["stock"],
+						m["model_sku"],
+					)
+					if err != nil {
+						fmt.Printf("⚠️ Gagal insert model: %v\n", err)
+					}
 				}
 			}
-		}
-	}
 
-	// Simpan atribut
-	if attrs, ok := bimap["attribute_list"].([]interface{}); ok {
-		for _, a := range attrs {
-			if amap, ok := a.(map[string]interface{}); ok {
-				name, _ := amap["attribute_name"].(string)
-				val, _ := amap["attribute_value"].(string)
-				conn.Exec(ctx, `
-        INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
-        VALUES ($1, $2, $3)`, itemID, name, val)
+			// === Simpan gambar produk (product_image) ===
+			if imgInfo, ok := bimap["image"].(map[string]interface{}); ok {
+				if imgList, ok := imgInfo["image_url_list"].([]interface{}); ok {
+					for _, img := range imgList {
+						if url, ok := img.(string); ok {
+							_, err := conn.Exec(ctx,
+								`INSERT INTO product_image (item_id, image_url) VALUES ($1, $2)
+							 ON CONFLICT (item_id, image_url) DO NOTHING;`,
+								itemID, url)
+							if err != nil {
+								fmt.Printf("⚠️ Gagal insert image: %v\n", err)
+							}
+						}
+					}
+				}
 			}
+
+			// === Simpan atribut produk (product_attribute) ===
+			if attrList, ok := bimap["attribute_list"].([]interface{}); ok {
+				for _, a := range attrList {
+					if amap, ok := a.(map[string]interface{}); ok {
+						name, _ := amap["attribute_name"].(string)
+						value, _ := amap["attribute_value"].(string)
+						if name != "" && value != "" {
+							_, err := conn.Exec(ctx,
+								`INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+							 VALUES ($1, $2, $3)
+							 ON CONFLICT (item_id, attribute_name) DO UPDATE
+							 SET attribute_value = EXCLUDED.attribute_value;`,
+								itemID, name, value)
+							if err != nil {
+								fmt.Printf("⚠️ Gagal insert attribute: %v\n", err)
+							}
+						}
+					}
+				}
+			}
+
+			fmt.Printf("✅ Produk #%d [%s] disimpan\n", idx+1, itemName)
 		}
 	}
 
