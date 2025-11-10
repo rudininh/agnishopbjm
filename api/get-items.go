@@ -652,20 +652,42 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				fmt.Printf("🟢 [ATTR] Jumlah atribut: %d\n", len(attrs))
 				for _, a := range attrs {
 					if amap, ok := a.(map[string]interface{}); ok {
-						name, _ := amap["attribute_name"].(string)
-						value, _ := amap["attribute_value"].(string)
-						if name == "" && value == "" {
-							continue
+						// Tangani nama atribut
+						name := ""
+						if v, ok := amap["attribute_name"].(string); ok {
+							name = v
+						} else if v, ok := amap["original_attribute_name"].(string); ok {
+							name = v
 						}
-						_, err := conn.Exec(ctx, `
-						INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
-						VALUES ($1, $2, $3)
-						ON CONFLICT DO NOTHING;
-					`, itemID, name, value)
-						if err != nil {
-							fmt.Printf("❌ Gagal insert atribut: %v\n", err)
-						} else {
-							fmt.Printf("✅ Atribut disimpan: %s = %s\n", name, value)
+
+						// Tangani nilai atribut (bisa langsung atau dalam array)
+						value := ""
+						if v, ok := amap["attribute_value"].(string); ok && v != "" {
+							value = v
+						} else if list, ok := amap["attribute_value_list"].([]interface{}); ok && len(list) > 0 {
+							// Ambil semua original_value_name lalu gabungkan jadi satu string
+							var vals []string
+							for _, lv := range list {
+								if m, ok := lv.(map[string]interface{}); ok {
+									if vv, ok := m["original_value_name"].(string); ok {
+										vals = append(vals, vv)
+									}
+								}
+							}
+							value = strings.Join(vals, ", ")
+						}
+
+						if name != "" && value != "" {
+							_, err := conn.Exec(ctx, `
+					INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+					VALUES ($1, $2, $3)
+					ON CONFLICT DO NOTHING;
+				`, itemID, name, value)
+							if err != nil {
+								fmt.Printf("❌ Gagal insert atribut: %v\n", err)
+							} else {
+								fmt.Printf("✅ Atribut disimpan: %s = %s\n", name, value)
+							}
 						}
 					}
 				}
