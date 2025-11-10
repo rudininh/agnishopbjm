@@ -633,9 +633,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					for _, img := range imgList {
 						if url, ok := img.(string); ok {
 							_, err := conn.Exec(ctx, `
-							INSERT INTO product_image (item_id, image_url)
+							 INSERT INTO product_image (item_id, image_url)
 							VALUES ($1, $2)
-							ON CONFLICT DO NOTHING;
+							ON CONFLICT (item_id, image_url) DO NOTHING;
 						`, itemID, url)
 							if err != nil {
 								fmt.Printf("❌ Gagal insert gambar: %v\n", err)
@@ -679,9 +679,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 						if name != "" && value != "" {
 							_, err := conn.Exec(ctx, `
-					INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
-					VALUES ($1, $2, $3)
-					ON CONFLICT DO NOTHING;
+				 INSERT INTO product_attribute (item_id, attribute_name, attribute_value)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (item_id, attribute_name, attribute_value) DO NOTHING;
 				`, itemID, name, value)
 							if err != nil {
 								fmt.Printf("❌ Gagal insert atribut: %v\n", err)
