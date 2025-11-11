@@ -46,6 +46,18 @@
   </div>
 
   <script>
+    // Fungsi untuk load komponen HTML eksternal
+    async function loadComponent(id, file) {
+      const res = await fetch(file);
+      const html = await res.text();
+      document.getElementById(id).innerHTML = html;
+    }
+
+    // Load sidebar, header, footer
+    loadComponent('sidebar', './component/sidebar.html');
+    loadComponent('header', './component/header.html');
+    loadComponent('footer', './component/footer.html');
+
     function generateShopeeAuthURL() {
       const partnerId = 2013107;
       const partnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465";
@@ -83,21 +95,6 @@
       });
     });
 
-
-    // Fungsi untuk load komponen HTML eksternal
-    async function loadComponent(id, file) {
-      const res = await fetch(file);
-      const html = await res.text();
-      document.getElementById(id).innerHTML = html;
-    }
-
-    // Load sidebar, header, footer
-    loadComponent('sidebar', './component/sidebar.html');
-    loadComponent('header', './component/header.html');
-    loadComponent('footer', './component/footer.html');
-
-
-
     // AUTH TIKTOK
     document.getElementById('authTiktok').addEventListener('click', () => {
       window.location.href = '/api/auth/tiktok'; // redirect ke endpoint auth TikTok
@@ -109,7 +106,7 @@
       btn.innerText = 'Mengambil token...';
       btn.disabled = true;
       try {
-        const res = await fetch('/api/get-token');
+        const res = await fetch('/api/get-token-shopee');
         const data = await res.json();
         alert('✅ Token Shopee:\n' + JSON.stringify(data, null, 2));
       } catch (err) {
@@ -134,8 +131,13 @@
       btn.innerText = 'GET TOKEN TIKTOK';
       btn.disabled = false;
     });
-    });
   </script>
+
+
+
+
+
+</body>
 </body>
 
 </html>
