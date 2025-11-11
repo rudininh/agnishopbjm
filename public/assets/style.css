@@ -132,6 +132,16 @@ body {
 }
 
 /* === SHOPEE BUTTON === */
+
+.btn-row {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+
 .btn-shopee {
   margin-top: 30px;
   background-color: #ff5722;
@@ -142,6 +152,23 @@ body {
   border-radius: 10px;
   cursor: pointer;
   transition: background 0.3s, transform 0.2s;
+}
+
+.btn-tiktok {
+  margin-top: 30px;
+  background-color: #050505;
+  color: white;
+  border: none;
+  padding: 15px 30px;
+  font-size: 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.btn-tiktok:hover {
+  background-color: #423937;
+  transform: translateY(-2px);
 }
 
 .btn-shopee:hover {
