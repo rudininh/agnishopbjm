@@ -106,7 +106,7 @@
       btn.innerText = 'Mengambil token...';
       btn.disabled = true;
       try {
-        const res = await fetch('/api/get-token-shopee');
+        const res = await fetch('/api/get-token');
         const data = await res.json();
         alert('✅ Token Shopee:\n' + JSON.stringify(data, null, 2));
       } catch (err) {
