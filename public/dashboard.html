@@ -82,12 +82,6 @@
         window.open(url, "_blank"); // buka di tab baru
       });
     });
-  </script>
-
-
-  <script>
-
-
 
 
     // Fungsi untuk load komponen HTML eksternal
@@ -102,48 +96,44 @@
     loadComponent('header', './component/header.html');
     loadComponent('footer', './component/footer.html');
 
-    document.addEventListener('DOMContentLoaded', () => {
-      // AUTH SHOPEE
-      document.getElementById('authShopee').addEventListener('click', () => {
-        window.location.href = '/api/auth/shopee'; // redirect ke endpoint auth Shopee
-      });
 
-      // AUTH TIKTOK
-      document.getElementById('authTiktok').addEventListener('click', () => {
-        window.location.href = '/api/auth/tiktok'; // redirect ke endpoint auth TikTok
-      });
 
-      // GET TOKEN SHOPEE
-      document.getElementById('btnShopee').addEventListener('click', async () => {
-        const btn = document.getElementById('btnShopee');
-        btn.innerText = 'Mengambil token...';
-        btn.disabled = true;
-        try {
-          const res = await fetch('/api/get-token');
-          const data = await res.json();
-          alert('✅ Token Shopee:\n' + JSON.stringify(data, null, 2));
-        } catch (err) {
-          alert('❌ Gagal: ' + err.message);
-        }
-        btn.innerText = 'GET TOKEN SHOPEE';
-        btn.disabled = false;
-      });
+    // AUTH TIKTOK
+    document.getElementById('authTiktok').addEventListener('click', () => {
+      window.location.href = '/api/auth/tiktok'; // redirect ke endpoint auth TikTok
+    });
 
-      // GET TOKEN TIKTOK
-      document.getElementById('btnTiktok').addEventListener('click', async () => {
-        const btn = document.getElementById('btnTiktok');
-        btn.innerText = 'Mengambil token...';
-        btn.disabled = true;
-        try {
-          const res = await fetch('/api/get-token-tiktok');
-          const data = await res.json();
-          alert('✅ Token TikTok:\n' + JSON.stringify(data, null, 2));
-        } catch (err) {
-          alert('❌ Gagal: ' + err.message);
-        }
-        btn.innerText = 'GET TOKEN TIKTOK';
-        btn.disabled = false;
-      });
+    // GET TOKEN SHOPEE
+    document.getElementById('btnShopee').addEventListener('click', async () => {
+      const btn = document.getElementById('btnShopee');
+      btn.innerText = 'Mengambil token...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/get-token');
+        const data = await res.json();
+        alert('✅ Token Shopee:\n' + JSON.stringify(data, null, 2));
+      } catch (err) {
+        alert('❌ Gagal: ' + err.message);
+      }
+      btn.innerText = 'GET TOKEN SHOPEE';
+      btn.disabled = false;
+    });
+
+    // GET TOKEN TIKTOK
+    document.getElementById('btnTiktok').addEventListener('click', async () => {
+      const btn = document.getElementById('btnTiktok');
+      btn.innerText = 'Mengambil token...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/get-token-tiktok');
+        const data = await res.json();
+        alert('✅ Token TikTok:\n' + JSON.stringify(data, null, 2));
+      } catch (err) {
+        alert('❌ Gagal: ' + err.message);
+      }
+      btn.innerText = 'GET TOKEN TIKTOK';
+      btn.disabled = false;
+    });
     });
   </script>
 </body>

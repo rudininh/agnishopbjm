@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     await client.end();
 
     // ✅ Redirect ke homepage (bukan JSON)
-    return res.redirect(302, "https://agnishopbjm.vercel.app/");
+    return res.redirect(302, "https://agnishopbjm.vercel.app/dashboard.html");
   } catch (err) {
     console.error("❌ Error:", err.message);
     return res.status(500).json({ error: err.message });
