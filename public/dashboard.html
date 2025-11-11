@@ -46,6 +46,48 @@
   </div>
 
   <script>
+    function generateShopeeAuthURL() {
+      const partnerId = 2013107;
+      const partnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465";
+      const host = "https://partner.shopeemobile.com";
+      const redirect = encodeURIComponent("https://agnishopbjm.vercel.app/api/callback");
+      const path = "/api/v2/shop/auth_partner";
+
+      // HMAC-SHA256 di browser pakai SubtleCrypto
+      const timestamp = Math.floor(Date.now() / 1000);
+      const baseString = `${partnerId}${path}${timestamp}`;
+
+      return crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(partnerKey),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      )
+        .then(key =>
+          crypto.subtle.sign("HMAC", key, new TextEncoder().encode(baseString))
+        )
+        .then(sigBuf => {
+          const signHex = Array.from(new Uint8Array(sigBuf))
+            .map(b => b.toString(16).padStart(2, "0"))
+            .join("");
+          return `${host}${path}?partner_id=${partnerId}&timestamp=${timestamp}&sign=${signHex}&redirect=${redirect}`;
+        });
+    }
+
+    // Event tombol AUTH SHOPEE
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("btnAuthShopee").addEventListener("click", async () => {
+        const url = await generateShopeeAuthURL();
+        window.open(url, "_blank"); // buka di tab baru
+      });
+    });
+  </script>
+
+
+  <script>
+
+
 
 
     // Fungsi untuk load komponen HTML eksternal
