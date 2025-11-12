@@ -2,7 +2,8 @@ import { Client } from "pg";
 
 export default async function handler(req, res) {
     try {
-        const { code, app_key, shop_region, state } = req.body || {};
+        // TikTok kirim data lewat query string, bukan body
+        const { code, app_key, shop_region, state } = req.query;
 
         if (!code) {
             return res.status(400).json({ error: "Missing code" });
@@ -32,7 +33,8 @@ export default async function handler(req, res) {
 
         await client.end();
 
-        return res.status(200).json({ success: true });
+        // ✅ Redirect ke dashboard setelah sukses
+        return res.redirect(302, "https://agnishopbjm.vercel.app/dashboard.html");
     } catch (err) {
         console.error("❌ Error TikTok Callback:", err.message);
         return res.status(500).json({ error: err.message });
