@@ -52,7 +52,6 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: "Missing code" });
         }
 
-        // 1️⃣ Tukar code jadi access_token langsung ke TikTok
         const tokenResponse = await fetch("https://auth.tiktok-shops.com/api/v2/token/get", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -64,7 +63,20 @@ export default async function handler(req, res) {
             }),
         });
 
-        const tokenData = await tokenResponse.json();
+        // 🧠 ambil teks mentah dulu biar tahu apa isi respons TikTok
+        const rawText = await tokenResponse.text();
+        console.log("🧾 Raw TikTok Response:", rawText);
+
+        let tokenData;
+        try {
+            tokenData = JSON.parse(rawText);
+        } catch (err) {
+            return res.status(500).json({
+                error: "Failed to parse TikTok response",
+                raw: rawText.substring(0, 300), // tampilkan cuplikan isi respon
+            });
+        }
+
         console.log("✅ Token TikTok:", tokenData);
 
         if (!tokenData.data || !tokenData.data.access_token) {
