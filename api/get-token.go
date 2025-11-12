@@ -1,4 +1,4 @@
-package handler
+package main
 
 import (
 	"bytes"
@@ -29,7 +29,7 @@ func generateSign(baseString, key string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func Handler(w http.ResponseWriter, r *http.Request) {
+func ShopeeGetTokenHandler(w http.ResponseWriter, r *http.Request) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		http.Error(w, "DATABASE_URL not set", http.StatusInternalServerError)

@@ -1,4 +1,4 @@
-package handler
+package main
 
 import (
 	"context"
@@ -150,7 +150,7 @@ func tryGetMap(m map[string]interface{}, keys ...string) (interface{}, bool) {
 }
 
 // ===== Handler utama =====
-func Handler(w http.ResponseWriter, r *http.Request) {
+func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	ctx := context.Background()
