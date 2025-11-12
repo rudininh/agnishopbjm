@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,29 +8,33 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"time"
 
 	_ "github.com/lib/pq"
 )
 
-// TikTok credentials
 const (
-	ClientKey    = "your_client_key"
-	ClientSecret = "your_client_secret"
-	TokenURL     = "https://open-api.tiktok.com/oauth/access_token/"
+	TikTokTokenURL = "https://auth.tiktok-shops.com/api/v2/token/get"
+	AppKey         = "6i1cagd9f0p83"
+	AppSecret      = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
 )
 
-type TikTokTokenResponse struct {
-	Data struct {
-		AccessToken  string `json:"access_token"`
-		ExpiresIn    int    `json:"expires_in"`
-		OpenID       string `json:"open_id"`
-		RefreshToken string `json:"refresh_token"`
-		Scope        string `json:"scope"`
-	} `json:"data"`
+type TikTokResponse struct {
+	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    struct {
+		AccessToken          string   `json:"access_token"`
+		AccessTokenExpireIn  int64    `json:"access_token_expire_in"`
+		RefreshToken         string   `json:"refresh_token"`
+		RefreshTokenExpireIn int64    `json:"refresh_token_expire_in"`
+		OpenID               string   `json:"open_id"`
+		SellerName           string   `json:"seller_name"`
+		SellerBaseRegion     string   `json:"seller_base_region"`
+		GrantedScopes        []string `json:"granted_scopes"`
+	} `json:"data"`
+	RequestID string `json:"request_id"`
 }
 
+// Handler untuk ambil token TikTok
 func TikTokGetTokenHandler(w http.ResponseWriter, r *http.Request) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -41,71 +44,73 @@ func TikTokGetTokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		http.Error(w, "Database connection failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed connect DB: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer db.Close()
 
-	// Ambil code terakhir dari callback TikTok
+	// Ambil kode terbaru dari tabel callback
 	var code string
-	err = db.QueryRowContext(context.Background(),
-		`SELECT code FROM tiktok_callbacks ORDER BY id DESC LIMIT 1`,
-	).Scan(&code)
+	err = db.QueryRowContext(context.Background(), `
+		SELECT code FROM tiktok_callbacks ORDER BY id DESC LIMIT 1
+	`).Scan(&code)
 	if err != nil {
-		http.Error(w, "Failed to get last code: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "No auth code found: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	redirectURI := "https://yourdomain.com/callback" // harus sama dengan yang didaftarkan di TikTok Developer
+	// Buat URL
+	url := fmt.Sprintf("%s?app_key=%s&app_secret=%s&auth_code=%s&grant_type=authorized_code",
+		TikTokTokenURL, AppKey, AppSecret, code)
 
-	body := map[string]interface{}{
-		"client_key":    ClientKey,
-		"client_secret": ClientSecret,
-		"code":          code,
-		"grant_type":    "authorization_code",
-		"redirect_uri":  redirectURI,
-	}
-	jsonBody, _ := json.Marshal(body)
-
-	req, _ := http.NewRequest("POST", TokenURL, bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	// Kirim permintaan ke TikTok
+	resp, err := http.Get(url)
 	if err != nil {
-		http.Error(w, "Request failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
-	responseBody, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 
-	var tokenResp TikTokTokenResponse
-	if err := json.Unmarshal(responseBody, &tokenResp); err != nil {
-		http.Error(w, "Failed to parse TikTok response: "+err.Error(), http.StatusInternalServerError)
+	// Parse JSON TikTok response
+	var data TikTokResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Failed to parse TikTok response","raw":%q}`, string(body)), http.StatusInternalServerError)
 		return
 	}
 
-	if tokenResp.Data.AccessToken != "" {
-		_, err = db.ExecContext(context.Background(),
-			`INSERT INTO tiktok_tokens (open_id, access_token, refresh_token, expires_in, scope)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			tokenResp.Data.OpenID,
-			tokenResp.Data.AccessToken,
-			tokenResp.Data.RefreshToken,
-			tokenResp.Data.ExpiresIn,
-			tokenResp.Data.Scope,
-		)
+	// Jika sukses (code = 0)
+	if data.Code == 0 && data.Data.AccessToken != "" {
+		_, err = db.ExecContext(context.Background(), `
+			CREATE TABLE IF NOT EXISTS tiktok_tokens (
+				id SERIAL PRIMARY KEY,
+				open_id TEXT,
+				seller_name TEXT,
+				seller_region TEXT,
+				access_token TEXT,
+				refresh_token TEXT,
+				expire_at TIMESTAMP,
+				created_at TIMESTAMP DEFAULT NOW()
+			)
+		`)
 		if err != nil {
-			fmt.Println("❌ Failed to insert token:", err)
-		} else {
-			fmt.Println("✅ Token inserted successfully for open_id:", tokenResp.Data.OpenID)
+			fmt.Println("⚠️ DB create error:", err)
 		}
+
+		// Simpan token
+		_, err = db.ExecContext(context.Background(), `
+			INSERT INTO tiktok_tokens (open_id, seller_name, seller_region, access_token, refresh_token, expire_at)
+			VALUES ($1, $2, $3, $4, $5, to_timestamp($6))
+		`, data.Data.OpenID, data.Data.SellerName, data.Data.SellerBaseRegion,
+			data.Data.AccessToken, data.Data.RefreshToken, data.Data.AccessTokenExpireIn)
+		if err != nil {
+			fmt.Println("⚠️ DB insert error:", err)
+		}
+
+		fmt.Printf("✅ Token TikTok saved for %s (%s)\n", data.Data.SellerName, data.Data.OpenID)
 	}
 
-	fmt.Printf("✅ Code: %s\n📦 Body: %s\n🧾 Response: %s\n",
-		code, jsonBody, responseBody)
-
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(responseBody)
+	w.Write(body)
 }
