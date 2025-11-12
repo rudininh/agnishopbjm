@@ -58,29 +58,6 @@
     loadComponent('header', './component/header.html');
     loadComponent('footer', './component/footer.html');
 
-    // AUTH TIKKTOK
-      const APP_KEY = "6i1cagd9f0p83";
-    const REDIRECT_URI = "https://agnishopbjm.vercel.app/tiktok-auth.html";
-    const STATE = "agnishopbjm";
-
-    // 1️⃣ Tombol login diarahkan ke halaman TikTok authorize
-    document.getElementById("btnAuthTiktok").onclick = function () {
-      const authURL = `https://auth.tiktok-shops.com/openapi/v2/oauth/authorize?app_key=${APP_KEY}&state=${STATE}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
-      window.location.href = authURL;
-    };
-
-    // 2️⃣ Cek apakah URL mengandung kode callback (auth_code)
-    const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get("code");
-
-    if (code) {
-      document.getElementById("result").innerHTML = `
-        <h3>✅ Berhasil mendapatkan kode otorisasi</h3>
-        <div class="code-box">Auth Code: ${code}</div>
-        <p>Silakan kirim kode ini ke server backend untuk menukar access_token.</p>
-      `;
-    }
-
     function generateShopeeAuthURL() {
       const partnerId = 2013107;
       const partnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465";
