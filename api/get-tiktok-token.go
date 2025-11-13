@@ -63,7 +63,7 @@ func TikTokGetTokenHandler(w http.ResponseWriter, r *http.Request) {
 	url := fmt.Sprintf("%s?app_key=%s&app_secret=%s&auth_code=%s&grant_type=authorized_code",
 		TikTokTokenURL, AppKey, AppSecret, code)
 
-	// Kirim permintaan ke TikTok
+	// Kirim permintaan ke TikToks
 	resp, err := http.Get(url)
 	if err != nil {
 		http.Error(w, "Failed request: "+err.Error(), http.StatusInternalServerError)
