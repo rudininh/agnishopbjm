@@ -39,6 +39,12 @@
           <button id="btnShopee" class="btn-shopee">GET TOKEN SHOPEE</button>
           <button id="btnTiktok" class="btn-tiktok">GET TOKEN TIKTOK</button>
         </div>
+
+        <!-- Baris tombol Get Authorized Shop -->
+        <div class="btn-row">
+          <button id="btnTiktokShop" class="btn-tiktok">GET AUTH SHOP TIKTOK</button>
+        </div>
+
       </div>
     </div>
 
@@ -46,14 +52,12 @@
   </div>
 
   <script>
-    // Fungsi untuk load komponen HTML eksternal
     async function loadComponent(id, file) {
       const res = await fetch(file);
       const html = await res.text();
       document.getElementById(id).innerHTML = html;
     }
 
-    // Load sidebar, header, footer
     loadComponent('sidebar', './component/sidebar.html');
     loadComponent('header', './component/header.html');
     loadComponent('footer', './component/footer.html');
@@ -64,8 +68,6 @@
       const host = "https://partner.shopeemobile.com";
       const redirect = encodeURIComponent("https://agnishopbjm.vercel.app/api/callback");
       const path = "/api/v2/shop/auth_partner";
-
-      // HMAC-SHA256 di browser pakai SubtleCrypto
       const timestamp = Math.floor(Date.now() / 1000);
       const baseString = `${partnerId}${path}${timestamp}`;
 
@@ -87,11 +89,10 @@
         });
     }
 
-    // Event tombol AUTH SHOPEE
     document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("btnAuthShopee").addEventListener("click", async () => {
         const url = await generateShopeeAuthURL();
-        window.open(url, "_blank"); // buka di tab baru
+        window.open(url, "_blank");
       });
     });
 
@@ -99,31 +100,24 @@
     const REDIRECT_URI = "https://agnishopbjm.vercel.app/api/tiktok-callback";
     const STATE = "agnishopbjm";
 
-    // 1️⃣ Tombol login diarahkan ke halaman TikTok authorize
     document.getElementById("btnAuthTiktok").onclick = function () {
-      const authURL = `https://auth.tiktok-shops.com/openapi/v2/oauth/authorize?app_key=${APP_KEY}&state=${STATE}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
+      const authURL =
+        `https://auth.tiktok-shops.com/openapi/v2/oauth/authorize?app_key=${APP_KEY}&state=${STATE}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
       window.location.href = authURL;
     };
 
-    // 2️⃣ Cek apakah URL mengandung kode callback (auth_code)
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get("code");
-
     if (code) {
       document.getElementById("result").innerHTML = `
         <h3>✅ Berhasil mendapatkan kode otorisasi</h3>
         <div class="code-box">Auth Code: ${code}</div>
-        <p>Silakan kirim kode ini ke server backend untuk menukar access_token.</p>
       `;
     }
 
-
-
-    // GET TOKEN SHOPEE
     document.getElementById('btnShopee').addEventListener('click', async () => {
       const btn = document.getElementById('btnShopee');
-      btn.innerText = 'Mengambil token...';
-      btn.disabled = true;
+      btn.innerText = 'Mengambil token...'; btn.disabled = true;
       try {
         const res = await fetch('/api/get-token');
         const data = await res.json();
@@ -131,15 +125,12 @@
       } catch (err) {
         alert('❌ Gagal: ' + err.message);
       }
-      btn.innerText = 'GET TOKEN SHOPEE';
-      btn.disabled = false;
+      btn.innerText = 'GET TOKEN SHOPEE'; btn.disabled = false;
     });
 
-    // GET TOKEN TIKTOK
     document.getElementById('btnTiktok').addEventListener('click', async () => {
       const btn = document.getElementById('btnTiktok');
-      btn.innerText = 'Mengambil token...';
-      btn.disabled = true;
+      btn.innerText = 'Mengambil token...'; btn.disabled = true;
       try {
         const res = await fetch('/api/get-tiktok-token');
         const data = await res.json();
@@ -147,16 +138,29 @@
       } catch (err) {
         alert('❌ Gagal: ' + err.message);
       }
-      btn.innerText = 'GET TOKEN TIKTOK';
+      btn.innerText = 'GET TOKEN TIKTOK'; btn.disabled = false;
+    });
+
+    // 🔥 Tombol GET AUTH SHOP TIKTOK
+    document.getElementById('btnTiktokShop').addEventListener('click', async () => {
+      const btn = document.getElementById('btnTiktokShop');
+      btn.innerText = 'Mengambil data shop...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/get-tiktok-shops');
+        const data = await res.json();
+        alert('✅ Daftar Shop TikTok:\n' + JSON.stringify(data, null, 2));
+      } catch (err) {
+        alert('❌ Gagal: ' + err.message);
+      }
+
+      btn.innerText = 'GET AUTH SHOP TIKTOK';
       btn.disabled = false;
     });
+
   </script>
 
-
-
-
-
-</body>
 </body>
 
 </html>
