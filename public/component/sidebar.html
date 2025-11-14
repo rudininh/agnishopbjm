@@ -23,30 +23,43 @@
     #sidebar a:hover {
         text-decoration: underline;
     }
+
+    .sidebar-logo img {
+        width: 60px;
+        margin-bottom: 10px;
+    }
+
+    .sidebar-menu {
+        list-style: none;
+        padding: 0;
+        margin-top: 20px;
+    }
+
+    .sidebar-menu li {
+        margin: 12px 0;
+        cursor: pointer;
+    }
 </style>
 
 
-
-
-<div class="sidebar">
+<div id="sidebar">
     <div class="sidebar-logo">
         <img src="./assets/logo.png" alt="Logo" />
         <h2>Agni Admin</h2>
     </div>
+
     <ul class="sidebar-menu">
         <li><a href="dashboard.html">🏠 Dashboard</a></li>
         <li><a href="stok-shopee.html">📭 Stok Shopee</a></li>
+        <li><a href="stok-tiktok.html">📦 Data Stok TikTok</a></li>
         <li>🛍️ Data Shopee</li>
         <li>⚙️ Pengaturan</li>
         <li id="logoutBtn">🚪 Logout</li>
-
     </ul>
 </div>
 
 
-
 <script>
-    // Logout handler
     document.getElementById("logoutBtn").addEventListener("click", () => {
         localStorage.removeItem("loggedIn");
         window.location.href = "/";
