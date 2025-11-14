@@ -40,5 +40,3 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: err.message });
     }
 }
-
-https://auth.tiktok-shops.com/api/v2/token/get?app_key=6i1cagd9f0p83&app_secret=3710881f177a1e6b03664cc91d8a3516001a0bc7&auth_code=ROW_jZNP5gAAAAB8l5P-lFKcuj7exgqe6kx3W6DtyyDCPPdYtbreqSCutZ1Ebedl_szc1B6pNZAwNC2XjmEG7ySdg0k000_nMgyonTxzvmTxtlN6qU2cn7VlBjkb60QBpIqnCXb1ssKjvMFCN2U_UMaO1-p1ZSelAMZcb8BVKAT_jLkenWPBTiNlfb9mnlCDskAOIReZbQsS-dV_8cT6hpXoPtGi0odSzh7TyPn0xGT7Vl-nlpv5YZRYovjW9uZT25Y26ngxVVGii2fUY_UV3jagBT_GTY1LcqVAzYlGhU47qtDeDQbwOAssuWv_XBCc4K-NnnuOaa6PuuZzngUQFmvzcjXiFWNbrkrqR882V_DSDOKg92WWA2t7GYF6iZ7etP-0RwdjYykI4eK4MNw1RkEoIOkSe3L658bOuXe4I2fqI_Gdt7W--M_xVsuT_g6ueL5ZMi-GmGfBBskui7SD5qsIeTTH4HO1RVZbAqEEgQ9j1epy3O7jcUySut1iK8wKVrCbbbj0lJRbqtv1MJeD54cRKsWncDRVeBLBJXpX_SMnnR1VHGWXXkcltg&grant_type=authorized_code
