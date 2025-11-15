@@ -25,6 +25,8 @@ type TikTokShopResponse struct {
 	} `json:"data"`
 }
 
+var db *pgxpool.Pool
+
 // =====================================================
 // INIT DATABASE (fix koneksi pooling untuk Vercel)
 // =====================================================
