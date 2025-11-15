@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,25 +25,22 @@ type TikTokShopResponse struct {
 	} `json:"data"`
 }
 
-var db *pgxpool.Pool
-
 // =====================================================
 // INIT DATABASE (fix koneksi pooling untuk Vercel)
 // =====================================================
 func init() {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		http.Error(w, "DATABASE_URL not set", http.StatusInternalServerError)
+	connStr := os.Getenv("DATABASE_URL") // gunakan ini sama seperti get-tiktok-token.go
+
+	if connStr == "" {
+		fmt.Println("❌ DATABASE_URL tidak ditemukan")
 		return
 	}
 
-	db, err := sql.Open("postgres", dbURL)
+	conn, err := pgxpool.New(context.Background(), connStr)
 	if err != nil {
-		http.Error(w, "Database connection failed: "+err.Error(), http.StatusInternalServerError)
+		fmt.Println("❌ Gagal konek DB:", err)
 		return
 	}
-	defer db.Close()
-
 	db = conn
 }
 
