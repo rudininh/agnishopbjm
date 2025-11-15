@@ -6,21 +6,21 @@ import (
 	"testing"
 
 	"agnishopbjm/sdk_golang/apis"
-    "agnishopbjm/sdk_golang/utils"
+	"agnishopbjm/sdk_golang/utils"
 
 	product_v202309 "agnishopbjm/sdk_golang/models/product/v202309"
 )
 
 var (
-	appKey    = "67tg51bc4rv3j"
-	appSecret = "f82ef61bb7d7c95956085a343fa21009297afd12"
-	token     = "TTP_TNaijwAAAAA-gihZtv4n_iLNli0HGps9-vcjhiBVdj8sdRTGOGZZuP0FFFUZ_-jpqPLUx1ob2AWaWdzDi5He_ZzmgBwqItLDWZvzIJM9uctYrbSFuXlaQXpM-iR9A1CmNXLkBaLMHUnZpYybAkE2m8o18zxPoDZBzmIKRuF2DlDY6WyUhtGeR1I4Ny75nR9dEl1sd2sLjR0"
-    cipher    = "TTP_PNhwygAAAACxBhF2wVkPB3p9iP1SwbJC"
+	appKey    = "6i1cagd9f0p83"
+	appSecret = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
+	token     = "ROW_ENHTKAAAAADzg8qrc-oxg3vJ6aa81jlxT3PGJjiOXRP-TS7K6Yf32hJjIiw5XGhkGfBm7Ohs2HrD2jQoDVYlWVmqzD8WVcb18J1kK4Htsn0j_xGyfX1UGEjQ0wHeHBaLgcxc9fLQPOVqni_K1EdWZryLibhvZ_qNl9kWhXrRQDMBpLE4oUXaQw"
+	cipher    = "TTP_PNhwygAAAACxBhF2wVkPB3p9iP1SwbJC"
 )
 
 func TestExample(t *testing.T) {
-	appKey = "59odsg"
-	appSecret = "825c80ec0e93026725c8e4d90acc3d70ebb9159c"
+	appKey = "59o6i1cagd9f0p83dsg"
+	appSecret = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
 	at := apis.NewAccessToken(appKey, appSecret)
 	refreshToken, _ := at.RefreshToken(
 		"ROW_VHM8ggAAAACY1uJ1_SaFJx8sZUAYBPn8nQlcip0pew4O-1VZC5ZXS3r90B0oPER9SW9JF3JKcaY")
@@ -34,18 +34,18 @@ func TestExample(t *testing.T) {
 	request = request.ContentType("application/json")
 	resp, httpRes, err := request.Execute()
 	if err != nil || httpRes.StatusCode != 200 {
-        fmt.Printf("request err:%v resbody:%s", err, httpRes.Body)
-        return
-    }
-    if resp == nil {
-        fmt.Printf("response is nil")
-        return
-    }
-    if resp.GetCode() != 0 {
-        fmt.Printf("response business is error! errorCode:%d errorMessage:%s", resp.GetCode(), resp.GetMessage())
-        return
-    }
-    fmt.Println("resp data := ", resp.GetData())
+		fmt.Printf("request err:%v resbody:%s", err, httpRes.Body)
+		return
+	}
+	if resp == nil {
+		fmt.Printf("response is nil")
+		return
+	}
+	if resp.GetCode() != 0 {
+		fmt.Printf("response business is error! errorCode:%d errorMessage:%s", resp.GetCode(), resp.GetMessage())
+		return
+	}
+	fmt.Println("resp data := ", resp.GetData())
 }
 
 func TestOrder202309OrdersGet(t *testing.T) {
@@ -61,9 +61,9 @@ func TestOrder202309OrdersGet(t *testing.T) {
 		"576487745724715360"})
 	resp, httpRes, err := request.Execute()
 	if err != nil || httpRes.StatusCode != 200 {
-        fmt.Printf("request err:%v resbody:%s", err, httpRes.Body)
-        return
-    }
+		fmt.Printf("request err:%v resbody:%s", err, httpRes.Body)
+		return
+	}
 	if resp == nil {
 		fmt.Printf("response is nil")
 		return
@@ -78,7 +78,7 @@ func TestOrder202309OrdersGet(t *testing.T) {
 func TestRefreshToken(t *testing.T) {
 	at := apis.NewAccessToken(appKey, appSecret)
 	refreshToken, _ := at.RefreshToken(
-		"TTP_3_J2AwAAAAByHATtcAn_QjzNPEETo1Q4hWr8FUpKYadtk0x_8jCX3C2k4IoV7Kg1-g7iNrXQJMs")
+		"ROW_x63bjwAAAAB9bHzBvcYwMqjFYjUc4pC9V2wxYiM9BDki0_Eplb4tzuaT9Rn5pUlbMNt1v7jAmPc")
 	fmt.Println("refreshToken= ", refreshToken)
 }
 
@@ -112,9 +112,9 @@ func TestListingSchemasGet(t *testing.T) {
 	request = request.CategoryIds([]int32{1, 2})
 	resp, httpRes, err := request.Execute()
 	if err != nil || httpRes.StatusCode != 200 {
-        fmt.Printf("request err:%v resbody:%s", err, httpRes.Body)
-        return
-    }
+		fmt.Printf("request err:%v resbody:%s", err, httpRes.Body)
+		return
+	}
 	if resp == nil {
 		fmt.Printf("response is nil")
 		return

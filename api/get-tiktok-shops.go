@@ -2,39 +2,93 @@ package handler
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"time"
 
 	"agnishopbjm/sdk_golang/apis"
 )
 
 var (
-	appKey    = "6i1cagd9f0p83"
-	appSecret = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
-	authCode  = "ROW_exSC2AAAAAB8l5P-lFKcuj7exgqe6kx3W6DtyyDCPPdYtbreqSCutZ1Ebedl_szc1B6pNZAwNC2XjmEG7ySdg0k000_nMgyonTxzvmTxtlN6qU2cn7VlBjkb60QBpIqnCXb1ssKjvMFCN2U_UMaO1-p1ZSelAMZcb8BVKAT_jLkenWPBTiNlfb9mnlCDskAOIReZbQsS-dV_8cT6hpXoPtGi0odSzh7TyPn0xGT7Vl-nlpv5YZRYovjW9uZT25Y26ngxVVGii2fUY_UV3jagBT_GTY1LcqVAzYlGhU47qtDeDQbwOAssuWv_XBCc4K-NnnuOaa6PuuZzngUQFmvzcjXiFWNbrkrqR882V_DSDOKg92WWA2t7GYF6iZ7etP-0RwdjYykI4eK4MNw1RkEoIOkSe3L658bOuXe4I2fqI_Gdt7W--M_xVsuT_g6ueL5ZMi-GmGfBBskui7SD5qsIeTTH4HO1RVZbAqEEgQ9j1epy3O7jcUySut1iK8wKVrCbbbj0lJRbqtuHLzo_kmro2Ap90_jrJe01zT7p3QMI5Q3KyXRhapfRhw"
+	appKey      = "6i1cagd9f0p83"
+	appSecret   = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
+	accessToken = "ROW_AzS9-QAAAADzg8qrc-oxg3vJ6aa81jlxT3PGJjiOXRP-TS7K6Yf32hJjIiw5XGhkGfBm7Ohs2HrD2jQoDVYlWVmqzD8WVcb18J1kK4Htsn0j_xGyfX1UGFRchLx7LBpfamcbkoSh0-eEvln9zTIucaSptXrCaqqnFRvZaU60pfJRU43rzjSKIg"
 )
 
-func authorization202309GetAuthorizedShopsGet() {
+func generateSign(appKey, accessToken, timestamp string) string {
+	params := map[string]string{
+		"access_token": accessToken,
+		"app_key":      appKey,
+		"shop_id":      "",
+		"timestamp":    timestamp,
+		"version":      "202309",
+	}
+
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	raw := ""
+	for _, k := range keys {
+		raw += k + params[k]
+	}
+
+	h := hmac.New(sha256.New, []byte(appSecret))
+	h.Write([]byte(raw))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func AuthorizationGetShops() {
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	sign := generateSign(appKey, accessToken, timestamp)
+
+	// ⚡ FORCE override query parameters (SDK tidak mengisi ini)
 	configuration := apis.NewConfiguration()
 	configuration.AddAppInfo(appKey, appSecret)
+
+	// Override base path → biar SDK pakai URL lengkap kita
+	configuration.Host = "open-api.tiktokglobalshop.com"
+
 	apiClient := apis.NewAPIClient(configuration)
-	request := apiClient.AuthorizationV202309API.Authorization202309ShopsGet(context.Background())
-	request = request.XTtsAccessToken("TS7K6Yf32hJjIiw5XGhkGfBm7Ohs2HrD2jQoDVYlWVmqzD8WVcb18J1kK4Htsn0j_xGyfX1UGEjQ0wHeHBaLgcxc9fLQPOVqni_K1EdWZryLibhvZ_qNl9kWhXrRQDMBpLE4oUXaQw")
-	request = request.ContentType("application/json")
-	resp, httpResp, err := request.Execute()
+
+	// Build request paksa sama dengan CURL
+	req := apiClient.AuthorizationV202309API.
+		Authorization202309ShopsGet(context.Background()).
+		XTtsAccessToken(accessToken).
+		ContentType("application/json")
+
+	// Inject query params wajib
+	req = req.ShopId("")               // &shop_id=
+	req = req.Version("202309")        // &version=202309
+	req = req.Timestamp(timestamp)     // &timestamp=xxx
+	req = req.AppKey(appKey)           // &app_key=
+	req = req.AccessToken(accessToken) // &access_token=
+	req = req.Sign(sign)               // &sign=
+
+	resp, httpResp, err := req.Execute()
+
 	if err != nil || httpResp.StatusCode != 200 {
-		fmt.Printf("productsRequest err:%v resbody:%s", err, httpResp.Body)
+		fmt.Println("ERROR:", err)
+		fmt.Println("HTTP RAW RESPONSE:", httpResp)
 		return
 	}
+
 	if resp == nil {
-		fmt.Printf("response is nil")
+		fmt.Println("response is nil")
 		return
 	}
+
 	if resp.GetCode() != 0 {
-		fmt.Printf("response business is error, errorCode:%d errorMessage:%s", resp.GetCode(), resp.GetMessage())
+		fmt.Printf("API Error code=%d msg=%s\n", resp.GetCode(), resp.GetMessage())
 		return
 	}
-	respDataJson, _ := json.MarshalIndent(resp.GetData(), "", "  ")
-	fmt.Println("response data:", string(respDataJson))
-	return
+
+	jb, _ := json.MarshalIndent(resp.GetData(), "", "  ")
+	fmt.Println("RESP DATA:", string(jb))
 }

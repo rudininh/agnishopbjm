@@ -1,1 +1,3 @@
-.vercel
+.vercel/
+sdk_golang/.openapi-generator/
+node_modules/
