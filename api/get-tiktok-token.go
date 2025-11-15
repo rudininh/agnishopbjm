@@ -13,11 +13,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const (
-	TikTokTokenURL = "https://auth.tiktok-shops.com/api/v2/token/get"
-	AppKey         = "6i1cagd9f0p83"
-	AppSecret      = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
-)
+// const (
+// 	TikTokTokenURL = "https://auth.tiktok-shops.com/api/v2/token/get"
+// 	AppKey         = "6i1cagd9f0p83"
+// 	AppSecret      = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
+// )
 
 type TikTokResponse struct {
 	Code    int    `json:"code"`

@@ -1,149 +1,40 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"tiktokshop/open/sdk_golang/apis"
 )
 
-type TikTokShopResponse struct {
-	Code int    `json:"code"`
-	Msg  string `json:"message"`
-	Data struct {
-		Shops []struct {
-			ShopID     string `json:"shop_id"`
-			ShopCipher string `json:"shop_cipher"`
-			Region     string `json:"region"`
-		} `json:"shops"`
-	} `json:"data"`
-}
+var (
+	appKey    = "6i1cagd9f0p83"
+	appSecret = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
+	authCode  = "ROW_exSC2AAAAAB8l5P-lFKcuj7exgqe6kx3W6DtyyDCPPdYtbreqSCutZ1Ebedl_szc1B6pNZAwNC2XjmEG7ySdg0k000_nMgyonTxzvmTxtlN6qU2cn7VlBjkb60QBpIqnCXb1ssKjvMFCN2U_UMaO1-p1ZSelAMZcb8BVKAT_jLkenWPBTiNlfb9mnlCDskAOIReZbQsS-dV_8cT6hpXoPtGi0odSzh7TyPn0xGT7Vl-nlpv5YZRYovjW9uZT25Y26ngxVVGii2fUY_UV3jagBT_GTY1LcqVAzYlGhU47qtDeDQbwOAssuWv_XBCc4K-NnnuOaa6PuuZzngUQFmvzcjXiFWNbrkrqR882V_DSDOKg92WWA2t7GYF6iZ7etP-0RwdjYykI4eK4MNw1RkEoIOkSe3L658bOuXe4I2fqI_Gdt7W--M_xVsuT_g6ueL5ZMi-GmGfBBskui7SD5qsIeTTH4HO1RVZbAqEEgQ9j1epy3O7jcUySut1iK8wKVrCbbbj0lJRbqtuHLzo_kmro2Ap90_jrJe01zT7p3QMI5Q3KyXRhapfRhw"
+)
 
-var db *pgxpool.Pool
-
-// =====================================================
-// INIT DATABASE (fix koneksi pooling untuk Vercel)
-// =====================================================
-func init() {
-	connStr := os.Getenv("DATABASE_URL") // gunakan ini sama seperti get-tiktok-token.go
-
-	if connStr == "" {
-		fmt.Println("❌ DATABASE_URL tidak ditemukan")
+func authorization202309GetAuthorizedShopsGet() {
+	configuration := apis.NewConfiguration()
+	configuration.AddAppInfo(appKey, appSecret)
+	apiClient := apis.NewAPIClient(configuration)
+	request := apiClient.AuthorizationV202309API.Authorization202309ShopsGet(context.Background())
+	request = request.XTtsAccessToken("TS7K6Yf32hJjIiw5XGhkGfBm7Ohs2HrD2jQoDVYlWVmqzD8WVcb18J1kK4Htsn0j_xGyfX1UGEjQ0wHeHBaLgcxc9fLQPOVqni_K1EdWZryLibhvZ_qNl9kWhXrRQDMBpLE4oUXaQw")
+	request = request.ContentType("application/json")
+	resp, httpResp, err := request.Execute()
+	if err != nil || httpResp.StatusCode != 200 {
+		fmt.Printf("productsRequest err:%v resbody:%s", err, httpResp.Body)
 		return
 	}
-
-	conn, err := pgxpool.New(context.Background(), connStr)
-	if err != nil {
-		fmt.Println("❌ Gagal konek DB:", err)
+	if resp == nil {
+		fmt.Printf("response is nil")
 		return
 	}
-	db = conn
-}
-
-// =====================================================
-// GET /api/get-tiktok-shops
-// =====================================================
-func GetTiktokShops(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
-
-	// ================================
-	// 1️⃣ AMBIL ACCESS TOKEN DARI DB
-	// ================================
-	var accessToken string
-
-	err := db.QueryRow(ctx, `
-		SELECT access_token 
-		FROM tiktok_tokens 
-		ORDER BY id DESC 
-		LIMIT 1
-	`).Scan(&accessToken)
-
-	if err != nil {
-		http.Error(w, "⛔ Query DB gagal: "+err.Error(), 500)
+	if resp.GetCode() != 0 {
+		fmt.Printf("response business is error, errorCode:%d errorMessage:%s", resp.GetCode(), resp.GetMessage())
 		return
 	}
-
-	if accessToken == "" {
-		http.Error(w, "⛔ access_token TikTok kosong", 500)
-		return
-	}
-
-	// Debug aman → tampil di logs Vercel
-	fmt.Println("DEBUG: Token dari DB =", accessToken[:15], "...")
-
-	// =====================================
-	// 2️⃣ Siapkan Payload request TikTok API
-	// =====================================
-	payload := map[string]any{
-		"page_size": 20,
-		"page_no":   1,
-	}
-
-	bodyData, _ := json.Marshal(payload)
-
-	apiURL := "https://open-api.tiktokglobalshop.com/api/shop/get_authorized_shops"
-
-	// =====================================
-	// 3️⃣ Build HTTP request
-	// =====================================
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(bodyData))
-	if err != nil {
-		http.Error(w, "⛔ Gagal membuat request: "+err.Error(), 500)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-tts-access-token", accessToken)
-
-	client := &http.Client{Timeout: 20 * time.Second}
-
-	// =====================================
-	// 4️⃣ Kirim request ke TikTok API
-	// =====================================
-	resp, err := client.Do(req)
-	if err != nil {
-		http.Error(w, "⛔ Gagal menghubungi TikTok API: "+err.Error(), 500)
-		return
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	// Debug response mentah
-	fmt.Println("API RAW:", string(respBody))
-
-	// =====================================
-	// 5️⃣ Jika status bukan 200, kembalikan error
-	// =====================================
-	if resp.StatusCode != 200 {
-		http.Error(w, fmt.Sprintf("⛔ TikTok API Error (%d): %s", resp.StatusCode, respBody), 500)
-		return
-	}
-
-	// =====================================
-	// 6️⃣ Decode data TikTok
-	// =====================================
-	var shopResp TikTokShopResponse
-
-	if err := json.Unmarshal(respBody, &shopResp); err != nil {
-		http.Error(w, "⛔ Gagal decode JSON TikTok: "+err.Error(), 500)
-		return
-	}
-
-	if shopResp.Code != 0 {
-		http.Error(w, "⛔ TikTok balas error: "+shopResp.Msg, 500)
-		return
-	}
-
-	// =====================================
-	// 7️⃣ Kembalikan ke Frontend (selalu valid JSON)
-	// =====================================
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(shopResp)
+	respDataJson, _ := json.MarshalIndent(resp.GetData(), "", "  ")
+	fmt.Println("response data:", string(respDataJson))
+	return
 }
