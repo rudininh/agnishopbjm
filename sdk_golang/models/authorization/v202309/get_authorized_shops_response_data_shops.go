@@ -12,7 +12,7 @@ package authorization_v202309
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Authorization202309GetAuthorizedShopsResponseDataShops type satisfies the MappedNullable interface at compile time

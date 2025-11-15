@@ -12,7 +12,7 @@ package fulfillment_v202510
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Fulfillment202510CreateFirstMileBundleV2Response type satisfies the MappedNullable interface at compile time

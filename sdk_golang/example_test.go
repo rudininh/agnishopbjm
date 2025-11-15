@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	"tiktokshop/open/sdk_golang/apis"
-    "tiktokshop/open/sdk_golang/utils"
+	"agnishopbjm/sdk_golang/apis"
+    "agnishopbjm/sdk_golang/utils"
 
-	product_v202309 "tiktokshop/open/sdk_golang/models/product/v202309"
+	product_v202309 "agnishopbjm/sdk_golang/models/product/v202309"
 )
 
 var (

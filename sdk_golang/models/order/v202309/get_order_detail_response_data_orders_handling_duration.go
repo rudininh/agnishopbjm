@@ -12,7 +12,7 @@ package order_v202309
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Order202309GetOrderDetailResponseDataOrdersHandlingDuration type satisfies the MappedNullable interface at compile time

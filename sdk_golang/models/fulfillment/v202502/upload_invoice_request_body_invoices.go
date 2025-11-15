@@ -12,7 +12,7 @@ package fulfillment_v202502
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Fulfillment202502UploadInvoiceRequestBodyInvoices type satisfies the MappedNullable interface at compile time

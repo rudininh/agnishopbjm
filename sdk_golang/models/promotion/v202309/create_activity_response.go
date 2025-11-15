@@ -12,7 +12,7 @@ package promotion_v202309
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Promotion202309CreateActivityResponse type satisfies the MappedNullable interface at compile time

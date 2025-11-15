@@ -12,7 +12,7 @@ package customer_service_v202309
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the CustomerService202309GetAgentSettingsResponse type satisfies the MappedNullable interface at compile time

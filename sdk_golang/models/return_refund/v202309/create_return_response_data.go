@@ -12,7 +12,7 @@ package return_refund_v202309
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the ReturnRefund202309CreateReturnResponseData type satisfies the MappedNullable interface at compile time

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"tiktokshop/open/sdk_golang/apis"
+	"agnishopbjm/sdk_golang/apis"
 )
 
 var (

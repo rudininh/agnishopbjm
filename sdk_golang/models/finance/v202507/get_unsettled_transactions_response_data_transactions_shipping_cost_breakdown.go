@@ -12,7 +12,7 @@ package finance_v202507
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Finance202507GetUnsettledTransactionsResponseDataTransactionsShippingCostBreakdown type satisfies the MappedNullable interface at compile time

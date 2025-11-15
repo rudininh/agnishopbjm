@@ -12,7 +12,7 @@ package analytics_v202508
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Analytics202508GetShopLIVEPerformanceListResponseData type satisfies the MappedNullable interface at compile time

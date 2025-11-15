@@ -12,7 +12,7 @@ package product_v202505
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Product202505CreateImageTranslationTasksRequestBodyImages type satisfies the MappedNullable interface at compile time

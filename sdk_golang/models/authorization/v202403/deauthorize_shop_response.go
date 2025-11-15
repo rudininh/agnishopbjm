@@ -12,7 +12,7 @@ package authorization_v202403
 
 import (
     "encoding/json"
-    "tiktokshop/open/sdk_golang/utils"
+    "agnishopbjm/sdk_golang/utils"
 )
 
             // checks if the Authorization202403DeauthorizeShopResponse type satisfies the MappedNullable interface at compile time
