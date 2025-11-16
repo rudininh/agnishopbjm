@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/lib/pq v1.10.9
+	tiktokshop/open/sdk_golang v1.0.0
 )
 
 require (
@@ -15,4 +16,4 @@ require (
 	golang.org/x/text v0.24.0 // indirect
 )
 
-replace tiktokshop/open/sdk_golang => ./sdk_golang
+replace tiktokshop/open/sdk_golang v1.0.0 => github.com/rudininh/sdk_golang v1.0.0

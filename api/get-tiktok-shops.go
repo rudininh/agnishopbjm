@@ -1,10 +1,10 @@
 package handler
 
 import (
-	"agnishopbjm/sdk_golang/apis"
 	"context"
 	"encoding/json"
 	"fmt"
+	"tiktokshop/open/sdk_golang/apis"
 )
 
 var (
