@@ -10,7 +10,7 @@ require (
 	tiktokshop/open/sdk_golang v1.0.0
 )
 
-replace tiktokshop/open/sdk_golang => ./sdk
+replace tiktokshop/open/sdk_golang => ./sdkgolang
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
