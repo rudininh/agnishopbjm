@@ -15,4 +15,4 @@ require (
 	tiktokshop/open/sdk_golang v1.0.0
 )
 
-replace tiktokshop/open/sdk_golang => github.com/rudininh/sdk_golang
+replace tiktokshop/open/sdk_golang => ./agnishopbjm/sdkgolang
