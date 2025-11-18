@@ -18,4 +18,4 @@ require (
 	golang.org/x/text v0.31.0 // indirect
 )
 
-replace tiktokshop/open/sdk_golang v1.0.0 => ../agnishopbjm/sdkgolang
+replace tiktokshop/open/sdk_golang v1.0.0 => ./sdkgolang
