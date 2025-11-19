@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"agnishopbjm/tiktok"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -11,56 +12,82 @@ import (
 	"time"
 )
 
-var (
-	appKey      = "6i1cagd9f0p83"
-	appSecret   = "3710881f177a1e6b03664cc91d8a3516001a0bc7"
-	accessToken = "ROW_fEm1uwAAAADzg8qrc-oxg3vJ6aa81jlxT3PGJjiOXRP-TS7K6Yf32hJjIiw5XGhkGfBm7Ohs2HrD2jQoDVYlWVmqzD8WVcb18J1kK4Htsn0j_xGyfX1UGJ5O39hhRXrCPmNTq4nXbVEYmrKPpJqj84JeYyXNc_TWrwm0WiRsMOJ4bTUEzMB35w"
-)
-
 func GetTiktokShopsHandler(w http.ResponseWriter, r *http.Request) {
-	// ========== Ambil data dari TikTok API ==========
+
+	// ========== Catch Panic ==========
+	defer func() {
+		if rec := recover(); rec != nil {
+			fmt.Printf("[PANIC] %v\n", rec)
+			http.Error(w, "Internal Server Error (panic)", 500)
+		}
+	}()
+
+	fmt.Println("=== GetTiktokShopsHandler START ===")
+
+	// ========== Load Config ==========
+	cfg, err := tiktok.LoadTikTokConfig()
+	if err != nil {
+		fmt.Println("[CONFIG ERROR]", err)
+		http.Error(w, "Config error: "+err.Error(), 500)
+		return
+	}
+
+	fmt.Println("Config loaded OK")
+
+	// ========== Call TikTok API ==========
 	configuration := apis.NewConfiguration()
-	configuration.AddAppInfo(appKey, appSecret)
+	configuration.AddAppInfo(cfg.AppKey, cfg.AppSecret)
 	apiClient := apis.NewAPIClient(configuration)
 
 	req := apiClient.AuthorizationV202309API.Authorization202309ShopsGet(context.Background())
-	req = req.XTtsAccessToken(accessToken)
+	req = req.XTtsAccessToken(cfg.AccessToken)
 	req = req.ContentType("application/json")
 
 	resp, httpResp, err := req.Execute()
-	if err != nil || httpResp.StatusCode != 200 {
-		http.Error(w, fmt.Sprintf("TikTok API error: %v", err), http.StatusBadRequest)
+	if err != nil {
+		fmt.Println("[TIKTOK API ERROR]", err)
+		http.Error(w, "TikTok API error: "+err.Error(), 400)
+		return
+	}
+
+	if httpResp.StatusCode != 200 {
+		fmt.Println("[TIKTOK STATUS ERROR]", httpResp.StatusCode)
+		http.Error(w, "TikTok API HTTP error", httpResp.StatusCode)
 		return
 	}
 
 	data := resp.GetData()
+	fmt.Println("TikTok API OK, shops:", len(data.Shops))
 
-	// TikTok kadang return data kosong, jadi cek jumlahnya
 	if len(data.Shops) == 0 {
-		http.Error(w, "No shops returned from TikTok", http.StatusBadRequest)
+		fmt.Println("[EMPTY SHOPS]")
+		http.Error(w, "No shops returned from TikTok", 400)
 		return
 	}
 
-	// ========== Koneksi Database via ENV ==========
+	// ========== Connect DB ==========
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		http.Error(w, "DATABASE_URL not set", http.StatusInternalServerError)
+		fmt.Println("[ENV ERROR] DATABASE_URL not set")
+		http.Error(w, "DATABASE_URL missing", 500)
 		return
 	}
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		http.Error(w, "Database connection failed: "+err.Error(), http.StatusInternalServerError)
+		fmt.Println("[DB OPEN ERROR]", err)
+		http.Error(w, "DB connect error: "+err.Error(), 500)
 		return
 	}
 	defer db.Close()
 
-	// Timeout biar serverless tidak hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	// ========== Simpan ke Database ==========
+	// ========== Save shops ==========
 	for _, shop := range data.Shops {
+		fmt.Println("Saving shop:", shop.Id, shop.Name)
+
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO tiktok_shops (id, code, name, region, seller_type, cipher)
 			VALUES ($1, $2, $3, $4, $5, $6)
@@ -80,12 +107,15 @@ func GetTiktokShopsHandler(w http.ResponseWriter, r *http.Request) {
 		)
 
 		if err != nil {
-			http.Error(w, "DB insert error: "+err.Error(), http.StatusInternalServerError)
+			fmt.Println("[DB INSERT ERROR]", err)
+			http.Error(w, "DB insert error: "+err.Error(), 500)
 			return
 		}
 	}
 
-	// ========== Kirim data ke Dashboard ==========
+	// ========== Return JSON ==========
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+
+	fmt.Println("=== GetTiktokShopsHandler END ===")
 }
