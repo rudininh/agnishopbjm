@@ -60,7 +60,7 @@ func LoadTikTokConfig() (*TikTokConfig, error) {
 	err = db.QueryRowContext(ctx, `
 		SELECT id, cipher
 		FROM tiktok_shops
-		ORDER BY updated_at DESC
+		ORDER BY created_at DESC
 		LIMIT 1
 	`).Scan(&cfg.ShopID, &cfg.Cipher)
 
@@ -74,10 +74,9 @@ func LoadTikTokConfig() (*TikTokConfig, error) {
 	err = db.QueryRowContext(ctx, `
 		SELECT access_token, refresh_token, expire_in
 		FROM tiktok_tokens
-		WHERE shop_id = $1
-		ORDER BY updated_at DESC
+		ORDER BY created_at DESC
 		LIMIT 1
-	`, cfg.ShopID).Scan(&cfg.AccessToken, &cfg.RefreshToken, &cfg.ExpireIn)
+	`).Scan(&cfg.AccessToken, &cfg.RefreshToken, &cfg.ExpireIn)
 
 	if err != nil {
 		return nil, errors.New("tiktok_tokens not found: " + err.Error())
