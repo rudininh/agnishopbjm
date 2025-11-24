@@ -170,4 +170,12 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// ======================================================
+	// =============== RETURN JSON KE FRONTEND ===============
+	// ======================================================
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"items": results,
+	})
+
 }
