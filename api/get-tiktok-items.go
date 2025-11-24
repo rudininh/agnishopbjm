@@ -5,10 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"time"
+
 	"tiktokshop/open/sdk_golang/apis"
 	product_v202502 "tiktokshop/open/sdk_golang/models/product/v202502"
 )
+
+type ProductDetailResponse struct {
+	ProductID string          `json:"product_id"`
+	Detail    json.RawMessage `json:"detail"`
+	Error     string          `json:"error,omitempty"`
+}
 
 func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
@@ -28,6 +37,7 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// INIT SDK
 	configuration := apis.NewConfiguration()
 	configuration.AddAppInfo(cfg.AppKey, cfg.AppSecret)
 	apiClient := apis.NewAPIClient(configuration)
@@ -44,97 +54,124 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	body := product_v202502.NewProduct202502SearchProductsRequestBody()
 	body.SetStatus("ALL")
-
 	searchReq = searchReq.Product202502SearchProductsRequestBody(*body)
 
-	// 🔍 DEBUG: Print request search
-	fmt.Println("=== SEARCH REQUEST DEBUG ===")
-	fmt.Println("AccessToken:", cfg.AccessToken)
-	fmt.Println("ShopCipher:", cfg.Cipher)
-	bb, _ := json.MarshalIndent(body, "", "  ")
-	fmt.Println("RequestBody:", string(bb))
-
-	searchResp, respHTTP, err := searchReq.Execute()
+	searchResp, _, err := searchReq.Execute()
 	if err != nil {
-		fmt.Println("[Search Execute Error]", err)
-		http.Error(w, "Search API error", 500)
+		http.Error(w, "Search API error: "+err.Error(), 500)
 		return
 	}
 
-	fmt.Println("Search HTTP Status:", respHTTP.StatusCode)
-
 	if searchResp.GetCode() != 0 {
-		fmt.Println("[Search API Error]", searchResp.GetCode(), searchResp.GetMessage())
 		http.Error(w, "Search error: "+searchResp.GetMessage(), 500)
 		return
 	}
 
-	searchData := searchResp.GetData()
-	products := searchData.GetProducts()
+	// === IMPORTANT: GetData() → Convert to Map ===
+	data := searchResp.GetData()
 
-	fmt.Println("Search returned products:", len(products))
+	var dataMap map[string]interface{}
+	tmp, _ := json.Marshal(data)
+	json.Unmarshal(tmp, &dataMap)
 
-	if len(products) == 0 {
-		http.Error(w, "No products found", 404)
+	// Extract "products" array
+	productsRaw, ok := dataMap["products"].([]interface{})
+	if !ok {
+		http.Error(w, "Products list not found in TikTok response", 500)
 		return
 	}
 
+	fmt.Println("Search returned products:", len(productsRaw))
+
 	// ======================================================
-	// ========== STEP 2: LOOP GET DETAIL PER PRODUCT =======
+	// ======= STEP 2: LOOP CALL GET /DETAILS API ===========
 	// ======================================================
 
-	details := []interface{}{}
+	results := []ProductDetailResponse{}
 
-	for _, p := range products {
-		productID := p.GetId()
+	for _, pr := range productsRaw {
 
-		fmt.Println("=========================================")
-		fmt.Println("Fetching detail for:", productID)
-		fmt.Println("=========================================")
+		pm := pr.(map[string]interface{})
 
-		// GUNAKAN API V202502 (bukan 202309)
-		getReq := apiClient.ProductV202309API.Product202309ProductsProductIdGet(
-			context.Background(),
+		// Product ID bisa beragam: product_id, product_id_str, id...
+		productID := ""
+
+		if v, ok := pm["product_id"]; ok {
+			productID = fmt.Sprintf("%v", v)
+		}
+		if v, ok := pm["product_id_str"]; ok {
+			productID = fmt.Sprintf("%v", v)
+		}
+		if productID == "" {
+			productID = fmt.Sprintf("%v", pm["id"])
+		}
+
+		fmt.Println("Fetching detail for product:", productID)
+
+		// Build request URL
+		timestamp := time.Now().Unix()
+
+		url := fmt.Sprintf(
+			"https://open-api.tiktokglobalshop.com/api/products/details?access_token=%s&app_key=%s&product_id=%s&shop_cipher=%s&shop_id=%s&timestamp=%d&version=202306",
+			cfg.AccessToken,
+			cfg.AppKey,
+			productID,
+			cfg.Cipher,
+			cfg.ShopID,
+			timestamp,
 		)
 
-		getReq = getReq.XTtsAccessToken(cfg.AccessToken)
-		getReq = getReq.ContentType("application/json")
-		getReq = getReq.ProductId(productID)
-		getReq = getReq.ShopCipher(cfg.Cipher)
-		getReq = getReq.Locale("en")
+		fmt.Println("DETAIL URL:", url)
 
-		fmt.Println("=== DETAIL REQUEST DEBUG ===")
-		fmt.Println("ProductID:", productID)
-		fmt.Println("ShopCipher:", cfg.Cipher)
-		fmt.Println("AccessToken:", cfg.AccessToken)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("x-tts-access-token", cfg.AccessToken)
 
-		getResp, getHTTP, err := getReq.Execute()
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req)
+
 		if err != nil {
-			fmt.Println("[Detail Execute Error]", err)
+			results = append(results, ProductDetailResponse{
+				ProductID: productID,
+				Error:     "HTTP Request Error: " + err.Error(),
+			})
 			continue
 		}
 
-		fmt.Println("Detail HTTP Status:", getHTTP.StatusCode)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
-		if getResp.GetCode() != 0 {
-			fmt.Println("[Detail Error]", getResp.GetCode(), getResp.GetMessage())
+		// LOG RAW RESPONSE UNTUK DEBUG
+		fmt.Println("RAW DETAIL RESPONSE for", productID, ":")
+		fmt.Println(string(raw))
+
+		// Cek apakah TikTok return error code
+		var detailCheck map[string]interface{}
+		json.Unmarshal(raw, &detailCheck)
+
+		if code, ok := detailCheck["code"].(float64); ok && code != 0 {
+			msg, _ := detailCheck["message"].(string)
+			fmt.Printf("API ERROR for %s → Code: %.0f, Msg: %s\n", productID, code, msg)
+		}
+
+		if resp.StatusCode != 200 {
+			results = append(results, ProductDetailResponse{
+				ProductID: productID,
+				Error:     fmt.Sprintf("HTTP Status %d", resp.StatusCode),
+			})
 			continue
 		}
 
-		details = append(details, getResp.GetData())
+		results = append(results, ProductDetailResponse{
+			ProductID: productID,
+			Detail:    raw,
+		})
 	}
 
 	// ======================================================
-	// ============== RETURN JSON KE KLIENT ===============
+	// ============== RETURN ALL PRODUCTS ===================
 	// ======================================================
-
-	output := map[string]interface{}{
-		"total_products": len(details),
-		"products":       details,
-	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(output)
+	json.NewEncoder(w).Encode(results)
 
-	fmt.Println("=== GetAllProductsHandler END ===")
 }
