@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"tiktokshop/open/sdk_golang/apis"
@@ -108,23 +109,41 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 		fmt.Println("Fetching detail for product:", productID)
 
-		// Build request URL
+		// Build timestamp
 		timestamp := time.Now().Unix()
 
-		url := fmt.Sprintf(
-			"https://open-api.tiktokglobalshop.com/api/products/details?access_token=%s&app_key=%s&product_id=%s&shop_cipher=%s&shop_id=%s&timestamp=%d&version=202306",
-			cfg.AccessToken,
-			cfg.AppKey,
-			productID,
-			cfg.Cipher,
-			cfg.ShopID,
-			timestamp,
-		)
+		// Base URL
+		baseURL := "https://open-api.tiktokglobalshop.com/api/products/details"
 
-		fmt.Println("DETAIL URL:", url)
+		// Build request WITHOUT sign
+		reqURL, _ := url.Parse(baseURL)
+		q := reqURL.Query()
 
-		req, _ := http.NewRequest("GET", url, nil)
+		q.Set("access_token", cfg.AccessToken)
+		q.Set("app_key", cfg.AppKey)
+		q.Set("product_id", productID)
+		q.Set("shop_cipher", cfg.Cipher)
+		q.Set("shop_id", cfg.ShopID)
+		q.Set("timestamp", fmt.Sprintf("%d", timestamp))
+		q.Set("version", "202306")
+
+		reqURL.RawQuery = q.Encode()
+
+		// Build request object (needed for CalSign)
+		req, _ := http.NewRequest("GET", reqURL.String(), nil)
 		req.Header.Set("x-tts-access-token", cfg.AccessToken)
+
+		// === HITUNG SIGN DI SINI ===
+		sign := tiktok.CalSign(req, cfg.AppSecret)
+
+		// Tambahkan sign ke query
+		q.Set("sign", sign)
+		reqURL.RawQuery = q.Encode()
+
+		// Replace req.URL with new signed URL
+		req.URL = reqURL
+
+		fmt.Println("DETAIL URL SIGNED:", req.URL.String())
 
 		client := &http.Client{Timeout: 15 * time.Second}
 		resp, err := client.Do(req)
@@ -140,14 +159,13 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// LOG RAW RESPONSE UNTUK DEBUG
+		// LOG RAW RESPONSE
 		fmt.Println("RAW DETAIL RESPONSE for", productID, ":")
 		fmt.Println(string(raw))
 
-		// Cek apakah TikTok return error code
+		// Cek jika TikTok error
 		var detailCheck map[string]interface{}
 		json.Unmarshal(raw, &detailCheck)
-
 		if code, ok := detailCheck["code"].(float64); ok && code != 0 {
 			msg, _ := detailCheck["message"].(string)
 			fmt.Printf("API ERROR for %s → Code: %.0f, Msg: %s\n", productID, code, msg)
@@ -166,12 +184,4 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 			Detail:    raw,
 		})
 	}
-
-	// ======================================================
-	// ============== RETURN ALL PRODUCTS ===================
-	// ======================================================
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
-
 }
