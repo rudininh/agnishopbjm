@@ -123,34 +123,38 @@
                         let grandTotalHarga = 0;
 
                         data.items.forEach((item, i) => {
-                            let totalVarianHarga = 0;
                             let totalStok = 0;
+                            let totalHarga = 0;
 
-                            const varianHTML = item.models && item.models.length > 0
-                                ? item.models.map(v => {
-                                    const stok = parseInt(v.stock) || 0;
-                                    const harga = parseInt(v.price) || 0;
+                            const variants = item.skus || [];
+
+                            const varianHTML = variants.length > 0
+                                ? variants.map(v => {
+                                    const stok = v.stock_info?.stock_qty || 0;
+                                    const harga = v.price?.amount || 0;
+                                    const sku_name = v.sku_name || "-";
+
                                     const subtotal = stok * harga;
 
                                     totalStok += stok;
-                                    totalVarianHarga += subtotal;
+                                    totalHarga += subtotal;
 
                                     return `
-                                        <li>${v.name} - Stok: ${stok} - Harga: Rp ${harga.toLocaleString("id-ID")} - Total: Rp ${subtotal.toLocaleString("id-ID")}</li>
+                                        <li>${sku_name} - Stok: ${stok} - Harga: Rp ${harga.toLocaleString("id-ID")} - Total: Rp ${subtotal.toLocaleString("id-ID")}</li>
                                     `;
                                 }).join('')
                                 : '<li><i>Tidak ada varian</i></li>';
 
                             grandTotalStok += totalStok;
-                            grandTotalHarga += totalVarianHarga;
+                            grandTotalHarga += totalHarga;
 
                             html += `
                                 <tr class="toggle-row" onclick="toggleChild(${i})">
                                     <td class="text-center">${i + 1}</td>
-                                    <td>${item.nama}</td>
-                                    <td>${item.sku || "-"}</td>
+                                    <td>${item.product_name}</td>
+                                    <td>${variants.length > 0 ? variants[0].sku_name : "-"}</td>
                                     <td class="text-center">${totalStok}</td>
-                                    <td class="text-end">Rp ${totalVarianHarga.toLocaleString("id-ID")}</td>
+                                    <td class="text-end">Rp ${totalHarga.toLocaleString("id-ID")}</td>
                                 </tr>
 
                                 <tr id="child-${i}" class="child-row" style="display:none">

@@ -85,7 +85,7 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Search returned products:", len(productsRaw))
 
 	// ======================================================
-	// ======= STEP 2: LOOP CALL GET /DETAILS API ===========
+	// ========== STEP 2: LOOP CALL GET /DETAILS API =========
 	// ======================================================
 
 	results := []ProductDetailResponse{}
@@ -94,64 +94,67 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 		pm := pr.(map[string]interface{})
 
-		// Product ID bisa beragam: product_id, product_id_str, id...
+		// ==========================================
+		// Ambil Product ID (lebih aman & fleksibel)
+		// ==========================================
 		productID := ""
-
 		if v, ok := pm["product_id"]; ok {
 			productID = fmt.Sprintf("%v", v)
 		}
-		if v, ok := pm["product_id_str"]; ok {
+		if v, ok := pm["product_id_str"]; ok && fmt.Sprintf("%v", v) != "" {
 			productID = fmt.Sprintf("%v", v)
 		}
 		if productID == "" {
-			productID = fmt.Sprintf("%v", pm["id"])
+			if v, ok := pm["id"]; ok {
+				productID = fmt.Sprintf("%v", v)
+			}
 		}
 
-		fmt.Println("Fetching detail for product:", productID)
+		fmt.Println("Fetching detail V2 for product:", productID)
 
-		// Build timestamp
 		timestamp := time.Now().Unix()
 
-		// Base URL
-		baseURL := "https://open-api.tiktokglobalshop.com/api/products/details"
+		// ==========================================
+		// ENDPOINT V2
+		// ==========================================
+		baseURL := fmt.Sprintf(
+			"https://open-api.tiktokglobalshop.com/product/202309/products/%s",
+			productID,
+		)
 
-		// Build request WITHOUT sign
 		reqURL, _ := url.Parse(baseURL)
 		q := reqURL.Query()
 
-		q.Set("access_token", cfg.AccessToken)
+		// sesuai cURL terbaru TikTok
+		q.Set("timestamp", fmt.Sprintf("%d", timestamp))
 		q.Set("app_key", cfg.AppKey)
-		q.Set("product_id", productID)
 		q.Set("shop_cipher", cfg.Cipher)
 		q.Set("shop_id", cfg.ShopID)
-		q.Set("timestamp", fmt.Sprintf("%d", timestamp))
-		q.Set("version", "202306")
+		q.Set("version", "202309")
 
 		reqURL.RawQuery = q.Encode()
 
-		// Build request object (needed for CalSign)
 		req, _ := http.NewRequest("GET", reqURL.String(), nil)
+
+		// V2 WAJIB pakai access token di header
 		req.Header.Set("x-tts-access-token", cfg.AccessToken)
+		req.Header.Set("Content-Type", "application/json")
 
-		// === HITUNG SIGN DI SINI ===
+		// SIGN • penting
 		sign := tiktok.CalSign(req, cfg.AppSecret)
-
-		// Tambahkan sign ke query
 		q.Set("sign", sign)
 		reqURL.RawQuery = q.Encode()
-
-		// Replace req.URL with new signed URL
 		req.URL = reqURL
 
-		fmt.Println("DETAIL URL SIGNED:", req.URL.String())
+		fmt.Println("SIGNED V2 URL:", req.URL.String())
 
-		client := &http.Client{Timeout: 15 * time.Second}
+		client := &http.Client{Timeout: 20 * time.Second}
 		resp, err := client.Do(req)
 
 		if err != nil {
 			results = append(results, ProductDetailResponse{
 				ProductID: productID,
-				Error:     "HTTP Request Error: " + err.Error(),
+				Error:     err.Error(),
 			})
 			continue
 		}
@@ -159,29 +162,12 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// LOG RAW RESPONSE
-		fmt.Println("RAW DETAIL RESPONSE for", productID, ":")
-		fmt.Println(string(raw))
-
-		// Cek jika TikTok error
-		var detailCheck map[string]interface{}
-		json.Unmarshal(raw, &detailCheck)
-		if code, ok := detailCheck["code"].(float64); ok && code != 0 {
-			msg, _ := detailCheck["message"].(string)
-			fmt.Printf("API ERROR for %s → Code: %.0f, Msg: %s\n", productID, code, msg)
-		}
-
-		if resp.StatusCode != 200 {
-			results = append(results, ProductDetailResponse{
-				ProductID: productID,
-				Error:     fmt.Sprintf("HTTP Status %d", resp.StatusCode),
-			})
-			continue
-		}
+		fmt.Println("RAW RESPONSE:", string(raw))
 
 		results = append(results, ProductDetailResponse{
 			ProductID: productID,
 			Detail:    raw,
 		})
 	}
+
 }
