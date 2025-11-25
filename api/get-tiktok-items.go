@@ -8,12 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"tiktokshop/open/sdk_golang/apis"
 	product_v202502 "tiktokshop/open/sdk_golang/models/product/v202502"
 )
 
+// ===== Structs =====
 type FixedProduct struct {
 	ProductID   string      `json:"product_id"`
 	ProductName string      `json:"product_name"`
@@ -49,10 +51,15 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 	configuration.AddAppInfo(cfg.AppKey, cfg.AppSecret)
 	apiClient := apis.NewAPIClient(configuration)
 
-	// ======================================
-	// ============ SEARCH PRODUCT ===========
-	// ======================================
+	ctx := context.Background()
+	dbConn, dbErr := getDBConn(ctx)
+	if dbErr != nil {
+		fmt.Println("⚠️ DB connection disabled:", dbErr)
+	} else {
+		defer dbConn.Close(ctx)
+	}
 
+	// ===== SEARCH PRODUCT =====
 	searchReq := apiClient.ProductV202502API.Product202502ProductsSearchPost(context.Background())
 	searchReq = searchReq.XTtsAccessToken(cfg.AccessToken)
 	searchReq = searchReq.ContentType("application/json")
@@ -74,7 +81,6 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert TikTok response → Map
 	var root map[string]interface{}
 	bt, _ := json.Marshal(searchResp.GetData())
 	json.Unmarshal(bt, &root)
@@ -87,24 +93,25 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	results := []FixedProduct{}
 
-	// ======================================
-	// ============= LOOP DETAIL =============
-	// ======================================
-
+	// ===== LOOP DETAIL =====
 	for _, item := range arr {
 
-		pm := item.(map[string]interface{})
+		pm, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
 
 		productID := fmt.Sprintf("%v", pm["id"])
+		if productID == "" {
+			continue
+		}
+
 		fmt.Println("Fetching detail:", productID)
 
 		timestamp := time.Now().Unix()
 
-		// Endpoint V2
-		base := fmt.Sprintf(
-			"https://open-api.tiktokglobalshop.com/product/202309/products/%s",
-			productID,
-		)
+		// Detail endpoint
+		base := fmt.Sprintf("https://open-api.tiktokglobalshop.com/product/202309/products/%s", productID)
 
 		reqURL, _ := url.Parse(base)
 		q := reqURL.Query()
@@ -119,7 +126,6 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("x-tts-access-token", cfg.AccessToken)
 		req.Header.Set("Content-Type", "application/json")
 
-		// SIGN
 		sign := tiktok.CalSign(req, cfg.AppSecret)
 		q.Set("sign", sign)
 		reqURL.RawQuery = q.Encode()
@@ -128,39 +134,83 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		client := &http.Client{Timeout: 20 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
+			fmt.Printf("❌ fetch detail error product %s: %v\n", productID, err)
 			continue
 		}
 
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// Parse detail
+		// Parse detail JSON
 		var detail map[string]interface{}
-		json.Unmarshal(raw, &detail)
+		if err := json.Unmarshal(raw, &detail); err != nil {
+			fmt.Printf("⚠️ Failed parse detail for %s: %v\n", productID, err)
+			continue
+		}
 
-		// ========== Extract fields ==========
 		data, _ := detail["data"].(map[string]interface{})
+		if data == nil {
+			fmt.Printf("⚠️ No data field for product %s\n", productID)
+			continue
+		}
 
 		productName := fmt.Sprintf("%v", data["title"])
 
-		// SKUs
 		skuArr, _ := data["skus"].([]interface{})
-
 		listSKU := []FixedSKU{}
-
 		for _, s := range skuArr {
-			sm := s.(map[string]interface{})
-
-			priceMap := sm["price"].(map[string]interface{})
-			price := parseInt(priceMap["sale_price"])
-
-			stockList, _ := sm["inventory"].([]interface{})
-			stockQty := int64(0)
-			if len(stockList) > 0 {
-				stockQty = parseInt(stockList[0].(map[string]interface{})["quantity"])
+			sm, ok := s.(map[string]interface{})
+			if !ok {
+				continue
 			}
 
-			skuName := fmt.Sprintf("%v", sm["seller_sku"])
+			// variant name
+			skuName := ""
+			if attrs, ok := sm["sales_attributes"].([]interface{}); ok {
+				var names []string
+				for _, a := range attrs {
+					if amap, ok := a.(map[string]interface{}); ok {
+						if v, ok := amap["value_name"].(string); ok && v != "" {
+							names = append(names, v)
+						}
+					}
+				}
+				if len(names) > 0 {
+					skuName = strings.Join(names, " / ")
+				}
+			}
+			if skuName == "" {
+				if v, ok := sm["seller_sku"].(string); ok && v != "" {
+					skuName = v
+				} else if v, ok := sm["sku_name"].(string); ok && v != "" {
+					skuName = v
+				} else {
+					skuName = "Default Variant"
+				}
+			}
+
+			// price
+			var price int64
+			if pmv, ok := sm["price"].(map[string]interface{}); ok {
+				price = parseInt(pmv["sale_price"])
+				if price == 0 {
+					price = parseInt(pmv["tax_exclusive_price"])
+				}
+			} else {
+				price = parseInt(sm["price"])
+			}
+
+			// stock
+			stockQty := int64(0)
+			if stockList, ok := sm["inventory"].([]interface{}); ok && len(stockList) > 0 {
+				if firstInv, ok := stockList[0].(map[string]interface{}); ok {
+					stockQty = parseInt(firstInv["quantity"])
+				}
+			} else {
+				if v := parseInt(sm["stock"]); v != 0 {
+					stockQty = v
+				}
+			}
 
 			listSKU = append(listSKU, FixedSKU{
 				SKUName:  skuName,
@@ -170,15 +220,43 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		// Push
-		results = append(results, FixedProduct{
+		product := FixedProduct{
 			ProductID:   productID,
 			ProductName: productName,
 			SKUs:        listSKU,
-		})
+			Raw:         data,
+		}
+
+		results = append(results, product)
+
+		// === SAVE PER SKU (JALUR A) ===
+		if dbConn != nil {
+			for _, sku := range listSKU {
+
+				_, err := dbConn.Exec(ctx, `
+            INSERT INTO tiktok_products
+                (product_id, product_name, sku_name, stock_qty, price, subtotal, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,NOW())
+            ON CONFLICT (product_id, sku_name)
+            DO UPDATE SET
+                product_name = EXCLUDED.product_name,
+                stock_qty   = EXCLUDED.stock_qty,
+                price       = EXCLUDED.price,
+                subtotal    = EXCLUDED.subtotal,
+                updated_at  = NOW()
+        `, productID, productName, sku.SKUName, sku.StockQty, sku.Price, sku.Subtotal)
+
+				if err != nil {
+					fmt.Printf("❌ DB insert failed product %s / SKU %s: %v\n", productID, sku.SKUName, err)
+				} else {
+					fmt.Printf("✅ DB saved product %s / SKU %s\n", productID, sku.SKUName)
+				}
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Send JSON to frontend
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"items": results,
@@ -186,9 +264,26 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseInt(v interface{}) int64 {
+	if v == nil {
+		return 0
+	}
 	switch x := v.(type) {
 	case float64:
 		return int64(x)
+	case float32:
+		return int64(x)
+	case int:
+		return int64(x)
+	case int64:
+		return x
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return i
+		}
+		if f, err := x.Float64(); err == nil {
+			return int64(f)
+		}
+		return 0
 	case string:
 		var n int64
 		fmt.Sscan(x, &n)
