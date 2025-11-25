@@ -173,9 +173,17 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 	// ======================================================
 	// =============== RETURN JSON KE FRONTEND ===============
 	// ======================================================
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": results,
-	})
+	fmt.Println("=== Mengirim hasil JSON ke frontend ===")
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	err = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"total":   len(results),
+		"results": results,
+	})
+	if err != nil {
+		fmt.Println("Encode error:", err)
+	}
 }
