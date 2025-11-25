@@ -14,10 +14,18 @@ import (
 	product_v202502 "tiktokshop/open/sdk_golang/models/product/v202502"
 )
 
-type ProductDetailResponse struct {
-	ProductID string          `json:"product_id"`
-	Detail    json.RawMessage `json:"detail"`
-	Error     string          `json:"error,omitempty"`
+type FixedProduct struct {
+	ProductID   string      `json:"product_id"`
+	ProductName string      `json:"product_name"`
+	SKUs        []FixedSKU  `json:"skus"`
+	Raw         interface{} `json:"raw,omitempty"`
+}
+
+type FixedSKU struct {
+	SKUName  string `json:"sku_name"`
+	StockQty int64  `json:"stock_qty"`
+	Price    int64  `json:"price"`
+	Subtotal int64  `json:"subtotal"`
 }
 
 func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
@@ -31,21 +39,19 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("=== GetAllProductsHandler START ===")
 
-	// Load config
 	cfg, err := tiktok.LoadTikTokConfig()
 	if err != nil {
 		http.Error(w, "Config error: "+err.Error(), 500)
 		return
 	}
 
-	// INIT SDK
 	configuration := apis.NewConfiguration()
 	configuration.AddAppInfo(cfg.AppKey, cfg.AppSecret)
 	apiClient := apis.NewAPIClient(configuration)
 
-	// ======================================================
-	// =============== STEP 1: SEARCH PRODUCTS ===============
-	// ======================================================
+	// ======================================
+	// ============ SEARCH PRODUCT ===========
+	// ======================================
 
 	searchReq := apiClient.ProductV202502API.Product202502ProductsSearchPost(context.Background())
 	searchReq = searchReq.XTtsAccessToken(cfg.AccessToken)
@@ -68,114 +74,125 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// === IMPORTANT: GetData() → Convert to Map ===
-	data := searchResp.GetData()
+	// Convert TikTok response → Map
+	var root map[string]interface{}
+	bt, _ := json.Marshal(searchResp.GetData())
+	json.Unmarshal(bt, &root)
 
-	var dataMap map[string]interface{}
-	tmp, _ := json.Marshal(data)
-	json.Unmarshal(tmp, &dataMap)
-
-	// Extract "products" array
-	productsRaw, ok := dataMap["products"].([]interface{})
+	arr, ok := root["products"].([]interface{})
 	if !ok {
-		http.Error(w, "Products list not found in TikTok response", 500)
+		http.Error(w, "Products list not found", 500)
 		return
 	}
 
-	fmt.Println("Search returned products:", len(productsRaw))
+	results := []FixedProduct{}
 
-	// ======================================================
-	// ========== STEP 2: LOOP CALL GET /DETAILS API =========
-	// ======================================================
+	// ======================================
+	// ============= LOOP DETAIL =============
+	// ======================================
 
-	results := []ProductDetailResponse{}
+	for _, item := range arr {
 
-	for _, pr := range productsRaw {
+		pm := item.(map[string]interface{})
 
-		pm := pr.(map[string]interface{})
-
-		// ==========================================
-		// Ambil Product ID (lebih aman & fleksibel)
-		// ==========================================
-		productID := ""
-		if v, ok := pm["product_id"]; ok {
-			productID = fmt.Sprintf("%v", v)
-		}
-		if v, ok := pm["product_id_str"]; ok && fmt.Sprintf("%v", v) != "" {
-			productID = fmt.Sprintf("%v", v)
-		}
-		if productID == "" {
-			if v, ok := pm["id"]; ok {
-				productID = fmt.Sprintf("%v", v)
-			}
-		}
-
-		fmt.Println("Fetching detail V2 for product:", productID)
+		productID := fmt.Sprintf("%v", pm["id"])
+		fmt.Println("Fetching detail:", productID)
 
 		timestamp := time.Now().Unix()
 
-		// ==========================================
-		// ENDPOINT V2
-		// ==========================================
-		baseURL := fmt.Sprintf(
+		// Endpoint V2
+		base := fmt.Sprintf(
 			"https://open-api.tiktokglobalshop.com/product/202309/products/%s",
 			productID,
 		)
 
-		reqURL, _ := url.Parse(baseURL)
+		reqURL, _ := url.Parse(base)
 		q := reqURL.Query()
-
-		// sesuai cURL terbaru TikTok
 		q.Set("timestamp", fmt.Sprintf("%d", timestamp))
 		q.Set("app_key", cfg.AppKey)
 		q.Set("shop_cipher", cfg.Cipher)
 		q.Set("shop_id", cfg.ShopID)
 		q.Set("version", "202309")
-
 		reqURL.RawQuery = q.Encode()
 
 		req, _ := http.NewRequest("GET", reqURL.String(), nil)
-
-		// V2 WAJIB pakai access token di header
 		req.Header.Set("x-tts-access-token", cfg.AccessToken)
 		req.Header.Set("Content-Type", "application/json")
 
-		// SIGN • penting
+		// SIGN
 		sign := tiktok.CalSign(req, cfg.AppSecret)
 		q.Set("sign", sign)
 		reqURL.RawQuery = q.Encode()
 		req.URL = reqURL
 
-		fmt.Println("SIGNED V2 URL:", req.URL.String())
-
 		client := &http.Client{Timeout: 20 * time.Second}
 		resp, err := client.Do(req)
-
 		if err != nil {
-			results = append(results, ProductDetailResponse{
-				ProductID: productID,
-				Error:     err.Error(),
-			})
 			continue
 		}
 
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		fmt.Println("RAW RESPONSE:", string(raw))
+		// Parse detail
+		var detail map[string]interface{}
+		json.Unmarshal(raw, &detail)
 
-		results = append(results, ProductDetailResponse{
-			ProductID: productID,
-			Detail:    raw,
+		// ========== Extract fields ==========
+		data, _ := detail["data"].(map[string]interface{})
+
+		productName := fmt.Sprintf("%v", data["title"])
+
+		// SKUs
+		skuArr, _ := data["skus"].([]interface{})
+
+		listSKU := []FixedSKU{}
+
+		for _, s := range skuArr {
+			sm := s.(map[string]interface{})
+
+			priceMap := sm["price"].(map[string]interface{})
+			price := parseInt(priceMap["sale_price"])
+
+			stockList, _ := sm["inventory"].([]interface{})
+			stockQty := int64(0)
+			if len(stockList) > 0 {
+				stockQty = parseInt(stockList[0].(map[string]interface{})["quantity"])
+			}
+
+			skuName := fmt.Sprintf("%v", sm["seller_sku"])
+
+			listSKU = append(listSKU, FixedSKU{
+				SKUName:  skuName,
+				StockQty: stockQty,
+				Price:    price,
+				Subtotal: price * stockQty,
+			})
+		}
+
+		// Push
+		results = append(results, FixedProduct{
+			ProductID:   productID,
+			ProductName: productName,
+			SKUs:        listSKU,
 		})
 	}
 
-	// ======================================================
-	// =============== RETURN JSON KE FRONTEND ===============
-	// ======================================================
+	// Send JSON to frontend
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"items": results,
 	})
+}
 
+func parseInt(v interface{}) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case string:
+		var n int64
+		fmt.Sscan(x, &n)
+		return n
+	}
+	return 0
 }
