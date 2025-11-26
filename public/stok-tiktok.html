@@ -128,13 +128,13 @@
 
                             const variants = item.skus || [];
 
+                            // RENDER LIST DETAIL SKU
                             const varianHTML = variants.length > 0
                                 ? variants.map(v => {
-                                    const stok = v.stock_info?.stock_qty || 0;
-                                    const harga = v.price?.amount || 0;
+                                    const stok = v.stock_qty || 0;
+                                    const harga = v.price || 0;
                                     const sku_name = v.sku_name || "-";
-
-                                    const subtotal = stok * harga;
+                                    const subtotal = v.subtotal || 0;
 
                                     totalStok += stok;
                                     totalHarga += subtotal;
@@ -152,7 +152,7 @@
                                 <tr class="toggle-row" onclick="toggleChild(${i})">
                                     <td class="text-center">${i + 1}</td>
                                     <td>${item.product_name}</td>
-                                    <td>${variants.length > 0 ? variants[0].sku_name : "-"}</td>
+                                    <td>${variants.length > 0 ? variants[0].sku_name || "-" : "-"}</td>
                                     <td class="text-center">${totalStok}</td>
                                     <td class="text-end">Rp ${totalHarga.toLocaleString("id-ID")}</td>
                                 </tr>
