@@ -149,6 +149,30 @@ func tryGetMap(m map[string]interface{}, keys ...string) (interface{}, bool) {
 	return cur, true
 }
 
+// sanitizeForSKU makes a short safe SKU fragment from arbitrary string
+func sanitizeForSKU(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	// keep alnum and dash underscore
+	res := make([]rune, 0, len(s))
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			res = append(res, r)
+		} else if r == ' ' || r == '/' || r == '\\' || r == ',' {
+			res = append(res, '-')
+		}
+	}
+	out := string(res)
+	out = strings.Trim(out, "-")
+	if out == "" {
+		return "X"
+	}
+	// limit length
+	if len(out) > 30 {
+		out = out[:30]
+	}
+	return out
+}
+
 // ===== Handler utama =====
 func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -304,6 +328,21 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				modelSKU, _ := mMap["model_sku"].(string)
 				modelName, _ := mMap["model_name"].(string)
 
+				// optionally model_id if present
+				modelID := ""
+				if mid, ok := mMap["model_id"]; ok {
+					switch mm := mid.(type) {
+					case float64:
+						modelID = fmt.Sprintf("%.0f", mm)
+					case int:
+						modelID = fmt.Sprintf("%d", mm)
+					case int64:
+						modelID = fmt.Sprintf("%d", mm)
+					case string:
+						modelID = mm
+					}
+				}
+
 				// === Ambil harga dari array price_info ===
 				var price int64
 				if priceList, ok := mMap["price_info"].([]interface{}); ok && len(priceList) > 0 {
@@ -327,6 +366,14 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
+				// fallback stock common fields
+				if stock == 0 {
+					if v, ok := mMap["stock"]; ok {
+						if n, ok := parseNumber(v); ok {
+							stock = n
+						}
+					}
+				}
 
 				// ✅ Cetak ke CMD
 				fmt.Printf("   ➜ SKU: %s | Varian: %s | Harga: %s | Stok: %d\n",
@@ -334,6 +381,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 				models = append(models, map[string]interface{}{
 					"model_sku": modelSKU,
+					"model_id":  modelID,
 					"name":      modelName,
 					"price":     price,
 					"stock":     stock,
@@ -475,7 +523,8 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("📦 URL Get Item List:", url)
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
-	// ===== Helper Functions =====
+
+	// ===== Helper Functions / DB Sync (insert into product, models, + stock_master & sku_mapping) =====
 	for idx, bi := range baseItems {
 		fmt.Printf("\n🟡 [DEBUG] Base item index %d: %+v\n", idx, bi)
 
@@ -585,6 +634,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					modelSKU   string
 					modelPrice int64
 					modelStock int64
+					modelID    string
 				)
 
 				modelName, _ = m["name"].(string)
@@ -597,6 +647,20 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				if v, ok := parseNumber(m["stock"]); ok {
 					modelStock = v
+				}
+				if v, _ := m["model_id"].(string); v != "" {
+					modelID = v
+				} else if v2, ok := m["model_id"]; ok {
+					switch t := v2.(type) {
+					case float64:
+						modelID = fmt.Sprintf("%.0f", t)
+					case int:
+						modelID = fmt.Sprintf("%d", t)
+					case int64:
+						modelID = fmt.Sprintf("%d", t)
+					case string:
+						modelID = t
+					}
 				}
 
 				fmt.Printf("🟢 [MODEL] Menyimpan varian %s (SKU: %s) untuk item_id=%d\n", modelName, modelSKU, itemID)
@@ -622,6 +686,56 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				} else {
 					fmt.Printf("✅ Varian [%s] berhasil disimpan\n", modelName)
 				}
+
+				// === UPsert ke stock_master (internal sku generator) ===
+				// generate internal SKU: INT-<itemID>-<sanitized modelSKU or name>
+				var skuFragment string
+				if modelSKU != "" {
+					skuFragment = modelSKU
+				} else if modelName != "" {
+					skuFragment = modelName
+				} else {
+					skuFragment = fmt.Sprintf("M%d", time.Now().UnixNano())
+				}
+				internalSKU := fmt.Sprintf("INT-%d-%s", itemID, sanitizeForSKU(skuFragment))
+
+				// Insert/Update stock_master
+				_, err = conn.Exec(ctx, `
+					INSERT INTO stock_master (internal_sku, product_id_shopee, product_name, variant_name, stock_qty, updated_at, product_id_tiktok)
+					VALUES ($1,$2,$3,$4,$5,NOW(),$6)
+					ON CONFLICT (internal_sku) DO UPDATE SET
+						stock_qty = EXCLUDED.stock_qty,
+						product_name = EXCLUDED.product_name,
+						variant_name = EXCLUDED.variant_name,
+						product_id_shopee = EXCLUDED.product_id_shopee,
+						updated_at = NOW(),
+						product_id_tiktok = EXCLUDED.product_id_tiktok;
+				`, internalSKU, fmt.Sprintf("%d", itemID), itemName, modelName, modelStock, "")
+
+				if err != nil {
+					fmt.Printf("❌ Gagal upsert stock_master untuk internal_sku=%s : %v\n", internalSKU, err)
+				} else {
+					fmt.Printf("✅ stock_master upsert sukses internal_sku=%s stock=%d\n", internalSKU, modelStock)
+				}
+
+				// === UPsert ke sku_mapping ===
+				_, err = conn.Exec(ctx, `
+					INSERT INTO sku_mapping (internal_sku, tiktok_sku, shopee_sku, tiktok_product_id, shopee_item_id, shopee_model_id, updated_at)
+					VALUES ($1,$2,$3,$4,$5,$6,NOW())
+					ON CONFLICT (internal_sku) DO UPDATE SET
+						tiktok_sku = EXCLUDED.tiktok_sku,
+						shopee_sku = EXCLUDED.shopee_sku,
+						tiktok_product_id = EXCLUDED.tiktok_product_id,
+						shopee_item_id = EXCLUDED.shopee_item_id,
+						shopee_model_id = EXCLUDED.shopee_model_id,
+						updated_at = NOW();
+				`, internalSKU, "", modelSKU, "", fmt.Sprintf("%d", itemID), modelID)
+
+				if err != nil {
+					fmt.Printf("❌ Gagal upsert sku_mapping internal_sku=%s : %v\n", internalSKU, err)
+				} else {
+					fmt.Printf("✅ sku_mapping upsert sukses internal_sku=%s -> shopee_model_id=%s\n", internalSKU, modelID)
+				}
 			}
 
 			// === PRODUCT_IMAGE (GAMBAR) ===
@@ -631,16 +745,16 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				if imgList, ok := imgInfo["image_url_list"].([]interface{}); ok {
 					fmt.Printf("🟢 [IMAGE] Jumlah gambar: %d\n", len(imgList))
 					for _, img := range imgList {
-						if url, ok := img.(string); ok {
+						if urlStr, ok := img.(string); ok {
 							_, err := conn.Exec(ctx, `
 							 INSERT INTO product_image (item_id, image_url)
 							VALUES ($1, $2)
 							ON CONFLICT (item_id, image_url) DO NOTHING;
-						`, itemID, url)
+						`, itemID, urlStr)
 							if err != nil {
 								fmt.Printf("❌ Gagal insert gambar: %v\n", err)
 							} else {
-								fmt.Printf("✅ Gambar disimpan: %s\n", url)
+								fmt.Printf("✅ Gambar disimpan: %s\n", urlStr)
 							}
 						}
 					}
