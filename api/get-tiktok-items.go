@@ -229,7 +229,7 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 		results = append(results, product)
 
-		// === SAVE PER SKU (JALUR A) ===
+		// === SAVE PER SKU (JALUR As) ===
 		if dbConn != nil {
 			for _, sku := range listSKU {
 
