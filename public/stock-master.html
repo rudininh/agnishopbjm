@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Admin - Stock Master</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="./assets/style.css" />
+
+    <style>
+        body {
+            display: flex;
+            min-height: 100vh;
+            background-color: #f8f9fa;
+            margin: 0;
+        }
+
+        .main-content {
+            margin-left: 240px;
+            flex-grow: 1;
+            padding: 30px;
+        }
+
+        .card {
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .child-row {
+            background-color: #f9f9f9;
+            display: none;
+        }
+
+        .toggle-row {
+            cursor: pointer;
+        }
+
+        .toggle-row:hover {
+            background-color: #eaf2ff !important;
+        }
+
+        .status-ok {
+            color: #14a44d;
+            font-weight: bold;
+        }
+
+        .status-missing {
+            color: #dc3545;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="sidebar"></div>
+
+    <div class="main-content">
+        <div id="header"></div>
+
+        <div class="card p-4">
+            <h2 class="mb-3">📦 STOCK MASTER</h2>
+            <p>Data gabungan stok Shopee dan TikTok milik Anda.</p>
+
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5>Daftar Stok Master</h5>
+                <button id="btnLoad" class="btn btn-dark">📦 TAMPILKAN DATA</button>
+            </div>
+
+            <div class="table-responsive" style="max-height: 70vh;">
+                <table id="stockTable" class="table table-striped table-bordered align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th style="width: 50px;">No</th>
+                            <th>Internal SKU</th>
+                            <th>Nama Produk</th>
+                            <th>Varian</th>
+                            <th>Stok</th>
+                            <th>Shopee ID</th>
+                            <th>TikTok ID</th>
+                            <th>Status TikTok</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="footer"></div>
+    </div>
+
+    <script>
+        async function loadComponent(id, file) {
+            const res = await fetch(file);
+            const html = await res.text();
+            document.getElementById(id).innerHTML = html;
+        }
+
+        loadComponent('sidebar', './component/sidebar.html');
+        loadComponent('header', './component/header.html');
+        loadComponent('footer', './component/footer.html');
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const btn = document.getElementById("btnLoad");
+            const tbody = document.querySelector("#stockTable tbody");
+
+            btn.addEventListener("click", async () => {
+
+                btn.innerText = "⏳ Memuat data...";
+                btn.disabled = true;
+
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" class="text-center text-muted">Sedang memuat...</td>
+                    </tr>
+                `;
+
+                try {
+                    const res = await fetch("/api/stock-master");
+                    const data = await res.json();
+
+                    if (!data.items || data.items.length === 0) {
+                        tbody.innerHTML = `
+                            <tr>
+                                <td colspan="8" class="text-center text-muted">Tidak ada data ditemukan.</td>
+                            </tr>
+                        `;
+                    } else {
+                        let html = "";
+
+                        data.items.forEach((item, i) => {
+
+                            const tiktokStatus = (!item.product_id_tiktok || item.product_id_tiktok === "")
+                                ? `<span class="status-missing">❌ Missing</span>`
+                                : `<span class="status-ok">✔ OK</span>`;
+
+                            html += `
+                                <tr>
+                                    <td class="text-center">${i + 1}</td>
+                                    <td><b>${item.internal_sku}</b></td>
+                                    <td>${item.product_name || "-"}</td>
+                                    <td>${item.variant_name || "-"}</td>
+                                    <td class="text-center">${item.stock_qty}</td>
+                                    <td>${item.product_id_shopee || "-"}</td>
+                                    <td>${item.product_id_tiktok || "-"}</td>
+                                    <td>${tiktokStatus}</td>
+                                </tr>
+                            `;
+                        });
+
+                        tbody.innerHTML = html;
+                    }
+
+                } catch (err) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="8" class="text-danger text-center">❌ Gagal memuat data: ${err.message}</td>
+                        </tr>
+                    `;
+                }
+
+                btn.innerText = "📦 TAMPILKAN DATA";
+                btn.disabled = false;
+            });
+        });
+    </script>
+
+</body>
+
+</html>
