@@ -19,7 +19,7 @@ type StockMasterRow struct {
 	ProductName     string `json:"product_name"`
 	VariantName     string `json:"variant_name"`
 	StockQty        int64  `json:"stock_qty"`
-	UpdatedAt       string `json:"updated_at"`
+	UpdatedAt       string `json:"updated_at"` // string karena CAST::text
 }
 
 // =========================================
@@ -29,7 +29,6 @@ type StockMasterRow struct {
 func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
-
 	ctx := context.Background()
 
 	// OPEN DB CONNECTION
@@ -40,7 +39,7 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer db.Close(ctx)
 
-	// QUERY STOCK MASTER
+	// QUERY STOCK MASTER (updated_at dibuat text supaya aman discan ke string)
 	rows, err := db.Query(ctx, `
         SELECT 
             id,
@@ -50,7 +49,7 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
             product_name,
             variant_name,
             stock_qty,
-            updated_at
+            updated_at::text
         FROM stock_master
         ORDER BY product_name, variant_name
     `)
@@ -72,7 +71,7 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 			&row.ProductName,
 			&row.VariantName,
 			&row.StockQty,
-			&row.UpdatedAt,
+			&row.UpdatedAt, // aman karena sudah CAST::text
 		)
 		if err != nil {
 			fmt.Println("Scan error:", err)
