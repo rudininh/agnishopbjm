@@ -13,6 +13,8 @@ import (
 
 	"tiktokshop/open/sdk_golang/apis"
 	product_v202502 "tiktokshop/open/sdk_golang/models/product/v202502"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ===== Structs =====
@@ -24,11 +26,15 @@ type FixedProduct struct {
 }
 
 type FixedSKU struct {
-	SKUName  string `json:"sku_name"`
-	StockQty int64  `json:"stock_qty"`
-	Price    int64  `json:"price"`
-	Subtotal int64  `json:"subtotal"`
+	SKUName   string `json:"sku_name"`
+	StockQty  int64  `json:"stock_qty"`
+	Price     int64  `json:"price"`
+	Subtotal  int64  `json:"subtotal"`
+	TikTokSKU string `json:"tiktok_sku,omitempty"`
 }
+
+// NOTE: getDBConn(ctx) should be defined elsewhere in package (returns *pgx.Conn).
+// If not present, add your DB connection helper in this package. This code expects it.
 
 func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
@@ -52,11 +58,18 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 	apiClient := apis.NewAPIClient(configuration)
 
 	ctx := context.Background()
+
+	// open DB connection (expect getDBConn exists in package)
+	var dbConn *pgx.Conn
 	dbConn, dbErr := getDBConn(ctx)
 	if dbErr != nil {
+		// If DB not available, we continue but skip DB updates.
 		fmt.Println("⚠️ DB connection disabled:", dbErr)
+		dbConn = nil
 	} else {
-		defer dbConn.Close(ctx)
+		defer func() {
+			_ = dbConn.Close(ctx)
+		}()
 	}
 
 	// ===== SEARCH PRODUCT =====
@@ -83,7 +96,7 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var root map[string]interface{}
 	bt, _ := json.Marshal(searchResp.GetData())
-	json.Unmarshal(bt, &root)
+	_ = json.Unmarshal(bt, &root)
 
 	arr, ok := root["products"].([]interface{})
 	if !ok {
@@ -158,34 +171,50 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 		skuArr, _ := data["skus"].([]interface{})
 		listSKU := []FixedSKU{}
+
 		for _, s := range skuArr {
 			sm, ok := s.(map[string]interface{})
 			if !ok {
 				continue
 			}
 
-			// variant name
-			skuName := ""
+			// Get tiktok SKU id if present
+			tiktokSKU := ""
+			if v, ok := sm["id"]; ok {
+				tiktokSKU = fmt.Sprintf("%v", v)
+			} else if v, ok := sm["sku_id"]; ok {
+				tiktokSKU = fmt.Sprintf("%v", v)
+			} else if v, ok := sm["seller_sku"]; ok {
+				tiktokSKU = fmt.Sprintf("%v", v)
+			}
+
+			// variant name from sales_attributes (preferred)
+			variantName := ""
 			if attrs, ok := sm["sales_attributes"].([]interface{}); ok {
 				var names []string
 				for _, a := range attrs {
 					if amap, ok := a.(map[string]interface{}); ok {
 						if v, ok := amap["value_name"].(string); ok && v != "" {
 							names = append(names, v)
+						} else if v, ok := amap["original_value_name"].(string); ok && v != "" {
+							names = append(names, v)
 						}
 					}
 				}
 				if len(names) > 0 {
-					skuName = strings.Join(names, " / ")
+					variantName = strings.Join(names, " / ")
 				}
 			}
-			if skuName == "" {
+			// fallback names
+			if variantName == "" {
 				if v, ok := sm["seller_sku"].(string); ok && v != "" {
-					skuName = v
+					variantName = v
 				} else if v, ok := sm["sku_name"].(string); ok && v != "" {
-					skuName = v
+					variantName = v
+				} else if v, ok := sm["name"].(string); ok && v != "" {
+					variantName = v
 				} else {
-					skuName = "Default Variant"
+					variantName = "Default Variant"
 				}
 			}
 
@@ -212,13 +241,69 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			listSKU = append(listSKU, FixedSKU{
-				SKUName:  skuName,
-				StockQty: stockQty,
-				Price:    price,
-				Subtotal: price * stockQty,
-			})
-		}
+			// Build FixedSKU and append
+			fsku := FixedSKU{
+				SKUName:   variantName,
+				StockQty:  stockQty,
+				Price:     price,
+				Subtotal:  price * stockQty,
+				TikTokSKU: tiktokSKU,
+			}
+			listSKU = append(listSKU, fsku)
+
+			// ---- Option A logic: exact-match update only ----
+			if dbConn != nil {
+				// 1) Find existing internal SKU in stock_master by exact product_name + variant_name
+				var internalSKU string
+				err := dbConn.QueryRow(ctx, `
+					SELECT internal_sku
+					FROM stock_master
+					WHERE product_name = $1 AND variant_name = $2
+					LIMIT 1
+				`, productName, variantName).Scan(&internalSKU)
+
+				if err != nil {
+					// No row found or other error -> do not insert anything (Option A)
+					if err == pgx.ErrNoRows {
+						// exact match not found -> skip update
+						fmt.Printf("⏭️ exact match not found for product='%s' variant='%s' -> skipping DB update\n", productName, variantName)
+					} else {
+						fmt.Printf("⚠️ error querying stock_master for product='%s' variant='%s' : %v\n", productName, variantName, err)
+					}
+					// continue to next SKU (no DB write)
+				} else {
+					// found internalSKU -> update stock_master
+					ct, err := dbConn.Exec(ctx, `
+						UPDATE stock_master
+						SET product_id_tiktok = $1, stock_qty = $2, updated_at = NOW()
+						WHERE internal_sku = $3
+					`, productID, stockQty, internalSKU)
+
+					if err != nil {
+						fmt.Printf("❌ stock_master UPDATE error internal_sku=%s : %v\n", internalSKU, err)
+					} else {
+						fmt.Printf("✅ stock_master updated internal_sku=%s stock=%d (RowsAffected=%d)\n", internalSKU, stockQty, ct.RowsAffected())
+					}
+
+					// Update sku_mapping only if mapping row exists (no insert)
+					ct2, err2 := dbConn.Exec(ctx, `
+						UPDATE sku_mapping
+						SET tiktok_sku = $1, tiktok_product_id = $2, updated_at = NOW()
+						WHERE internal_sku = $3
+					`, tiktokSKU, productID, internalSKU)
+					if err2 != nil {
+						fmt.Printf("⚠️ sku_mapping UPDATE error internal_sku=%s : %v\n", internalSKU, err2)
+					} else {
+						if ct2.RowsAffected() == 0 {
+							// mapping row doesn't exist -> as Option A we DO NOT INSERT
+							fmt.Printf("⏭️ sku_mapping row not found for internal_sku=%s -> skipping insert (Option A)\n", internalSKU)
+						} else {
+							fmt.Printf("✅ sku_mapping updated internal_sku=%s (tiktok_sku=%s)\n", internalSKU, tiktokSKU)
+						}
+					}
+				}
+			}
+		} // end for each sku
 
 		product := FixedProduct{
 			ProductID:   productID,
@@ -226,43 +311,20 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 			SKUs:        listSKU,
 			Raw:         data,
 		}
-
 		results = append(results, product)
 
-		// === SAVE PER SKU (JALUR As) ===
-		if dbConn != nil {
-			for _, sku := range listSKU {
-
-				_, err := dbConn.Exec(ctx, `
-            INSERT INTO tiktok_products
-                (product_id, product_name, sku_name, stock_qty, price, subtotal, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,NOW())
-            ON CONFLICT (product_id, sku_name)
-            DO UPDATE SET
-                product_name = EXCLUDED.product_name,
-                stock_qty   = EXCLUDED.stock_qty,
-                price       = EXCLUDED.price,
-                subtotal    = EXCLUDED.subtotal,
-                updated_at  = NOW()
-        `, productID, productName, sku.SKUName, sku.StockQty, sku.Price, sku.Subtotal)
-
-				if err != nil {
-					fmt.Printf("❌ DB insert failed product %s / SKU %s: %v\n", productID, sku.SKUName, err)
-				} else {
-					fmt.Printf("✅ DB saved product %s / SKU %s\n", productID, sku.SKUName)
-				}
-			}
-		}
-
+		// small delay to avoid rate limit
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	// Send JSON to frontend
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"items": results,
 	})
 }
 
+// parseInt reads a few possible types and returns int64
 func parseInt(v interface{}) int64 {
 	if v == nil {
 		return 0
@@ -288,6 +350,7 @@ func parseInt(v interface{}) int64 {
 		var n int64
 		fmt.Sscan(x, &n)
 		return n
+	default:
+		return 0
 	}
-	return 0
 }
