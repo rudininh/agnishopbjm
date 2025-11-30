@@ -117,7 +117,7 @@
                 `;
 
                 try {
-                    const res = await fetch("/api/stock-master");
+                    const res = await fetch("/api/get-stock-master");
                     const data = await res.json();
 
                     if (!data.items || data.items.length === 0) {
