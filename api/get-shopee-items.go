@@ -668,7 +668,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				_, err := conn.Exec(ctx, `
 		INSERT INTO product_model (item_id, name, price, stock, sku, status)
 		VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
-		ON CONFLICT (item_id, sku) DO UPDATE
+		ON CONFLICT (item_id, name) DO UPDATE
 		SET price = EXCLUDED.price,
 			stock = EXCLUDED.stock,
 			name = EXCLUDED.name,
