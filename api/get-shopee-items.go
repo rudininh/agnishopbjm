@@ -742,49 +742,61 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			// ========== PRODUCT IMAGE ============
 			// =====================================
 
-			fmt.Printf("🟡 [DEBUG] Mengecek gambar & atribut untuk item_id=%d\n", itemID)
+			fmt.Printf("🟡 [DEBUG] Processing images for item_id=%d\n", itemID)
 
 			// =============================================================
-			// 1) SIMPAN GAMBAR PRODUK (MAIN IMAGES) dari image.image_url_list
+			// 1) MAIN IMAGE (model_id = NULL)
 			// =============================================================
 			if imgInfo, ok := bimap["image"].(map[string]interface{}); ok {
 				if imgList, ok := imgInfo["image_url_list"].([]interface{}); ok {
-					fmt.Printf("🟢 [IMAGE] Jumlah gambar utama: %d\n", len(imgList))
 					for _, img := range imgList {
 						if urlStr, ok := img.(string); ok {
+
+							// UPSERT: jika sudah ada -> update timestamp
 							_, err := conn.Exec(ctx, `
-                    INSERT INTO product_image (item_id, model_id, image_url)
-                    VALUES ($1, NULL, $2)
-                    ON CONFLICT (item_id, model_id, image_url) DO NOTHING;
+                    INSERT INTO product_image (item_id, model_id, image_url, updated_at)
+                    VALUES ($1, NULL, $2, NOW())
+                    ON CONFLICT (item_id, model_id, image_url)
+                    DO UPDATE SET updated_at = NOW();
                 `, itemID, urlStr)
+
 							if err != nil {
-								fmt.Printf("❌ Gagal insert gambar utama: %v\n", err)
+								fmt.Printf("❌ gagal upsert MAIN image: %v\n", err)
 							} else {
-								fmt.Printf("✅ Gambar utama disimpan: %s\n", urlStr)
+								fmt.Printf("✅ MAIN IMAGE UPSERT: %s\n", urlStr)
 							}
 						}
 					}
 				}
 			}
 
-			// =============================================================
-			// 2) BUILD VARIATION IMAGE MAP
-			// =============================================================
-			variationImageMap := make(map[string]string)
+			// -------------------------------------------------------------
+			// 2) GET MODEL LIST for this item
+			// -------------------------------------------------------------
+			modelResRaw, ok := modelLookup[itemID]
+			if !ok {
+				fmt.Printf("⚠️ Model list TIDAK ditemukan untuk item_id=%d\n", itemID)
+			}
 
-			// ---- 2A: tier_variation.option_list.image.image_url ----
-			if tiers, ok := bimap["tier_variation"].([]interface{}); ok {
-				for _, t := range tiers {
-					tier, _ := t.(map[string]interface{})
-					if optList, ok := tier["option_list"].([]interface{}); ok {
-						for _, optRaw := range optList {
-							opt, _ := optRaw.(map[string]interface{})
-							optionName := strings.TrimSpace(fmt.Sprintf("%v", opt["option"]))
+			// -------------------------------------------------------------
+			// 3) BUILD VARIATION IMAGE MAP
+			// -------------------------------------------------------------
+			variationImageMap := make(map[string]string)
+			fmt.Println("🔧 Building variationImageMap ...")
+
+			// A) tier_variation
+			if tvList, ok := bimap["tier_variation"].([]interface{}); ok {
+				for _, tvR := range tvList {
+					tv := tvR.(map[string]interface{})
+					if optList, ok := tv["option_list"].([]interface{}); ok {
+						for _, optR := range optList {
+							opt := optR.(map[string]interface{})
+							name := strings.TrimSpace(fmt.Sprintf("%v", opt["option"]))
 
 							if imgObj, ok := opt["image"].(map[string]interface{}); ok {
-								if urlStr, ok := imgObj["image_url"].(string); ok && urlStr != "" {
-									variationImageMap[optionName] = urlStr
-									fmt.Printf("🟢 [VARIANT-IMAGE] Mapping opsi '%s' → %s\n", optionName, urlStr)
+								if imgURL, ok := imgObj["image_url"].(string); ok {
+									variationImageMap[name] = imgURL
+									fmt.Printf("🟢 Mapped variant %s → %s\n", name, imgURL)
 								}
 							}
 						}
@@ -792,63 +804,61 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// ---- 2B: standardise_tier_variation.variation_option_list.image_url ----
-			if stdTV, ok := bimap["standardise_tier_variation"].([]interface{}); ok {
-				for _, vRaw := range stdTV {
-					v, _ := vRaw.(map[string]interface{})
-					if optList, ok := v["variation_option_list"].([]interface{}); ok {
-						for _, optRaw := range optList {
-							opt, _ := optRaw.(map[string]interface{})
-							optionName := strings.TrimSpace(fmt.Sprintf("%v", opt["variation_option_name"]))
-							if urlStr, ok := opt["image_url"].(string); ok && urlStr != "" {
-								variationImageMap[optionName] = urlStr
-								fmt.Printf("🟢 [STD-VARIANT-IMAGE] Mapping opsi '%s' → %s\n", optionName, urlStr)
+			// B) standardise_tier_variation
+			if stvList, ok := bimap["standardise_tier_variation"].([]interface{}); ok {
+				for _, stR := range stvList {
+					st := stR.(map[string]interface{})
+					if optList, ok := st["variation_option_list"].([]interface{}); ok {
+						for _, optR := range optList {
+							opt := optR.(map[string]interface{})
+							name := strings.TrimSpace(fmt.Sprintf("%v", opt["variation_option_name"]))
+							if imgURL, ok := opt["image_url"].(string); ok {
+								variationImageMap[name] = imgURL
+								fmt.Printf("🟢 STD mapped %s → %s\n", name, imgURL)
 							}
 						}
 					}
 				}
 			}
 
-			fmt.Printf("🟡 Total gambar varian terdeteksi: %d mapping\n", len(variationImageMap))
+			fmt.Printf("🟢 Final VariationImageMap = %+v\n", variationImageMap)
 
-			// =============================================================
-			// 3) SIMPAN GAMBAR VARIAN BERDASARKAN MODEL
-			// =============================================================
-			if models, ok := bimap["model"].([]interface{}); ok {
+			// -------------------------------------------------------------
+			// 4) SIMPAN MODEL IMAGE
+			// -------------------------------------------------------------
+			fmt.Println("🎨 Saving MODEL images ...")
 
-				for _, mRaw := range models {
-					m, _ := mRaw.(map[string]interface{})
-					modelID := int64(m["model_id"].(float64))
+			for _, mdl := range modelResRaw {
+				modelName := strings.TrimSpace(fmt.Sprintf("%v", mdl["name"]))
+				modelIDStr := strings.TrimSpace(fmt.Sprintf("%v", mdl["model_id"]))
 
-					// model_name seperti "Merah,Biru"
-					modelName := fmt.Sprintf("%v", m["model_name"])
-					modelParts := strings.Split(modelName, ",")
+				// Skip model tanpa model_id valid
+				if modelIDStr == "" || modelIDStr == "0" {
+					fmt.Printf("⚠️ Model '%s' punya model_id INVALID, skip\n", modelName)
+					continue
+				}
 
-					fmt.Printf("🔍 [MODEL] model_id=%d model_name=%s\n", modelID, modelName)
+				imgURL, ok := variationImageMap[modelName]
+				if !ok {
+					fmt.Printf("⚠️ Model '%s' tidak punya gambar varian\n", modelName)
+					continue
+				}
 
-					for _, part := range modelParts {
-						key := strings.TrimSpace(part)
+				_, err := conn.Exec(ctx, `
+        INSERT INTO product_image (item_id, model_id, image_url, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (item_id, model_id, image_url)
+        DO UPDATE SET updated_at = NOW();
+    `, itemID, modelIDStr, imgURL)
 
-						if imgURL, ok := variationImageMap[key]; ok {
-							_, err := conn.Exec(ctx, `
-                    INSERT INTO product_image (item_id, model_id, image_url)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (item_id, model_id, image_url) DO NOTHING;
-                `, itemID, modelID, imgURL)
-
-							if err != nil {
-								fmt.Printf("❌ Gagal insert gambar varian: %v\n", err)
-							} else {
-								fmt.Printf("✅ [MODEL-IMAGE] model_id=%d → %s\n", modelID, imgURL)
-							}
-						} else {
-							fmt.Printf("⚠️ [MODEL-IMAGE] Tidak ada image untuk opsi '%s'\n", key)
-						}
-					}
+				if err != nil {
+					fmt.Printf("❌ Gagal upsert MODEL image model_id=%s error=%v\n", modelIDStr, err)
+				} else {
+					fmt.Printf("✅ MODEL IMAGE UPSERT model_id=%s url=%s\n", modelIDStr, imgURL)
 				}
 			}
 
-			fmt.Printf("🟢 Selesai memproses seluruh gambar untuk item_id=%d\n", itemID)
+			fmt.Printf("🟢 DONE saving images for item_id=%d\n", itemID)
 
 			// === PRODUCT_ATTRIBUTE (ATRIBUT) ===
 			if attrs, ok := bimap["attribute_list"].([]interface{}); ok {
