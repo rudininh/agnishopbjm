@@ -812,7 +812,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("🟡 Total gambar varian terdeteksi: %d mapping\n", len(variationImageMap))
 
 			// =============================================================
-			// 3) SIMPAN GAMBAR VARIAN BERDASARKAN MODEL
+			// 3) SIMPAN GAMBAR VARIAN BERDASARKAN MODELs
 			// =============================================================
 			if models, ok := bimap["model"].([]interface{}); ok {
 
