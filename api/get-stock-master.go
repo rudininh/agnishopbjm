@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,11 +20,13 @@ type StockMasterRow struct {
 	ProductName     string `json:"product_name"`
 	VariantName     string `json:"variant_name"`
 	StockQty        int64  `json:"stock_qty"`
-	UpdatedAt       string `json:"updated_at"` // string karena CAST::text
+	TikTokSKU       string `json:"tiktok_sku"`
+	StatusTikTok    string `json:"status_tiktok"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 // =========================================
-//  HANDLER: /api/stock-master
+//  HANDLER: /api/get-stock-master
 // =========================================
 
 func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
@@ -39,19 +42,35 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer db.Close(ctx)
 
-	// QUERY STOCK MASTER (updated_at dibuat text supaya aman discan ke string)
+	// ============================================================
+	// SQL: JOIN Shopee stock_master dengan TikTok (FULL MATCHING)
+	// ============================================================
 	rows, err := db.Query(ctx, `
         SELECT 
-            id,
-            internal_sku,
-            product_id_shopee,
-            product_id_tiktok,
-            product_name,
-            variant_name,
-            stock_qty,
-            updated_at::text
-        FROM stock_master
-        ORDER BY product_name, variant_name
+            sm.id,
+            sm.internal_sku,
+            sm.product_id_shopee,
+            sm.product_id_tiktok,
+            sm.product_name,
+            sm.variant_name,
+            sm.stock_qty,
+            sm.updated_at::text,
+
+            tp.product_name AS tiktok_product_name,
+            tp.sku_name AS tiktok_variant_name,
+
+            CASE
+                WHEN tp.product_name IS NOT NULL AND tp.sku_name IS NOT NULL THEN 'MATCH'
+                WHEN tp.product_name IS NOT NULL AND tp.sku_name IS NULL THEN 'VARIANT MISSING'
+                WHEN tp.product_name IS NULL THEN 'PRODUCT MISSING'
+                ELSE 'UNKNOWN'
+            END AS status_tiktok
+
+        FROM stock_master sm
+        LEFT JOIN tiktok_products tp
+            ON LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+           AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+        ORDER BY sm.product_name, sm.variant_name
     `)
 
 	if err != nil {
@@ -62,7 +81,12 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	list := []StockMasterRow{}
 
 	for rows.Next() {
+
 		var row StockMasterRow
+		var tiktokProductName sql.NullString
+		var tiktokVariantName sql.NullString
+		var statusTikTok sql.NullString
+
 		err := rows.Scan(
 			&row.ID,
 			&row.InternalSKU,
@@ -71,17 +95,25 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 			&row.ProductName,
 			&row.VariantName,
 			&row.StockQty,
-			&row.UpdatedAt, // aman karena sudah CAST::text
+			&row.UpdatedAt,
+
+			&tiktokProductName,
+			&tiktokVariantName,
+			&statusTikTok,
 		)
+
 		if err != nil {
 			fmt.Println("Scan error:", err)
 			continue
 		}
 
+		// ASSIGN NULL-SAFE VALUES
+		row.TikTokSKU = tiktokVariantName.String
+		row.StatusTikTok = statusTikTok.String
+
 		list = append(list, row)
 	}
 
-	// SEND JSON
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"items": list,
 	})
