@@ -88,15 +88,10 @@ func parseNumber(v interface{}) (int64, bool) {
 }
 
 // rupiahFromMicros attempts to convert a "micros" price to rupiah integer.
-// Many Shopee fields store price in micros (e.g., 123450000 -> Rp 1,234,500).
-// We'll try dividing by 100000 (common) and also fallback to other heuristics.
 func rupiahFromMicros(m int64) int64 {
-	// guard: if micros looks huge, divide; otherwise return as-is
-	// Common conversion factor from Shopee: price in micros (1e5) -> divide by 100000
 	if m == 0 {
 		return 0
 	}
-	// If number length > 6, divide
 	abs := m
 	if abs < 0 {
 		abs = -abs
@@ -104,7 +99,6 @@ func rupiahFromMicros(m int64) int64 {
 	if abs > 1000000 {
 		return m / 100000
 	}
-	// small numbers: maybe already in rupiah
 	return m
 }
 
@@ -152,7 +146,6 @@ func tryGetMap(m map[string]interface{}, keys ...string) (interface{}, bool) {
 // sanitizeForSKU makes a short safe SKU fragment from arbitrary string
 func sanitizeForSKU(s string) string {
 	s = strings.ToUpper(strings.TrimSpace(s))
-	// keep alnum and dash underscore
 	res := make([]rune, 0, len(s))
 	for _, r := range s {
 		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -166,11 +159,54 @@ func sanitizeForSKU(s string) string {
 	if out == "" {
 		return "X"
 	}
-	// limit length
 	if len(out) > 30 {
 		out = out[:30]
 	}
 	return out
+}
+
+// parseModelIDToInt64 tries to parse model_id stored as interface/string/number into int64.
+// returns value and ok.
+func parseModelIDToInt64(v interface{}) (int64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	// if it's a string representation
+	switch t := v.(type) {
+	case string:
+		if t == "" {
+			return 0, false
+		}
+		// try int
+		if i, err := strconv.ParseInt(t, 10, 64); err == nil {
+			return i, true
+		}
+		// try float
+		if f, err := strconv.ParseFloat(t, 64); err == nil {
+			return int64(f), true
+		}
+		return 0, false
+	case float64:
+		return int64(t), true
+	case float32:
+		return int64(t), true
+	case int:
+		return int64(t), true
+	case int64:
+		return t, true
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return i, true
+		}
+		if f, err := t.Float64(); err == nil {
+			return int64(f), true
+		}
+		return 0, false
+	default:
+		// fallback to fmt.Sprintf then parse
+		s := fmt.Sprintf("%v", v)
+		return parseNumber(s)
+	}
 }
 
 // ===== Handler utama =====
@@ -214,9 +250,9 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item list: %v"}`, err), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
-
 	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
 	var listRes map[string]interface{}
 	if err := json.Unmarshal(body, &listRes); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal parsing item list: %v","raw":%q}`, err, string(body)), http.StatusInternalServerError)
@@ -226,7 +262,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	// ambil item_id list
 	itemListRaw, ok := tryGetMap(listRes, "response", "item")
 	if !ok {
-		// fallback: kalau struktur lain
 		itemListRaw, _ = listRes["response"]
 	}
 	itemsArray, ok := itemListRaw.([]interface{})
@@ -271,9 +306,9 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal ambil item base info: %v"}`, err), http.StatusInternalServerError)
 		return
 	}
-	defer resp2.Body.Close()
-
 	body2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+
 	var baseInfo map[string]interface{}
 	if err := json.Unmarshal(body2, &baseInfo); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"Gagal parse base info: %v","raw":%q}`, err, string(body2)), http.StatusInternalServerError)
@@ -293,7 +328,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			path3, partnerID, token.ShopID, timestamp3, token.AccessToken, sign3, id,
 		)
 
-		// ✅ Cetak URL di CMD
+		// Cetak URL di CMD
 		fmt.Println("🔍 URL Get Item Model:", url3)
 
 		resp3, err := http.Get(url3)
@@ -318,7 +353,8 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 		modelArr, ok := responseData["model"].([]interface{})
 		if !ok {
-			fmt.Println("⚠️ Tidak ada array 'model' pada response:", string(body3))
+			// tidak ada model array, lanjut
+			modelLookup[id] = []map[string]interface{}{}
 			continue
 		}
 
@@ -328,7 +364,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				modelSKU, _ := mMap["model_sku"].(string)
 				modelName, _ := mMap["model_name"].(string)
 
-				// optionally model_id if present
 				modelID := ""
 				if mid, ok := mMap["model_id"]; ok {
 					switch mm := mid.(type) {
@@ -340,10 +375,12 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 						modelID = fmt.Sprintf("%d", mm)
 					case string:
 						modelID = mm
+					default:
+						modelID = fmt.Sprintf("%v", mm)
 					}
 				}
 
-				// === Ambil harga dari array price_info ===
+				// Ambil harga dari array price_info
 				var price int64
 				if priceList, ok := mMap["price_info"].([]interface{}); ok && len(priceList) > 0 {
 					if pInfo, ok := priceList[0].(map[string]interface{}); ok {
@@ -355,7 +392,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// === Ambil stok dari stock_info_v2.summary_info.total_available_stock ===
+				// Ambil stok
 				var stock int64
 				if stockV2, ok := mMap["stock_info_v2"].(map[string]interface{}); ok {
 					if summary, ok := stockV2["summary_info"].(map[string]interface{}); ok {
@@ -366,7 +403,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
-				// fallback stock common fields
 				if stock == 0 {
 					if v, ok := mMap["stock"]; ok {
 						if n, ok := parseNumber(v); ok {
@@ -375,7 +411,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// ✅ Cetak ke CMD
 				fmt.Printf("   ➜ SKU: %s | Varian: %s | Harga: %s | Stok: %d\n",
 					modelSKU, modelName, formatRupiah(price), stock)
 
@@ -400,7 +435,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			baseItems = arr
 		}
 	}
-	// fallback: kadang bernama "item_list" di root response differently
 	if baseItems == nil {
 		if v, ok := baseInfo["response"]; ok {
 			if rv, ok := v.(map[string]interface{}); ok {
@@ -416,7 +450,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// === Siapkan hasil akhir ===
+	// === Siapkan hasil akhir untuk response ke browser ===
 	finalItems := []map[string]interface{}{}
 
 	for idx, bi := range baseItems {
@@ -427,25 +461,21 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 		var stockInt int64
 
 		if bimap, ok := bi.(map[string]interface{}); ok {
-			// nama produk
 			if v, ok := bimap["item_name"]; ok {
 				if s, ok := v.(string); ok {
 					itemName = s
 				}
 			}
-			// item_id
 			if v, ok := bimap["item_id"]; ok {
 				if id, ok := parseNumber(v); ok {
 					itemID = id
 				}
 			}
-			// SKU produk
 			if v, ok := bimap["item_sku"]; ok {
 				if s, ok := v.(string); ok {
 					baseSku = s
 				}
 			}
-			// harga utama
 			if pi, ok := bimap["price_info"].(map[string]interface{}); ok {
 				if cp, ok := pi["current_price"]; ok {
 					if n, ok := parseNumber(cp); ok {
@@ -460,7 +490,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// fallback jika ada top-level "price"
 			if priceInt == 0 {
 				if pv, ok := bimap["price"]; ok {
 					if n, ok := parseNumber(pv); ok {
@@ -468,7 +497,6 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// stok utama
 			if si, ok := bimap["stock_info"].(map[string]interface{}); ok {
 				if ns, ok := si["normal_stock"]; ok {
 					if n, ok := parseNumber(ns); ok {
@@ -485,30 +513,26 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Ambil daftar varian (model)
 		var variants []map[string]interface{}
 		if models, ok := modelLookup[itemID]; ok {
 			variants = models
 		}
 
-		// Cetak ke CMD untuk debugging
 		fmt.Printf("📦 Produk: %s | SKU: %s | Harga: %s | Stok: %d | Jumlah Varian: %d\n",
 			itemName, baseSku, formatRupiah(priceInt), stockInt, len(variants))
 
-		// Format harga ke string
 		hargaStr := ""
 		if priceInt != 0 {
 			hargaStr = formatRupiah(priceInt)
 		}
 
-		// Simpan hasil ke array final
 		item := map[string]interface{}{
 			"no":     idx + 1,
 			"nama":   itemName,
 			"sku":    baseSku,
 			"stok":   stockInt,
 			"harga":  hargaStr,
-			"models": variants, // ✅ tambahkan varian ke JSON
+			"models": variants,
 		}
 
 		finalItems = append(finalItems, item)
@@ -524,7 +548,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("📦 URL Get Item List:", url)
 	fmt.Println("🧾 URL Get Item Base Info:", url2)
 
-	// ===== Helper Functions / DB Sync (insert into shopee_product, models, + stock_master & sku_mapping) =====
+	// ===== Sinkronisasi DB (shopee_product, shopee_product_model, stock_master, sku_mapping, shopee_product_image) =====
 	for idx, bi := range baseItems {
 		fmt.Printf("\n🟡 [DEBUG] Base item index %d: %+v\n", idx, bi)
 
@@ -572,7 +596,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				rating = v
 			}
 
-			// === INSERT KE TABEL PRODUCT ===
+			// INSERT / UPDATE shopee_product
 			fmt.Printf("🟢 [PRODUCT] Inserting item_id=%d, name=%s\n", itemID, itemName)
 			_, err := conn.Exec(ctx, `
 			INSERT INTO shopee_product (
@@ -610,17 +634,45 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				historicalSold, status,
 			)
 			if err != nil {
-				fmt.Printf("❌ Gagal insert ke product item_id=%d: %v\n", itemID, err)
+				fmt.Printf("❌ Gagal insert ke shopee_product item_id=%d: %v\n", itemID, err)
 			} else {
-				fmt.Printf("✅ Sukses insert ke product item_id=%d\n", itemID)
+				fmt.Printf("✅ Sukses insert ke shopee_product item_id=%d\n", itemID)
 			}
-			// === SHOPEE_PRODUCT_MODEL (VARIAN) ===
-			models, ok := modelLookup[itemID]
-			if !ok || len(models) == 0 {
+
+			// models dari modelLookup (hasil get_model_list)
+			models, _ := modelLookup[itemID]
+			// fallback: jika tidak ada, periksa bimap["models"] (lama)
+			if len(models) == 0 {
 				if mlist, ok := bimap["models"].([]interface{}); ok {
 					for _, mm := range mlist {
 						if mmap, ok := mm.(map[string]interface{}); ok {
-							models = append(models, mmap)
+							// normalisasi keys supaya structure sama seperti modelLookup entry
+							modelSKU, _ := mmap["model_sku"].(string)
+							modelName, _ := mmap["model_name"].(string)
+							modelID := ""
+							if v, ok := mmap["model_id"]; ok {
+								switch t := v.(type) {
+								case float64:
+									modelID = fmt.Sprintf("%.0f", t)
+								case int:
+									modelID = fmt.Sprintf("%d", t)
+								case int64:
+									modelID = fmt.Sprintf("%d", t)
+								case string:
+									modelID = t
+								default:
+									modelID = fmt.Sprintf("%v", t)
+								}
+							}
+							price, _ := parseNumber(mmap["price"])
+							stockVar, _ := parseNumber(mmap["stock"])
+							models = append(models, map[string]interface{}{
+								"model_sku": modelSKU,
+								"model_id":  modelID,
+								"name":      modelName,
+								"price":     rupiahFromMicros(price),
+								"stock":     stockVar,
+							})
 						}
 					}
 				}
@@ -635,34 +687,38 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					modelSKU   string
 				)
 
-				modelName, _ = m["name"].(string)
-				if modelName == "" {
-					modelName, _ = m["model_name"].(string)
+				// normalize read
+				if v, ok := m["name"].(string); ok {
+					modelName = v
+				}
+				if v, ok := m["model_sku"].(string); ok {
+					modelSKU = v
+				}
+				// model_id already stored as string in modelLookup
+				if v, ok := m["model_id"].(string); ok {
+					modelID = v
+				} else if v, ok := m["model_id"]; ok {
+					modelID = fmt.Sprintf("%v", v)
 				}
 
-				modelSKU, _ = m["model_sku"].(string)
-
-				// model_id
-				if v, _ := m["model_id"].(string); v != "" {
-					modelID = v
-				} else if v2, ok := m["model_id"]; ok {
-					switch t := v2.(type) {
-					case float64:
-						modelID = fmt.Sprintf("%.0f", t)
-					case int:
-						modelID = fmt.Sprintf("%d", t)
-					case int64:
-						modelID = fmt.Sprintf("%d", t)
-					case string:
-						modelID = t
+				if v, ok := m["price"].(int64); ok {
+					modelPrice = v
+				} else if v, ok := m["price"].(float64); ok {
+					modelPrice = int64(v)
+				} else if v, ok := m["price"]; ok {
+					if n, ok := parseNumber(v); ok {
+						modelPrice = rupiahFromMicros(n)
 					}
 				}
 
-				if v, ok := parseNumber(m["price"]); ok {
-					modelPrice = rupiahFromMicros(v)
-				}
-				if v, ok := parseNumber(m["stock"]); ok {
+				if v, ok := m["stock"].(int64); ok {
 					modelStock = v
+				} else if v, ok := m["stock"].(float64); ok {
+					modelStock = int64(v)
+				} else if v, ok := m["stock"]; ok {
+					if n, ok := parseNumber(v); ok {
+						modelStock = n
+					}
 				}
 
 				fmt.Printf("🟢 [VARIAN] Simpan varian %s (model_id=%s) item_id=%d\n", modelName, modelID, itemID)
@@ -683,7 +739,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 					fmt.Printf("❌ Gagal insert varian: %v\n", err)
 				}
 
-				// === INTERNAL SKU (PER VARIAN) ===
+				// internal SKU per varian
 				skuFragment := modelSKU
 				if skuFragment == "" {
 					skuFragment = modelName
@@ -719,22 +775,20 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// =====================================
-			// ========== PRODUCT IMAGE ============
+			// ========== PRODUCT IMAGE (SHOPEE) ============
 			// =====================================
 
 			fmt.Printf("🟡 [DEBUG] Mengecek gambar & atribut untuk item_id=%d\n", itemID)
 
-			// =============================================================
-			// 1) SIMPAN GAMBAR PRODUK (MAIN IMAGES) dari image.image_url_list
-			// =============================================================
+			// 1) Simpan gambar utama (image.image_url_list) -> model_id NULL
 			if imgInfo, ok := bimap["image"].(map[string]interface{}); ok {
 				if imgList, ok := imgInfo["image_url_list"].([]interface{}); ok {
 					fmt.Printf("🟢 [IMAGE] Jumlah gambar utama: %d\n", len(imgList))
 					for _, img := range imgList {
 						if urlStr, ok := img.(string); ok {
 							_, err := conn.Exec(ctx, `
-                    INSERT INTO shopee_product_image (item_id, model_id, image_url)
-                    VALUES ($1, NULL, $2)
+                    INSERT INTO shopee_product_image (item_id, model_id, image_url, created_at)
+                    VALUES ($1, NULL, $2, NOW())
                     ON CONFLICT (item_id, model_id, image_url) DO NOTHING;
                 `, itemID, urlStr)
 							if err != nil {
@@ -747,24 +801,23 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// =============================================================
-			// 2) BUILD VARIATION IMAGE MAP
-			// =============================================================
+			// 2) Build variation image map from available fields in baseInfo (tier_variation / standardise_tier_variation).
+			// Note: sometimes these exist in model API, sometimes in base info. We'll try both places gracefully.
 			variationImageMap := make(map[string]string)
 
-			// ---- 2A: tier_variation.option_list.image.image_url ----
+			// a) from base item (bimap) tier_variation.option_list.image.image_url
 			if tiers, ok := bimap["tier_variation"].([]interface{}); ok {
 				for _, t := range tiers {
-					tier, _ := t.(map[string]interface{})
-					if optList, ok := tier["option_list"].([]interface{}); ok {
-						for _, optRaw := range optList {
-							opt, _ := optRaw.(map[string]interface{})
-							optionName := strings.TrimSpace(fmt.Sprintf("%v", opt["option"]))
-
-							if imgObj, ok := opt["image"].(map[string]interface{}); ok {
-								if urlStr, ok := imgObj["image_url"].(string); ok && urlStr != "" {
-									variationImageMap[optionName] = urlStr
-									fmt.Printf("🟢 [VARIANT-IMAGE] Mapping opsi '%s' → %s\n", optionName, urlStr)
+					if tier, _ := t.(map[string]interface{}); tier != nil {
+						if optList, ok := tier["option_list"].([]interface{}); ok {
+							for _, optRaw := range optList {
+								if opt, _ := optRaw.(map[string]interface{}); opt != nil {
+									optionName := strings.TrimSpace(fmt.Sprintf("%v", opt["option"]))
+									if imgObj, ok := opt["image"].(map[string]interface{}); ok {
+										if urlStr, ok := imgObj["image_url"].(string); ok && urlStr != "" {
+											variationImageMap[optionName] = urlStr
+										}
+									}
 								}
 							}
 						}
@@ -772,57 +825,85 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// ---- 2B: standardise_tier_variation.variation_option_list.image_url ----
+			// b) from base item standardise_tier_variation.variation_option_list.image_url
 			if stdTV, ok := bimap["standardise_tier_variation"].([]interface{}); ok {
 				for _, vRaw := range stdTV {
-					v, _ := vRaw.(map[string]interface{})
-					if optList, ok := v["variation_option_list"].([]interface{}); ok {
-						for _, optRaw := range optList {
-							opt, _ := optRaw.(map[string]interface{})
-							optionName := strings.TrimSpace(fmt.Sprintf("%v", opt["variation_option_name"]))
-							if urlStr, ok := opt["image_url"].(string); ok && urlStr != "" {
-								variationImageMap[optionName] = urlStr
-								fmt.Printf("🟢 [STD-VARIANT-IMAGE] Mapping opsi '%s' → %s\n", optionName, urlStr)
+					if v, _ := vRaw.(map[string]interface{}); v != nil {
+						if optList, ok := v["variation_option_list"].([]interface{}); ok {
+							for _, optRaw := range optList {
+								if opt, _ := optRaw.(map[string]interface{}); opt != nil {
+									optionName := strings.TrimSpace(fmt.Sprintf("%v", opt["variation_option_name"]))
+									if urlStr, ok := opt["image_url"].(string); ok && urlStr != "" {
+										variationImageMap[optionName] = urlStr
+									}
+								}
 							}
 						}
 					}
 				}
 			}
 
-			fmt.Printf("🟡 Total gambar varian terdeteksi: %d mapping\n", len(variationImageMap))
+			// Additionally, try to get variation images from model list response if present there (we used modelLookup earlier)
+			// modelLookup may contain only model entries but not option-image mapping, however some responses include image URLs inside model entries -> attempt that
+			if modelsFromLookup, ok := modelLookup[itemID]; ok {
+				for _, mm := range modelsFromLookup {
+					// mm may contain "name" which matches variation option (e.g., "Merah")
+					nameKey := fmt.Sprintf("%v", mm["name"])
+					// sometimes model entry contains image info like "image" or "image_url" (rare) - try to pick it
+					if img, ok := mm["image"]; ok {
+						if imgStr, ok := img.(string); ok && imgStr != "" {
+							variationImageMap[nameKey] = imgStr
+						}
+					}
+				}
+			}
 
-			// =============================================================
-			// 3) SIMPAN GAMBAR VARIAN BERDASARKAN MODELs
-			// =============================================================
-			if models, ok := bimap["model"].([]interface{}); ok {
+			// 3) Simpan gambar varian berdasarkan modelLookup (jangan pakai bimap["model"] langsung)
+			if modelsFromLookup, ok := modelLookup[itemID]; ok {
+				for _, mm := range modelsFromLookup {
+					// model id biasanya string in modelLookup
+					modelIDRaw := mm["model_id"]
+					modelNameKey := fmt.Sprintf("%v", mm["name"])
+					// parse model id to int64 if possible
+					modelIDNum, okID := parseModelIDToInt64(modelIDRaw)
+					// find matching image by variation name
+					imgURL, okImg := variationImageMap[modelNameKey]
+					if !okImg {
+						// try alternative keys: sometimes option uses uppercase/lowercase differences
+						imgURL, okImg = variationImageMap[strings.TrimSpace(modelNameKey)]
+						if !okImg {
+							imgURL, okImg = variationImageMap[strings.ToLower(strings.TrimSpace(modelNameKey))]
+						}
+					}
+					if !okImg {
+						// no image for this option: skip but log
+						fmt.Printf("⚠️ [MODEL-IMAGE] Tidak ada image untuk opsi '%s' (item_id=%d)\n", modelNameKey, itemID)
+						continue
+					}
 
-				for _, mRaw := range models {
-					m, _ := mRaw.(map[string]interface{})
-					modelID := int64(m["model_id"].(float64))
-
-					// model_name seperti "Merah,Biru"
-					modelName := fmt.Sprintf("%v", m["model_name"])
-					modelParts := strings.Split(modelName, ",")
-
-					fmt.Printf("🔍 [MODEL] model_id=%d model_name=%s\n", modelID, modelName)
-
-					for _, part := range modelParts {
-						key := strings.TrimSpace(part)
-
-						if imgURL, ok := variationImageMap[key]; ok {
-							_, err := conn.Exec(ctx, `
-                    INSERT INTO shopee_product_image (item_id, model_id, image_url)
-                    VALUES ($1, $2, $3)
+					// insert: use model_id when available, otherwise NULL
+					if okID {
+						_, err := conn.Exec(ctx, `
+                    INSERT INTO shopee_product_image (item_id, model_id, image_url, created_at)
+                    VALUES ($1, $2, $3, NOW())
                     ON CONFLICT (item_id, model_id, image_url) DO NOTHING;
-                `, itemID, modelID, imgURL)
-
-							if err != nil {
-								fmt.Printf("❌ Gagal insert gambar varian: %v\n", err)
-							} else {
-								fmt.Printf("✅ [MODEL-IMAGE] model_id=%d → %s\n", modelID, imgURL)
-							}
+                `, itemID, modelIDNum, imgURL)
+						if err != nil {
+							fmt.Printf("❌ Gagal insert gambar varian (model_id=%d): %v\n", modelIDNum, err)
 						} else {
-							fmt.Printf("⚠️ [MODEL-IMAGE] Tidak ada image untuk opsi '%s'\n", key)
+							fmt.Printf("✅ [MODEL-IMAGE] model_id=%d → %s\n", modelIDNum, imgURL)
+						}
+					} else {
+						// model_id tidak tersedia / tidak parseable -> simpan dengan NULL model_id but record image and maybe include model name in another column (not present here), so just save with NULL
+						_, err := conn.Exec(ctx, `
+                    INSERT INTO shopee_product_image (item_id, model_id, image_url, created_at)
+                    VALUES ($1, NULL, $2, NOW())
+                    ON CONFLICT (item_id, model_id, image_url) DO NOTHING;
+                `, itemID, imgURL)
+						if err != nil {
+							fmt.Printf("❌ Gagal insert gambar varian (no model_id): %v\n", err)
+						} else {
+							fmt.Printf("✅ [MODEL-IMAGE] (no model_id) %s\n", imgURL)
 						}
 					}
 				}
