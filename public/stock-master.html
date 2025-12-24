@@ -41,15 +41,35 @@
             position: sticky;
             top: 0;
             background-color: #212529 !important;
-            /* warna header BS5 */
             color: white;
             z-index: 10;
         }
 
-        /* agar border tidak hilang */
         table {
             border-collapse: separate;
             border-spacing: 0;
+        }
+
+        .summary-card {
+            border-radius: 10px;
+            padding: 16px;
+            color: white;
+        }
+
+        .bg-match {
+            background-color: #198754;
+        }
+
+        .bg-variant {
+            background-color: #fd7e14;
+        }
+
+        .bg-missing {
+            background-color: #dc3545;
+        }
+
+        .bg-total {
+            background-color: #0d6efd;
         }
     </style>
 </head>
@@ -64,6 +84,35 @@
         <div class="card p-4">
             <h2>📦 STOCK MASTER</h2>
             <p>Perbandingan stok Shopee & TikTok berdasarkan internal SKU.</p>
+
+            <!-- ================= SUMMARY ================= -->
+            <div class="row mb-4" id="summaryRow" style="display:none;">
+                <div class="col-md-3 mb-2">
+                    <div class="summary-card bg-match text-center">
+                        <div>✔ MATCH</div>
+                        <h3 id="sumMatch">0</h3>
+                    </div>
+                </div>
+                <div class="col-md-3 mb-2">
+                    <div class="summary-card bg-variant text-center">
+                        <div>⚠ VARIANT MISSING</div>
+                        <h3 id="sumVariant">0</h3>
+                    </div>
+                </div>
+                <div class="col-md-3 mb-2">
+                    <div class="summary-card bg-missing text-center">
+                        <div>❌ PRODUCT MISSING</div>
+                        <h3 id="sumMissing">0</h3>
+                    </div>
+                </div>
+                <div class="col-md-3 mb-2">
+                    <div class="summary-card bg-total text-center">
+                        <div>📦 TOTAL DATA</div>
+                        <h3 id="sumTotal">0</h3>
+                    </div>
+                </div>
+            </div>
+            <!-- ================= END SUMMARY ================= -->
 
             <button id="btnLoad" class="btn btn-dark mb-3">📦 TAMPILKAN DATA</button>
 
@@ -117,6 +166,16 @@
                     const res = await fetch("/api/get-stock-master");
                     const data = await res.json();
 
+                    // ================= SUMMARY =================
+                    if (data.summary) {
+                        document.getElementById("sumMatch").innerText = data.summary.total_match;
+                        document.getElementById("sumVariant").innerText = data.summary.total_variant_missing;
+                        document.getElementById("sumMissing").innerText = data.summary.total_product_missing;
+                        document.getElementById("sumTotal").innerText = data.summary.total_all;
+                        document.getElementById("summaryRow").style.display = "flex";
+                    }
+
+                    // ================= TABLE =================
                     if (!data.items || data.items.length === 0) {
                         tbody.innerHTML = `
                             <tr><td colspan="8" class="text-center">Tidak ada data.</td></tr>
