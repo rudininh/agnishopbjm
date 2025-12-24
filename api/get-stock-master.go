@@ -9,7 +9,7 @@ import (
 )
 
 // =========================================
-//  STRUCT RESPONSE
+// STRUCT RESPONSE
 // =========================================
 
 type StockMasterRow struct {
@@ -33,7 +33,7 @@ type StockMasterSummary struct {
 }
 
 // =========================================
-//  HANDLER: /api/get-stock-master
+// HANDLER
 // =========================================
 
 func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
@@ -41,28 +41,50 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ctx := context.Background()
 
-	// OPEN DB CONNECTION
 	db, err := getDBConn(ctx)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer db.Close(ctx)
 
 	// ============================================================
-	// 1️⃣ SUMMARY COUNTER
+	// 1️⃣ SUMMARY (ANTI DUPLIKASI — PALING PENTING)
 	// ============================================================
 	var summary StockMasterSummary
 
 	err = db.QueryRow(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE tp.product_name IS NOT NULL AND tp.sku_name IS NOT NULL) AS total_match,
-			COUNT(*) FILTER (WHERE tp.product_name IS NOT NULL AND tp.sku_name IS NULL)     AS total_variant_missing,
-			COUNT(*) FILTER (WHERE tp.product_name IS NULL)                                 AS total_product_missing,
-			COUNT(*)                                                                        AS total_all
+			COUNT(*) FILTER (
+				WHERE EXISTS (
+					SELECT 1 FROM tiktok_products tp
+					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+					  AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+				)
+			) AS total_match,
+
+			COUNT(*) FILTER (
+				WHERE EXISTS (
+					SELECT 1 FROM tiktok_products tp
+					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM tiktok_products tp
+					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+					  AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+				)
+			) AS total_variant_missing,
+
+			COUNT(*) FILTER (
+				WHERE NOT EXISTS (
+					SELECT 1 FROM tiktok_products tp
+					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+				)
+			) AS total_product_missing,
+
+			COUNT(*) AS total_all
+
 		FROM stock_master sm
-		LEFT JOIN tiktok_products tp
-			ON LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
 	`).Scan(
 		&summary.TotalMatch,
 		&summary.TotalVariantMissing,
@@ -71,7 +93,7 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Gagal ambil summary: %v"}`, err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Summary error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -79,7 +101,7 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	// 2️⃣ DATA LIST (MATCH DI ATAS)
 	// ============================================================
 	rows, err := db.Query(ctx, `
-		SELECT 
+		SELECT
 			sm.id,
 			sm.internal_sku,
 			sm.product_id_shopee,
@@ -92,17 +114,21 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 			tp.sku_name AS tiktok_sku,
 
 			CASE
-				WHEN tp.product_name IS NOT NULL AND tp.sku_name IS NOT NULL THEN 'MATCH'
-				WHEN tp.product_name IS NOT NULL AND tp.sku_name IS NULL THEN 'VARIANT MISSING'
-				WHEN tp.product_name IS NULL THEN 'PRODUCT MISSING'
-				ELSE 'UNKNOWN'
+				WHEN tp.sku_name IS NOT NULL THEN 'MATCH'
+				WHEN EXISTS (
+					SELECT 1 FROM tiktok_products tpx
+					WHERE LOWER(TRIM(tpx.product_name)) = LOWER(TRIM(sm.product_name))
+				) THEN 'VARIANT MISSING'
+				ELSE 'PRODUCT MISSING'
 			END AS status_tiktok,
 
 			CASE
-				WHEN tp.product_name IS NOT NULL AND tp.sku_name IS NOT NULL THEN 1
-				WHEN tp.product_name IS NOT NULL AND tp.sku_name IS NULL THEN 2
-				WHEN tp.product_name IS NULL THEN 3
-				ELSE 4
+				WHEN tp.sku_name IS NOT NULL THEN 1
+				WHEN EXISTS (
+					SELECT 1 FROM tiktok_products tpx
+					WHERE LOWER(TRIM(tpx.product_name)) = LOWER(TRIM(sm.product_name))
+				) THEN 2
+				ELSE 3
 			END AS status_order
 
 		FROM stock_master sm
@@ -110,26 +136,20 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 			ON LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
 		   AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
 
-		ORDER BY
-			status_order,
-			sm.product_name,
-			sm.variant_name
+		ORDER BY status_order, sm.product_name, sm.variant_name
 	`)
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Gagal query data: %v"}`, err), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	list := []StockMasterRow{}
+	items := []StockMasterRow{}
 
 	for rows.Next() {
-
 		var row StockMasterRow
 		var tiktokSKU sql.NullString
-		var statusTikTok string
-		var statusOrder int
 
 		err := rows.Scan(
 			&row.ID,
@@ -140,10 +160,9 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 			&row.VariantName,
 			&row.StockQty,
 			&row.UpdatedAt,
-
 			&tiktokSKU,
-			&statusTikTok,
-			&statusOrder,
+			&row.StatusTikTok,
+			new(int),
 		)
 
 		if err != nil {
@@ -152,16 +171,14 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		row.TikTokSKU = tiktokSKU.String
-		row.StatusTikTok = statusTikTok
-
-		list = append(list, row)
+		items = append(items, row)
 	}
 
 	// ============================================================
-	// 3️⃣ RESPONSE FINAL
+	// 3️⃣ RESPONSE
 	// ============================================================
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"summary": summary,
-		"items":   list,
+		"items":   items,
 	})
 }
