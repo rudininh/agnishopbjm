@@ -192,4 +192,41 @@
                                 statusHTML = `<span class="status-ok">✔ MATCH</span>`;
                             } else if (item.status_tiktok === "VARIANT MISSING") {
                                 statusHTML = `<span class="status-warning">⚠ VARIANT MISSING</span>`;
-                            } else
+                            } else {
+                                statusHTML = `<span class="status-missing">❌ PRODUCT MISSING</span>`;
+                            }
+
+                            html += `
+                                <tr>
+                                    <td>${i + 1}</td>
+                                    <td>${item.product_name}</td>
+                                    <td>${item.variant_name}</td>
+                                    <td class="text-center">${item.stock_shopee}</td>
+                                    <td class="text-center">${item.stock_tiktok}</td>
+                                    <td>${statusHTML}</td>
+                                </tr>
+                            `;
+                        });
+
+                        tbody.innerHTML = html;
+                    }
+
+                } catch (err) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-danger text-center">
+                                Gagal memuat data: ${err.message}
+                            </td>
+                        </tr>
+                    `;
+                }
+
+                btn.innerText = "📦 TAMPILKAN DATA";
+                btn.disabled = false;
+            });
+        });
+    </script>
+
+</body>
+
+</html>
