@@ -22,21 +22,6 @@
             padding: 30px;
         }
 
-        .status-ok {
-            color: #14a44d;
-            font-weight: bold;
-        }
-
-        .status-warning {
-            color: #e67e22;
-            font-weight: bold;
-        }
-
-        .status-missing {
-            color: #dc3545;
-            font-weight: bold;
-        }
-
         thead.table-dark th {
             position: sticky;
             top: 0;
@@ -48,6 +33,21 @@
         table {
             border-collapse: separate;
             border-spacing: 0;
+        }
+
+        .status-ok {
+            color: #198754;
+            font-weight: bold;
+        }
+
+        .status-warning {
+            color: #fd7e14;
+            font-weight: bold;
+        }
+
+        .status-missing {
+            color: #dc3545;
+            font-weight: bold;
         }
 
         .summary-card {
@@ -83,7 +83,7 @@
 
         <div class="card p-4">
             <h2>📦 STOCK MASTER</h2>
-            <p>Perbandingan stok Shopee & TikTok berdasarkan internal SKU.</p>
+            <p>Perbandingan stok Shopee & TikTok berdasarkan varian produk.</p>
 
             <!-- ================= SUMMARY ================= -->
             <div class="row mb-4" id="summaryRow" style="display:none;">
@@ -121,12 +121,10 @@
                     <thead class="table-dark">
                         <tr>
                             <th>No</th>
-                            <th>Internal SKU</th>
                             <th>Nama Produk</th>
                             <th>Varian</th>
-                            <th>Stok</th>
-                            <th>Shopee ID</th>
-                            <th>TikTok SKU</th>
+                            <th class="text-center">Stok Shopee</th>
+                            <th class="text-center">Stok TikTok</th>
                             <th>Status TikTok</th>
                         </tr>
                     </thead>
@@ -159,7 +157,9 @@
                 btn.disabled = true;
 
                 tbody.innerHTML = `
-                    <tr><td colspan="8" class="text-center">Memuat...</td></tr>
+                    <tr>
+                        <td colspan="6" class="text-center">Memuat...</td>
+                    </tr>
                 `;
 
                 try {
@@ -178,7 +178,9 @@
                     // ================= TABLE =================
                     if (!data.items || data.items.length === 0) {
                         tbody.innerHTML = `
-                            <tr><td colspan="8" class="text-center">Tidak ada data.</td></tr>
+                            <tr>
+                                <td colspan="6" class="text-center">Tidak ada data.</td>
+                            </tr>
                         `;
                     } else {
                         let html = "";
@@ -190,39 +192,4 @@
                                 statusHTML = `<span class="status-ok">✔ MATCH</span>`;
                             } else if (item.status_tiktok === "VARIANT MISSING") {
                                 statusHTML = `<span class="status-warning">⚠ VARIANT MISSING</span>`;
-                            } else {
-                                statusHTML = `<span class="status-missing">❌ PRODUCT MISSING</span>`;
-                            }
-
-                            html += `
-                                <tr>
-                                    <td>${i + 1}</td>
-                                    <td><b>${item.internal_sku}</b></td>
-                                    <td>${item.product_name}</td>
-                                    <td>${item.variant_name}</td>
-                                    <td class="text-center">${item.stock_qty}</td>
-                                    <td>${item.product_id_shopee || "-"}</td>
-                                    <td>${item.tiktok_sku || "-"}</td>
-                                    <td>${statusHTML}</td>
-                                </tr>
-                            `;
-                        });
-
-                        tbody.innerHTML = html;
-                    }
-
-                } catch (err) {
-                    tbody.innerHTML = `
-                        <tr><td colspan="8" class="text-danger text-center">Gagal memuat data: ${err.message}</td></tr>
-                    `;
-                }
-
-                btn.innerText = "📦 TAMPILKAN DATA";
-                btn.disabled = false;
-            });
-        });
-    </script>
-
-</body>
-
-</html>
+                            } else
