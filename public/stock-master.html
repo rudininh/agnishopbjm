@@ -30,26 +30,6 @@
             z-index: 10;
         }
 
-        table {
-            border-collapse: separate;
-            border-spacing: 0;
-        }
-
-        .status-ok {
-            color: #198754;
-            font-weight: bold;
-        }
-
-        .status-warning {
-            color: #fd7e14;
-            font-weight: bold;
-        }
-
-        .status-missing {
-            color: #dc3545;
-            font-weight: bold;
-        }
-
         .summary-card {
             border-radius: 10px;
             padding: 16px;
@@ -70,6 +50,30 @@
 
         .bg-total {
             background-color: #0d6efd;
+        }
+
+        .bg-stock-diff {
+            background-color: #6f42c1;
+        }
+
+        .status-ok {
+            color: #198754;
+            font-weight: bold;
+        }
+
+        .status-warning {
+            color: #fd7e14;
+            font-weight: bold;
+        }
+
+        .status-missing {
+            color: #dc3545;
+            font-weight: bold;
+        }
+
+        /* 🔴 Highlight stok mismatch */
+        .row-stock-mismatch {
+            background-color: #fff3f3 !important;
         }
     </style>
 </head>
@@ -106,15 +110,25 @@
                     </div>
                 </div>
                 <div class="col-md-3 mb-2">
-                    <div class="summary-card bg-total text-center">
-                        <div>📦 TOTAL DATA</div>
-                        <h3 id="sumTotal">0</h3>
+                    <div class="summary-card bg-stock-diff text-center">
+                        <div>🔴 STOK TIDAK SAMA</div>
+                        <h3 id="sumStockDiff">0</h3>
                     </div>
                 </div>
             </div>
             <!-- ================= END SUMMARY ================= -->
 
-            <button id="btnLoad" class="btn btn-dark mb-3">📦 TAMPILKAN DATA</button>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <button id="btnLoad" class="btn btn-dark">📦 TAMPILKAN DATA</button>
+
+                <!-- 🔍 FILTER -->
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="filterMismatch">
+                    <label class="form-check-label fw-bold">
+                        🔍 Tampilkan hanya stok tidak sama
+                    </label>
+                </div>
+            </div>
 
             <div class="table-responsive" style="max-height: 70vh;">
                 <table id="stockTable" class="table table-striped table-bordered align-middle">
@@ -149,69 +163,87 @@
         loadComponent('footer', './component/footer.html');
 
         document.addEventListener("DOMContentLoaded", () => {
+
             const btn = document.getElementById("btnLoad");
             const tbody = document.querySelector("#stockTable tbody");
+            const filterMismatch = document.getElementById("filterMismatch");
+
+            let cachedItems = [];
+
+            function renderTable() {
+                tbody.innerHTML = "";
+                let stockDiffCount = 0;
+                let index = 1;
+
+                cachedItems.forEach(item => {
+
+                    const isMismatch = item.stock_shopee !== item.stock_tiktok;
+                    if (filterMismatch.checked && !isMismatch) return;
+
+                    if (isMismatch) stockDiffCount++;
+
+                    const statusVarian = item.status_tiktok === "MATCH"
+                        ? `<span class="status-ok">✔ VARIAN MATCH</span>`
+                        : item.status_tiktok === "VARIANT MISSING"
+                            ? `<span class="status-warning">⚠ VARIANT MISSING</span>`
+                            : `<span class="status-missing">❌ PRODUCT MISSING</span>`;
+
+                    const statusStok = isMismatch
+                        ? `<span class="status-missing">✖ STOK TIDAK SAMA</span>`
+                        : `<span class="status-ok">✔ STOK SAMA</span>`;
+
+                    tbody.innerHTML += `
+                    <tr class="${isMismatch ? 'row-stock-mismatch' : ''}">
+                        <td>${index++}</td>
+                        <td>${item.product_name}</td>
+                        <td>${item.variant_name}</td>
+                        <td class="text-center">${item.stock_shopee}</td>
+                        <td class="text-center">${item.stock_tiktok}</td>
+                        <td>${statusVarian}</td>
+                        <td>${statusStok}</td>
+                    </tr>
+                `;
+                });
+
+                document.getElementById("sumStockDiff").innerText = stockDiffCount;
+            }
 
             btn.addEventListener("click", async () => {
-
-                btn.innerText = "⏳ Memuat data...";
                 btn.disabled = true;
-
-                tbody.innerHTML = `
-                <tr>
-                    <td colspan="7" class="text-center">Memuat...</td>
-                </tr>
-            `;
+                btn.innerText = "⏳ Memuat data...";
 
                 try {
                     const res = await fetch("/api/get-stock-master");
                     const data = await res.json();
 
-                    // ================= SUMMARY =================
-                    if (data.summary) {
-                        sumMatch.innerText = data.summary.total_match;
-                        sumVariant.innerText = data.summary.total_variant_missing;
-                        sumMissing.innerText = data.summary.total_product_missing;
-                        sumTotal.innerText = data.summary.total_all;
-                        summaryRow.style.display = "flex";
-                    }
+                    cachedItems = data.items || [];
 
-                    // ================= TABLE =================
-                    if (!data.items || data.items.length === 0) {
-                        tbody.innerHTML = `
-                        <tr>
-                            <td colspan="7" class="text-center">Tidak ada data.</td>
-                        </tr>
-                    `;
-                    } else {
-                        let html = "";
+                    document.getElementById("sumMatch").innerText = data.summary.total_match;
+                    document.getElementById("sumVariant").innerText = data.summary.total_variant_missing;
+                    document.getElementById("sumMissing").innerText = data.summary.total_product_missing;
 
-                        data.items.forEach((item, i) => {
+                    document.getElementById("summaryRow").style.display = "flex";
 
-                            // ===== STATUS VARIAN =====
-                            let statusVarian = "";
-                            if (item.status_tiktok === "MATCH") {
-                                statusVarian = `<span class="status-ok">✔ VARIAN MATCH</span>`;
-                            } else if (item.status_tiktok === "VARIANT MISSING") {
-                                statusVarian = `<span class="status-warning">⚠ VARIANT MISSING</span>`;
-                            } else {
-                                statusVarian = `<span class="status-missing">❌ PRODUCT MISSING</span>`;
-                            }
+                    renderTable();
 
-                            // ===== STATUS STOK =====
-                            let statusStok = "";
-                            if (item.stock_shopee === item.stock_tiktok) {
-                                statusStok = `<span class="status-ok">✔ STOK SAMA</span>`;
-                            } else {
-                                statusStok = `<span class="status-missing">✖ STOK TIDAK SAMA</span>`;
-                            }
+                } catch (err) {
+                    tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="text-danger text-center">
+                            Gagal memuat data: ${err.message}
+                        </td>
+                    </tr>
+                `;
+                }
 
-                            html += `
-                            <tr>
-                                <td>${i + 1}</td>
-                                <td>${item.product_name}</td>
-                                <td>${item.variant_name}</td>
-                                <td class="text-center">${item.stock_shopee}</td>
-                                <td class="text-center">${item.stock_tiktok}</td>
-                                <td>${statusVarian}</td>
-                                <td>${statusStok}</td>
+                btn.disabled = false;
+                btn.innerText = "📦 TAMPILKAN DATA";
+            });
+
+            filterMismatch.addEventListener("change", renderTable);
+        });
+    </script>
+
+</body>
+
+</html>
