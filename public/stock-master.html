@@ -89,7 +89,7 @@
             <div class="row mb-4" id="summaryRow" style="display:none;">
                 <div class="col-md-3 mb-2">
                     <div class="summary-card bg-match text-center">
-                        <div>✔ MATCH</div>
+                        <div>✔ VARIAN MATCH</div>
                         <h3 id="sumMatch">0</h3>
                     </div>
                 </div>
@@ -125,7 +125,8 @@
                             <th>Varian</th>
                             <th class="text-center">Stok Shopee</th>
                             <th class="text-center">Stok TikTok</th>
-                            <th>Status TikTok</th>
+                            <th>Status Varian</th>
+                            <th>Status Stok</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -157,10 +158,10 @@
                 btn.disabled = true;
 
                 tbody.innerHTML = `
-                    <tr>
-                        <td colspan="6" class="text-center">Memuat...</td>
-                    </tr>
-                `;
+                <tr>
+                    <td colspan="7" class="text-center">Memuat...</td>
+                </tr>
+            `;
 
                 try {
                     const res = await fetch("/api/get-stock-master");
@@ -168,65 +169,49 @@
 
                     // ================= SUMMARY =================
                     if (data.summary) {
-                        document.getElementById("sumMatch").innerText = data.summary.total_match;
-                        document.getElementById("sumVariant").innerText = data.summary.total_variant_missing;
-                        document.getElementById("sumMissing").innerText = data.summary.total_product_missing;
-                        document.getElementById("sumTotal").innerText = data.summary.total_all;
-                        document.getElementById("summaryRow").style.display = "flex";
+                        sumMatch.innerText = data.summary.total_match;
+                        sumVariant.innerText = data.summary.total_variant_missing;
+                        sumMissing.innerText = data.summary.total_product_missing;
+                        sumTotal.innerText = data.summary.total_all;
+                        summaryRow.style.display = "flex";
                     }
 
                     // ================= TABLE =================
                     if (!data.items || data.items.length === 0) {
                         tbody.innerHTML = `
-                            <tr>
-                                <td colspan="6" class="text-center">Tidak ada data.</td>
-                            </tr>
-                        `;
+                        <tr>
+                            <td colspan="7" class="text-center">Tidak ada data.</td>
+                        </tr>
+                    `;
                     } else {
                         let html = "";
 
                         data.items.forEach((item, i) => {
 
-                            let statusHTML = "";
+                            // ===== STATUS VARIAN =====
+                            let statusVarian = "";
                             if (item.status_tiktok === "MATCH") {
-                                statusHTML = `<span class="status-ok">✔ MATCH</span>`;
+                                statusVarian = `<span class="status-ok">✔ VARIAN MATCH</span>`;
                             } else if (item.status_tiktok === "VARIANT MISSING") {
-                                statusHTML = `<span class="status-warning">⚠ VARIANT MISSING</span>`;
+                                statusVarian = `<span class="status-warning">⚠ VARIANT MISSING</span>`;
                             } else {
-                                statusHTML = `<span class="status-missing">❌ PRODUCT MISSING</span>`;
+                                statusVarian = `<span class="status-missing">❌ PRODUCT MISSING</span>`;
+                            }
+
+                            // ===== STATUS STOK =====
+                            let statusStok = "";
+                            if (item.stock_shopee === item.stock_tiktok) {
+                                statusStok = `<span class="status-ok">✔ STOK SAMA</span>`;
+                            } else {
+                                statusStok = `<span class="status-missing">✖ STOK TIDAK SAMA</span>`;
                             }
 
                             html += `
-                                <tr>
-                                    <td>${i + 1}</td>
-                                    <td>${item.product_name}</td>
-                                    <td>${item.variant_name}</td>
-                                    <td class="text-center">${item.stock_shopee}</td>
-                                    <td class="text-center">${item.stock_tiktok}</td>
-                                    <td>${statusHTML}</td>
-                                </tr>
-                            `;
-                        });
-
-                        tbody.innerHTML = html;
-                    }
-
-                } catch (err) {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="6" class="text-danger text-center">
-                                Gagal memuat data: ${err.message}
-                            </td>
-                        </tr>
-                    `;
-                }
-
-                btn.innerText = "📦 TAMPILKAN DATA";
-                btn.disabled = false;
-            });
-        });
-    </script>
-
-</body>
-
-</html>
+                            <tr>
+                                <td>${i + 1}</td>
+                                <td>${item.product_name}</td>
+                                <td>${item.variant_name}</td>
+                                <td class="text-center">${item.stock_shopee}</td>
+                                <td class="text-center">${item.stock_tiktok}</td>
+                                <td>${statusVarian}</td>
+                                <td>${statusStok}</td>
