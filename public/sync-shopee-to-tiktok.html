@@ -7,7 +7,6 @@
     <title>Sync Shopee → TikTok</title>
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <link rel="stylesheet" href="./assets/style.css" />
 
     <style>
         body {
@@ -31,7 +30,7 @@
             background: #000;
             color: #0f0;
             padding: 10px;
-            height: 250px;
+            height: 220px;
             overflow-y: auto;
             font-family: monospace;
             font-size: 14px;
@@ -47,25 +46,28 @@
         <div id="header"></div>
 
         <div class="card p-4">
-            <h2 class="mb-3">🔄 Sync Varian Shopee → TikTok</h2>
-            <p>Gunakan tombol ini untuk melakukan sinkronisasi varian Shopee agar otomatis ditambahkan ke TikTok.</p>
+            <h3 class="mb-3">Sync Stok Shopee → TikTok</h3>
+            <p>Menyesuaikan stok varian Shopee ke TikTok berdasarkan mapping SKU.</p>
 
-            <button id="btnSync" class="btn btn-primary mb-4">🔄 SYNC SEKARANG</button>
+            <button id="btnSync" class="btn btn-primary mb-4">
+                SYNC SEKARANG
+            </button>
 
-            <h5>📄 Log Proses</h5>
-            <div id="log" class="log-box"></div>
+            <h5>Log Proses</h5>
+            <div id="log" class="log-box mb-4"></div>
 
-            <h5 class="mt-4">📦 Hasil Sync</h5>
+            <h5>Hasil Sinkronisasi</h5>
 
             <div class="table-responsive">
-                <table id="resultTable" class="table table-bordered table-striped">
+                <table id="resultTable" class="table table-bordered table-striped align-middle">
                     <thead class="table-dark">
                         <tr>
                             <th>No</th>
-                            <th>Internal SKU</th>
-                            <th>Nama Produk</th>
-                            <th>Varian</th>
-                            <th>Hasil</th>
+                            <th>TikTok Product ID</th>
+                            <th>TikTok SKU</th>
+                            <th>Stock</th>
+                            <th>Status</th>
+                            <th>Error</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -79,8 +81,7 @@
     <script>
         async function loadComponent(id, file) {
             const res = await fetch(file);
-            const html = await res.text();
-            document.getElementById(id).innerHTML = html;
+            document.getElementById(id).innerHTML = await res.text();
         }
 
         loadComponent("sidebar", "./component/sidebar.html");
@@ -101,34 +102,39 @@
             logBox.innerHTML = "";
             tableBody.innerHTML = "";
 
-            log("⏳ Memulai proses sync...");
+            log("⏳ Memulai sinkronisasi...");
 
             try {
                 const res = await fetch("/api/sync-shopee-to-tiktok");
                 const data = await res.json();
 
-                if (!data.items) {
-                    log("❌ Tidak ada data diterima dari server");
+                log(`✔ Selesai. Success: ${data.success}, Failed: ${data.failed}`);
+
+                if (!data.items || data.items.length === 0) {
+                    log("⚠ Tidak ada data yang diproses.");
                     btn.disabled = false;
                     return;
                 }
 
-                log("✔ Sync selesai. Menampilkan hasil...");
-
                 data.items.forEach((row, i) => {
+                    const badge = row.status === "SUCCESS"
+                        ? `<span class="badge bg-success">SUCCESS</span>`
+                        : `<span class="badge bg-danger">FAILED</span>`;
+
                     const tr = `
                         <tr>
                             <td>${i + 1}</td>
-                            <td>${row.internal_sku}</td>
-                            <td>${row.product_name}</td>
-                            <td>${row.variant_name}</td>
-                            <td>${row.status}</td>
+                            <td>${row.product_id}</td>
+                            <td>${row.sku}</td>
+                            <td>${row.stock}</td>
+                            <td>${badge}</td>
+                            <td>${row.error || "-"}</td>
                         </tr>
                     `;
-                    tableBody.innerHTML += tr;
+                    tableBody.insertAdjacentHTML("beforeend", tr);
                 });
 
-                log("✔ Semua data ditampilkan di tabel.");
+                log("✔ Data berhasil ditampilkan.");
 
             } catch (err) {
                 log("❌ Error: " + err.message);
@@ -137,7 +143,6 @@
             btn.disabled = false;
         });
     </script>
-
 </body>
 
 </html>

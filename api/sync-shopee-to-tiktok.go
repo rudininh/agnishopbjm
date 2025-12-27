@@ -1,289 +1,231 @@
 package handler
 
 import (
-	"agnishopbjm/tiktok"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
-	"tiktokshop/open/sdk_golang/apis"
-	product_v202502 "tiktokshop/open/sdk_golang/models/product/v202502"
-
-	"github.com/jackc/pgx/v5"
+	"agnishopbjm/tiktok"
 )
 
 // =======================
-// ====== STRUCTS ========
+// ===== DB STRUCT =======
 // =======================
 
-type FixedProduct struct {
-	ProductID   string      `json:"product_id"`
-	ProductName string      `json:"product_name"`
-	SKUs        []FixedSKU  `json:"skus"`
-	Raw         interface{} `json:"raw,omitempty"`
+type SyncRow struct {
+	TikTokProductID string
+	TikTokSKU       string
+	ShopeeModelID   string
+	Stock           int64
 }
 
-type FixedSKU struct {
-	SKUName   string `json:"sku_name"`
-	StockQty  int64  `json:"stock_qty"`
-	Price     int64  `json:"price"`
-	Subtotal  int64  `json:"subtotal"`
-	TikTokSKU string `json:"tiktok_sku,omitempty"`
+// =======================
+// ===== REQUEST BODY ====
+// =======================
+
+type InventoryUpdateRequest struct {
+	Skus []InventorySKU `json:"skus"`
+}
+
+type InventorySKU struct {
+	ID        string               `json:"id"`
+	Inventory []InventoryWarehouse `json:"inventory"`
+}
+
+type InventoryWarehouse struct {
+	Quantity int64 `json:"quantity"`
 }
 
 // =======================================
-// ====== HTTP HANDLER: TIKTOK ============
+// ===== HTTP HANDLER =====================
 // =======================================
 
-func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
-
-	defer func() {
-		if rec := recover(); rec != nil {
-			fmt.Println("[PANIC]", rec)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
-	}()
-
-	fmt.Println("=== GetAllProductsHandler START ===")
-
-	cfg, err := tiktok.LoadTikTokConfig()
-	if err != nil {
-		http.Error(w, "Config error: "+err.Error(), 500)
-		return
-	}
-
-	configuration := apis.NewConfiguration()
-	configuration.AddAppInfo(cfg.AppKey, cfg.AppSecret)
-	apiClient := apis.NewAPIClient(configuration)
+func SyncShopeeStockToTikTokHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	// ===== DB CONNECTION =====
+	// ===== LOAD CONFIG (FIXED) =====
+	cfg, err := tiktok.LoadTikTokConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// ===== DB =====
 	dbConn, err := getDBConn(ctx)
 	if err != nil {
-		fmt.Println("⚠️ DB connection disabled:", err)
-		dbConn = nil
-	} else {
-		defer dbConn.Close(ctx)
+		http.Error(w, "DB error: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+	defer dbConn.Close(ctx)
 
-	// ===== SEARCH PRODUCTS =====
-	searchReq := apiClient.ProductV202502API.
-		Product202502ProductsSearchPost(ctx).
-		XTtsAccessToken(cfg.AccessToken).
-		ContentType("application/json").
-		PageSize(100).
-		ShopCipher(cfg.Cipher)
-
-	body := product_v202502.NewProduct202502SearchProductsRequestBody()
-	body.SetStatus("ALL")
-	searchReq = searchReq.Product202502SearchProductsRequestBody(*body)
-
-	searchResp, _, err := searchReq.Execute()
+	// ===== QUERY DATA =====
+	rows, err := dbConn.Query(ctx, `
+		SELECT
+			sm.tiktok_product_id,
+			sm.tiktok_sku,
+			sm.shopee_model_id,
+			spm.stock
+		FROM sku_mapping sm
+		JOIN shopee_product_model spm
+			ON spm.model_id = sm.shopee_model_id
+		WHERE
+			sm.tiktok_product_id IS NOT NULL
+			AND sm.tiktok_sku IS NOT NULL
+			AND sm.shopee_item_id IS NOT NULL
+			AND sm.shopee_model_id IS NOT NULL
+	`)
 	if err != nil {
-		http.Error(w, "Search API error: "+err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 
-	if searchResp.GetCode() != 0 {
-		http.Error(w, searchResp.GetMessage(), 500)
-		return
-	}
+	success := 0
+	failed := 0
+	results := make([]map[string]interface{}, 0)
 
-	var root map[string]interface{}
-	bt, _ := json.Marshal(searchResp.GetData())
-	_ = json.Unmarshal(bt, &root)
+	for rows.Next() {
 
-	products, ok := root["products"].([]interface{})
-	if !ok {
-		http.Error(w, "Products list not found", 500)
-		return
-	}
-
-	results := []FixedProduct{}
-
-	// ===== LOOP PRODUCT DETAIL =====
-	for _, item := range products {
-
-		pm, ok := item.(map[string]interface{})
-		if !ok {
+		var row SyncRow
+		if err := rows.Scan(
+			&row.TikTokProductID,
+			&row.TikTokSKU,
+			&row.ShopeeModelID,
+			&row.Stock,
+		); err != nil {
+			failed++
 			continue
 		}
 
-		productID := fmt.Sprintf("%v", pm["id"])
-		if productID == "" {
-			continue
-		}
-
-		fmt.Println("Fetching detail:", productID)
-
-		product, err := fetchTikTokProductDetail(
+		err = updateTikTokInventory(
 			ctx,
 			cfg,
-			productID,
-			dbConn,
+			row.TikTokProductID,
+			row.TikTokSKU,
+			row.Stock,
 		)
+
 		if err != nil {
-			fmt.Println("⚠️ detail error:", err)
-			continue
+			failed++
+			results = append(results, map[string]interface{}{
+				"product_id": row.TikTokProductID,
+				"sku":        row.TikTokSKU,
+				"stock":      row.Stock,
+				"status":     "FAILED",
+				"error":      err.Error(),
+			})
+		} else {
+			success++
+			results = append(results, map[string]interface{}{
+				"product_id": row.TikTokProductID,
+				"sku":        row.TikTokSKU,
+				"stock":      row.Stock,
+				"status":     "SUCCESS",
+			})
 		}
 
-		results = append(results, product)
-
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond) // avoid rate limit
 	}
 
+	// ===== RESPONSE =====
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"items": results,
+		"success": success,
+		"failed":  failed,
+		"items":   results,
 	})
 }
 
-// =====================================================
-// ====== HELPER: FETCH TIKTOK PRODUCT DETAIL ===========
-// =====================================================
+// =======================================
+// ===== CORE TIKTOK UPDATE FUNCTION ======
+// =======================================
 
-func fetchTikTokProductDetail(
+func updateTikTokInventory(
 	ctx context.Context,
-	cfg *tiktok.Config,
+	cfg interface{}, // <- TIDAK tergantung tiktok.Config
 	productID string,
-	dbConn *pgx.Conn,
-) (FixedProduct, error) {
+	skuID string,
+	quantity int64,
+) error {
 
-	timestamp := time.Now().Unix()
-	base := fmt.Sprintf(
-		"https://open-api.tiktokglobalshop.com/product/202309/products/%s",
+	// type assertion aman (jika struct private/public)
+	conf := cfg.(interface {
+		GetAccessToken() string
+		GetAppKey() string
+		GetAppSecret() string
+		GetCipher() string
+		GetShopID() string
+	})
+
+	payload := InventoryUpdateRequest{
+		Skus: []InventorySKU{
+			{
+				ID: skuID,
+				Inventory: []InventoryWarehouse{
+					{Quantity: quantity},
+				},
+			},
+		},
+	}
+
+	bodyBytes, _ := json.Marshal(payload)
+
+	baseURL := fmt.Sprintf(
+		"https://open-api.tiktokglobalshop.com/product/202309/products/%s/inventory/update",
 		productID,
 	)
 
-	reqURL, _ := url.Parse(base)
-	q := reqURL.Query()
-	q.Set("timestamp", fmt.Sprintf("%d", timestamp))
-	q.Set("app_key", cfg.AppKey)
-	q.Set("shop_cipher", cfg.Cipher)
-	q.Set("shop_id", cfg.ShopID)
+	u, _ := url.Parse(baseURL)
+	q := u.Query()
+	q.Set("access_token", conf.GetAccessToken())
+	q.Set("app_key", conf.GetAppKey())
+	q.Set("shop_cipher", conf.GetCipher())
+	q.Set("shop_id", conf.GetShopID())
 	q.Set("version", "202309")
-	reqURL.RawQuery = q.Encode()
+	q.Set("timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	u.RawQuery = q.Encode()
 
-	req, _ := http.NewRequest("GET", reqURL.String(), nil)
-	req.Header.Set("x-tts-access-token", cfg.AccessToken)
+	req, _ := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		u.String(),
+		bytes.NewBuffer(bodyBytes),
+	)
+
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-tts-access-token", conf.GetAccessToken())
 
-	sign := tiktok.CalSign(req, cfg.AppSecret)
+	// ===== SIGN =====
+	sign := tiktok.CalSign(req, conf.GetAppSecret())
 	q.Set("sign", sign)
-	reqURL.RawQuery = q.Encode()
-	req.URL = reqURL
+	u.RawQuery = q.Encode()
+	req.URL = u
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return FixedProduct{}, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(resp.Body)
 
-	var detail map[string]interface{}
-	if err := json.Unmarshal(raw, &detail); err != nil {
-		return FixedProduct{}, err
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("http %d: %s", resp.StatusCode, string(raw))
 	}
 
-	data, _ := detail["data"].(map[string]interface{})
-	if data == nil {
-		return FixedProduct{}, fmt.Errorf("no data")
+	var result map[string]interface{}
+	_ = json.Unmarshal(raw, &result)
+
+	if code, ok := result["code"].(float64); ok && code != 0 {
+		return fmt.Errorf("tiktok error: %v", result["message"])
 	}
 
-	productName := fmt.Sprintf("%v", data["title"])
-	skuArr, _ := data["skus"].([]interface{})
-
-	listSKU := []FixedSKU{}
-
-	for _, s := range skuArr {
-		sm, ok := s.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		variantName := resolveVariantName(sm)
-		stockQty := resolveStock(sm)
-		price := resolvePrice(sm)
-
-		fsku := FixedSKU{
-			SKUName:   variantName,
-			StockQty:  stockQty,
-			Price:     price,
-			Subtotal:  price * stockQty,
-			TikTokSKU: fmt.Sprintf("%v", sm["id"]),
-		}
-		listSKU = append(listSKU, fsku)
-	}
-
-	return FixedProduct{
-		ProductID:   productID,
-		ProductName: productName,
-		SKUs:        listSKU,
-		Raw:         data,
-	}, nil
-}
-
-// =================================
-// ====== UTILITY FUNCTIONS =========
-// =================================
-
-func resolveVariantName(sm map[string]interface{}) string {
-	if attrs, ok := sm["sales_attributes"].([]interface{}); ok {
-		var names []string
-		for _, a := range attrs {
-			if m, ok := a.(map[string]interface{}); ok {
-				if v, ok := m["value_name"].(string); ok {
-					names = append(names, v)
-				}
-			}
-		}
-		if len(names) > 0 {
-			return strings.Join(names, " / ")
-		}
-	}
-	if v, ok := sm["seller_sku"].(string); ok && v != "" {
-		return v
-	}
-	return "Default Variant"
-}
-
-func resolveStock(sm map[string]interface{}) int64 {
-	if inv, ok := sm["inventory"].([]interface{}); ok && len(inv) > 0 {
-		if m, ok := inv[0].(map[string]interface{}); ok {
-			return parseInt(m["quantity"])
-		}
-	}
-	return 0
-}
-
-func resolvePrice(sm map[string]interface{}) int64 {
-	if p, ok := sm["price"].(map[string]interface{}); ok {
-		return parseInt(p["sale_price"])
-	}
-	return parseInt(sm["price"])
-}
-
-func parseInt(v interface{}) int64 {
-	switch x := v.(type) {
-	case float64:
-		return int64(x)
-	case int64:
-		return x
-	case int:
-		return int64(x)
-	case string:
-		var n int64
-		fmt.Sscan(x, &n)
-		return n
-	default:
-		return 0
-	}
+	return nil
 }
