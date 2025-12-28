@@ -48,43 +48,42 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	// 1️⃣ SUMMARY (AKURAT = JUMLAH stock_master)
 	// ============================================================
 	var summary StockMasterSummary
-
 	err = db.QueryRow(ctx, `
-		SELECT
-			COUNT(*) FILTER (
-				WHERE EXISTS (
-					SELECT 1
-					FROM tiktok_products tp
-					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
-					  AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
-				)
-			) AS total_match,
+	SELECT
+		COUNT(*) FILTER (
+			WHERE EXISTS (
+				SELECT 1
+				FROM tiktok_products tp
+				WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+				  AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+			)
+		) AS total_match,
 
-			COUNT(*) FILTER (
-				WHERE EXISTS (
-					SELECT 1
-					FROM tiktok_products tp
-					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
-				)
-				AND NOT EXISTS (
-					SELECT 1
-					FROM tiktok_products tp
-					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
-					  AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
-				)
-			) AS total_variant_missing,
+		COUNT(*) FILTER (
+			WHERE EXISTS (
+				SELECT 1
+				FROM tiktok_products tp
+				WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM tiktok_products tp
+				WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+				  AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+			)
+		) AS total_variant_missing,
 
-			COUNT(*) FILTER (
-				WHERE NOT EXISTS (
-					SELECT 1
-					FROM tiktok_products tp
-					WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
-				)
-			) AS total_product_missing,
+		COUNT(*) FILTER (
+			WHERE NOT EXISTS (
+				SELECT 1
+				FROM tiktok_products tp
+				WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+			)
+		) AS total_product_missing,
 
-			COUNT(*) AS total_all
-		FROM stock_master sm
-	`).Scan(
+		COUNT(*) AS total_all
+	FROM stock_master sm
+`).Scan(
 		&summary.TotalMatch,
 		&summary.TotalVariantMissing,
 		&summary.TotalProductMissing,
@@ -100,44 +99,44 @@ func StockMasterHandler(w http.ResponseWriter, r *http.Request) {
 	// 2️⃣ DATA LIST (MATCH DI ATAS)
 	// ============================================================
 	rows, err := db.Query(ctx, `
-		SELECT
-			sm.id,
-			sm.product_name,
-			sm.variant_name,
-			sm.stock_qty                            AS stock_shopee,
-			COALESCE(tp.stock_qty, 0)               AS stock_tiktok,
-			sm.updated_at::text,
+	SELECT
+		sm.id,
+		sm.product_name,
+		sm.variant_name,
+		sm.stock_qty                  AS stock_shopee,
+		COALESCE(tp.stock_qty, 0)     AS stock_tiktok,
+		sm.updated_at::text,
 
-			CASE
-				WHEN tp.sku_name IS NOT NULL THEN 'MATCH'
-				WHEN EXISTS (
-					SELECT 1
-					FROM tiktok_products tpx
-					WHERE LOWER(TRIM(tpx.product_name)) = LOWER(TRIM(sm.product_name))
-				) THEN 'VARIANT MISSING'
-				ELSE 'PRODUCT MISSING'
-			END AS status_tiktok,
+		CASE
+			WHEN tp.sku_name IS NOT NULL THEN 'MATCH'
+			WHEN EXISTS (
+				SELECT 1
+				FROM tiktok_products tpx
+				WHERE LOWER(TRIM(tpx.product_name)) = LOWER(TRIM(sm.product_name))
+			) THEN 'VARIANT MISSING'
+			ELSE 'PRODUCT MISSING'
+		END AS status_tiktok,
 
-			CASE
-				WHEN tp.sku_name IS NOT NULL THEN 1
-				WHEN EXISTS (
-					SELECT 1
-					FROM tiktok_products tpx
-					WHERE LOWER(TRIM(tpx.product_name)) = LOWER(TRIM(sm.product_name))
-				) THEN 2
-				ELSE 3
-			END AS status_order
+		CASE
+			WHEN tp.sku_name IS NOT NULL THEN 1
+			WHEN EXISTS (
+				SELECT 1
+				FROM tiktok_products tpx
+				WHERE LOWER(TRIM(tpx.product_name)) = LOWER(TRIM(sm.product_name))
+			) THEN 2
+			ELSE 3
+		END AS status_order
 
-		FROM stock_master sm
-		LEFT JOIN tiktok_products tp
-			ON LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
-		   AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+	FROM stock_master sm
+	LEFT JOIN tiktok_products tp
+		ON LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+	   AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
 
-		ORDER BY
-			status_order,
-			sm.product_name,
-			sm.variant_name
-	`)
+	ORDER BY
+		status_order,
+		sm.product_name,
+		sm.variant_name
+`)
 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
