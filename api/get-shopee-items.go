@@ -725,15 +725,15 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 				// Insert/update varian ke shopee_product_model
 				_, err := conn.Exec(ctx, `
-		INSERT INTO shopee_product_model (model_id, item_id, name, price, stock, updated_at)
-		VALUES ($1,$2,$3,$4,$5,NOW())
-		ON CONFLICT (model_id, item_id)
-		DO UPDATE SET
-			name = EXCLUDED.name,
-			price = EXCLUDED.price,
-			stock = EXCLUDED.stock,
-			updated_at = NOW();
-	`, modelID, itemID, modelName, modelPrice, modelStock)
+					INSERT INTO shopee_product_model (model_id, item_id, name, price, stock, updated_at)
+					VALUES ($1,$2,$3,$4,$5,NOW())
+					ON CONFLICT (model_id, item_id)
+					DO UPDATE SET
+						name = EXCLUDED.name,
+						price = EXCLUDED.price,
+						stock = EXCLUDED.stock,
+						updated_at = NOW();
+				`, modelID, itemID, modelName, modelPrice, modelStock)
 
 				if err != nil {
 					fmt.Printf("❌ Gagal insert varian: %v\n", err)
@@ -750,18 +750,17 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				_, err = conn.Exec(ctx, `
 					INSERT INTO stock_master (
 						internal_sku,
-						product_id_shopee,
 						shopee_product_id,
 						shopee_sku,
 						product_name,
 						variant_name,
 						stock_qty,
-						product_id_tiktok,
+						tiktok_product_id,
+						tiktok_sku,
 						updated_at
 					)
 					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
 					ON CONFLICT (internal_sku) DO UPDATE SET
-						product_id_shopee = EXCLUDED.product_id_shopee,
 						shopee_product_id = EXCLUDED.shopee_product_id,
 						shopee_sku        = EXCLUDED.shopee_sku,
 						product_name      = EXCLUDED.product_name,
@@ -771,12 +770,12 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 				`,
 					internalSKU,
 					fmt.Sprint(itemID),
-					fmt.Sprint(itemID),
 					fmt.Sprint(modelID),
 					itemName,
 					modelName,
 					modelStock,
 					"", // product_id_tiktok (kosong dulu)
+					"", // sku_tiktok (kosong dulu)
 				)
 
 				if err != nil {

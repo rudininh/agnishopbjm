@@ -78,15 +78,13 @@ func SyncShopeeStockToTikTokHandler(w http.ResponseWriter, r *http.Request) {
 	// ❗ FIX SQL: TOLAK STRING KOSONG
 	rows, err := dbConn.Query(ctx, `
 		SELECT
-			sm.tiktok_product_id,
-			sm.tiktok_sku,
-			spm.stock
-		FROM sku_mapping sm
-		JOIN shopee_product_model spm
-			ON spm.model_id = sm.shopee_model_id
+			tiktok_product_id,
+			tiktok_sku,
+			stock_qty
+		FROM stock_master 
 		WHERE
-			NULLIF(sm.tiktok_product_id, '') IS NOT NULL
-			AND NULLIF(sm.tiktok_sku, '') IS NOT NULL
+			NULLIF(tiktok_product_id, '') IS NOT NULL
+			AND NULLIF(tiktok_sku, '') IS NOT NULL
 	`)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
