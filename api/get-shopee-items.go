@@ -748,30 +748,41 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 				// UPsert stock_master
 				_, err = conn.Exec(ctx, `
-		INSERT INTO stock_master (internal_sku, product_id_shopee, product_name, variant_name, stock_qty, updated_at, product_id_tiktok)
-		VALUES ($1,$2,$3,$4,$5,NOW(),$6)
-		ON CONFLICT (internal_sku) DO UPDATE SET
-			stock_qty = EXCLUDED.stock_qty,
-			product_name = EXCLUDED.product_name,
-			variant_name = EXCLUDED.variant_name,
-			product_id_shopee = EXCLUDED.product_id_shopee,
-			updated_at = NOW();
-	`, internalSKU, itemID, itemName, modelName, modelStock, "")
+					INSERT INTO stock_master (
+						internal_sku,
+						product_id_shopee,
+						shopee_product_id,
+						shopee_sku,
+						product_name,
+						variant_name,
+						stock_qty,
+						product_id_tiktok,
+						updated_at
+					)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+					ON CONFLICT (internal_sku) DO UPDATE SET
+						product_id_shopee = EXCLUDED.product_id_shopee,
+						shopee_product_id = EXCLUDED.shopee_product_id,
+						shopee_sku        = EXCLUDED.shopee_sku,
+						product_name      = EXCLUDED.product_name,
+						variant_name      = EXCLUDED.variant_name,
+						stock_qty         = EXCLUDED.stock_qty,
+						updated_at        = NOW();
+				`,
+					internalSKU,
+					fmt.Sprint(itemID),
+					fmt.Sprint(itemID),
+					fmt.Sprint(modelID),
+					itemName,
+					modelName,
+					modelStock,
+					"", // product_id_tiktok (kosong dulu)
+				)
 
 				if err != nil {
 					fmt.Printf("❌ Gagal upsert stock_master internal_sku=%s : %v\n", internalSKU, err)
 				}
 
-				// sku_mapping
-				_, err = conn.Exec(ctx, `
-		INSERT INTO sku_mapping (internal_sku, shopee_sku, shopee_item_id, shopee_model_id, updated_at)
-		VALUES ($1,$2,$3,$4,NOW())
-		ON CONFLICT (internal_sku) DO UPDATE SET
-			shopee_sku = EXCLUDED.shopee_sku,
-			shopee_item_id = EXCLUDED.shopee_item_id,
-			shopee_model_id = EXCLUDED.shopee_model_id,
-			updated_at = NOW();
-	`, internalSKU, modelSKU, itemID, modelID)
 			}
 
 			// =====================================

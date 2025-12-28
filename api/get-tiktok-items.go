@@ -251,6 +251,77 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			listSKU = append(listSKU, fsku)
 
+			// ===== UPSERT KE TABEL tiktok_product_sku =====
+			if dbConn != nil {
+
+				var exists bool
+				err := dbConn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM tiktok_products
+			WHERE product_id = $1 AND sku_name = $2
+		)
+	`, productID, variantName).Scan(&exists)
+
+				if err != nil {
+					fmt.Printf("❌ DB check error product_id=%s sku=%s : %v\n", productID, variantName, err)
+				} else {
+
+					if exists {
+						// UPDATE
+						_, err = dbConn.Exec(ctx, `
+				UPDATE tiktok_products
+				SET
+					product_name = $1,
+					stock_qty   = $2,
+					price       = $3,
+					subtotal    = $4,
+					updated_at  = NOW()
+				WHERE product_id = $5 AND sku_name = $6
+			`,
+							productName,
+							stockQty,
+							price,
+							price*stockQty,
+							productID,
+							variantName,
+						)
+
+						if err != nil {
+							fmt.Printf("❌ UPDATE failed product_id=%s sku=%s : %v\n", productID, variantName, err)
+						} else {
+							fmt.Printf("🔁 UPDATED product_id=%s sku=%s\n", productID, variantName)
+						}
+
+					} else {
+						// INSERT
+						_, err = dbConn.Exec(ctx, `
+				INSERT INTO tiktok_products (
+					product_id,
+					product_name,
+					sku_name,
+					stock_qty,
+					price,
+					subtotal,
+					updated_at
+				) VALUES ($1,$2,$3,$4,$5,$6,NOW())
+			`,
+							productID,
+							productName,
+							variantName,
+							stockQty,
+							price,
+							price*stockQty,
+						)
+
+						if err != nil {
+							fmt.Printf("❌ INSERT failed product_id=%s sku=%s : %v\n", productID, variantName, err)
+						} else {
+							fmt.Printf("➕ INSERTED product_id=%s sku=%s\n", productID, variantName)
+						}
+					}
+				}
+			}
+
 			// ---- Option A logic: exact-match update only ----
 			if dbConn != nil {
 				// 1) Find existing internal SKU in stock_master by exact product_name + variant_name
@@ -275,31 +346,14 @@ func GetAllProductsHandler(w http.ResponseWriter, r *http.Request) {
 					// found internalSKU -> update stock_master
 					ct, err := dbConn.Exec(ctx, `
 						UPDATE stock_master
-						SET product_id_tiktok = $1, stock_qty = $2, updated_at = NOW()
+						SET tiktok_product_id = $1, tiktok_sku = $2,  updated_at = NOW()
 						WHERE internal_sku = $3
-					`, productID, stockQty, internalSKU)
+					`, fmt.Sprint(productID), fmt.Sprint(tiktokSKU), internalSKU)
 
 					if err != nil {
 						fmt.Printf("❌ stock_master UPDATE error internal_sku=%s : %v\n", internalSKU, err)
 					} else {
 						fmt.Printf("✅ stock_master updated internal_sku=%s stock=%d (RowsAffected=%d)\n", internalSKU, stockQty, ct.RowsAffected())
-					}
-
-					// Update sku_mapping only if mapping row exists (no insert)
-					ct2, err2 := dbConn.Exec(ctx, `
-						UPDATE sku_mapping
-						SET tiktok_sku = $1, tiktok_product_id = $2, updated_at = NOW()
-						WHERE internal_sku = $3
-					`, tiktokSKU, productID, internalSKU)
-					if err2 != nil {
-						fmt.Printf("⚠️ sku_mapping UPDATE error internal_sku=%s : %v\n", internalSKU, err2)
-					} else {
-						if ct2.RowsAffected() == 0 {
-							// mapping row doesn't exist -> as Option A we DO NOT INSERT
-							fmt.Printf("⏭️ sku_mapping row not found for internal_sku=%s -> skipping insert (Option A)\n", internalSKU)
-						} else {
-							fmt.Printf("✅ sku_mapping updated internal_sku=%s (tiktok_sku=%s)\n", internalSKU, tiktokSKU)
-						}
 					}
 				}
 			}
