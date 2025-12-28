@@ -36,6 +36,15 @@
             font-size: 14px;
             border-radius: 5px;
         }
+
+        /* Highlight mismatch */
+        tr.mismatch {
+            background-color: #fff3cd !important;
+        }
+
+        tr.failed {
+            background-color: #f8d7da !important;
+        }
     </style>
 </head>
 
@@ -49,9 +58,23 @@
             <h3 class="mb-3">Sync Stok Shopee → TikTok</h3>
             <p>Menyesuaikan stok varian Shopee ke TikTok berdasarkan mapping SKU.</p>
 
-            <button id="btnSync" class="btn btn-primary mb-4">
+            <button id="btnSync" class="btn btn-primary mb-3">
                 SYNC SEKARANG
             </button>
+
+            <!-- SUMMARY -->
+            <div class="alert alert-info d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <strong>Total Data:</strong> <span id="totalData">0</span> |
+                    <strong>Stok Tidak Sama:</strong> <span id="totalMismatch">0</span>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="filterMismatch">
+                    <label class="form-check-label" for="filterMismatch">
+                        Tampilkan hanya stok mismatch
+                    </label>
+                </div>
+            </div>
 
             <h5>Log Proses</h5>
             <div id="log" class="log-box mb-4"></div>
@@ -65,12 +88,19 @@
                             <th>No</th>
                             <th>TikTok Product ID</th>
                             <th>TikTok SKU</th>
-                            <th>Stock</th>
+                            <th>Stock Shopee</th>
+                            <th>Stock TikTok</th>
                             <th>Status</th>
                             <th>Error</th>
                         </tr>
                     </thead>
-                    <tbody></tbody>
+                    <tbody>
+                        <tr>
+                            <td colspan="7" class="text-center text-muted">
+                                Belum ada data
+                            </td>
+                        </tr>
+                    </tbody>
                 </table>
             </div>
         </div>
@@ -91,16 +121,77 @@
         const btn = document.getElementById("btnSync");
         const logBox = document.getElementById("log");
         const tableBody = document.querySelector("#resultTable tbody");
+        const totalDataEl = document.getElementById("totalData");
+        const totalMismatchEl = document.getElementById("totalMismatch");
+        const filterMismatch = document.getElementById("filterMismatch");
+
+        let allRows = [];
 
         function log(msg) {
             logBox.innerHTML += msg + "<br>";
             logBox.scrollTop = logBox.scrollHeight;
         }
 
+        function renderTable() {
+            tableBody.innerHTML = "";
+
+            let rows = allRows;
+            if (filterMismatch.checked) {
+                rows = rows.filter(r => r.is_mismatch);
+            }
+
+            if (rows.length === 0) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="text-center text-muted">
+                            Tidak ada data yang ditampilkan
+                        </td>
+                    </tr>`;
+                return;
+            }
+
+            rows.forEach((row, i) => {
+                let statusBadge = "";
+                let rowClass = "";
+
+                if (row.status === "SUCCESS") {
+                    statusBadge = `<span class="badge bg-success">UPDATE</span>`;
+                } else if (row.status === "SKIP") {
+                    statusBadge = `<span class="badge bg-secondary">STOK SAMA</span>`;
+                } else {
+                    statusBadge = `<span class="badge bg-danger">FAILED</span>`;
+                    rowClass = "failed";
+                }
+
+                if (row.is_mismatch) {
+                    rowClass = "mismatch";
+                }
+
+                const tr = `
+                    <tr class="${rowClass}">
+                        <td>${i + 1}</td>
+                        <td>${row.product_id}</td>
+                        <td>${row.sku}</td>
+                        <td>${row.shopee_stock}</td>
+                        <td>${row.tiktok_stock}</td>
+                        <td>${statusBadge}</td>
+                        <td>${row.error || "-"}</td>
+                    </tr>
+                `;
+                tableBody.insertAdjacentHTML("beforeend", tr);
+            });
+        }
+
+        filterMismatch.addEventListener("change", renderTable);
+
         btn.addEventListener("click", async () => {
             btn.disabled = true;
             logBox.innerHTML = "";
             tableBody.innerHTML = "";
+            allRows = [];
+
+            totalDataEl.textContent = "0";
+            totalMismatchEl.textContent = "0";
 
             log("⏳ Memulai sinkronisasi...");
 
@@ -112,28 +203,37 @@
 
                 if (!data.items || data.items.length === 0) {
                     log("⚠ Tidak ada data yang diproses.");
+                    tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="7" class="text-center text-muted">
+                                Tidak ada data yang diproses
+                            </td>
+                        </tr>`;
                     btn.disabled = false;
                     return;
                 }
 
-                data.items.forEach((row, i) => {
-                    const badge = row.status === "SUCCESS"
-                        ? `<span class="badge bg-success">SUCCESS</span>`
-                        : `<span class="badge bg-danger">FAILED</span>`;
+                let mismatchCount = 0;
 
-                    const tr = `
-                        <tr>
-                            <td>${i + 1}</td>
-                            <td>${row.product_id}</td>
-                            <td>${row.sku}</td>
-                            <td>${row.stock}</td>
-                            <td>${badge}</td>
-                            <td>${row.error || "-"}</td>
-                        </tr>
-                    `;
-                    tableBody.insertAdjacentHTML("beforeend", tr);
+                data.items.forEach(item => {
+                    const isMismatch = item.shopee_stock !== item.tiktok_stock;
+                    if (isMismatch) mismatchCount++;
+
+                    allRows.push({
+                        product_id: item.product_id,
+                        sku: item.sku,
+                        shopee_stock: item.shopee_stock,
+                        tiktok_stock: item.tiktok_stock,
+                        status: item.status,
+                        error: item.error,
+                        is_mismatch: isMismatch
+                    });
                 });
 
+                totalDataEl.textContent = data.items.length;
+                totalMismatchEl.textContent = mismatchCount;
+
+                renderTable();
                 log("✔ Data berhasil ditampilkan.");
 
             } catch (err) {
