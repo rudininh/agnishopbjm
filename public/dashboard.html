@@ -23,28 +23,38 @@
           <h4>Status Integrasi</h4>
           <ul>
             <li>✅ Shopee API terhubung</li>
+            <li>✅ TikTok API terhubung</li>
             <li>✅ Database Neon aktif</li>
-            <li>✅ Login sistem aman</li>
           </ul>
         </div>
 
-        <!-- Baris tombol Auth -->
+        <!-- ================= AUTH ================= -->
         <div class="btn-row">
           <button id="btnAuthShopee" class="btn-shopee">AUTH SHOPEE</button>
           <button id="btnAuthTiktok" class="btn-tiktok">AUTH TIKTOK</button>
         </div>
 
-        <!-- Baris tombol Get Token -->
+        <!-- ================= GET TOKEN ================= -->
         <div class="btn-row">
           <button id="btnShopee" class="btn-shopee">GET TOKEN SHOPEE</button>
           <button id="btnTiktok" class="btn-tiktok">GET TOKEN TIKTOK</button>
         </div>
 
-        <!-- Baris tombol Get Authorized Shop -->
+        <!-- ================= REFRESH TOKEN ================= -->
         <div class="btn-row">
-          <button id="btnTiktokShop" class="btn-tiktok">GET AUTH SHOP TIKTOK</button>
+          <button id="btnRefreshTiktok" class="btn-tiktok">
+            🔄 REFRESH TOKEN TIKTOK
+          </button>
         </div>
 
+        <!-- ================= SHOP ================= -->
+        <div class="btn-row">
+          <button id="btnTiktokShop" class="btn-tiktok">
+            GET AUTH SHOP TIKTOK
+          </button>
+        </div>
+
+        <div id="result"></div>
       </div>
     </div>
 
@@ -52,6 +62,7 @@
   </div>
 
   <script>
+    /* ================= LOAD COMPONENT ================= */
     async function loadComponent(id, file) {
       const res = await fetch(file);
       const html = await res.text();
@@ -62,6 +73,7 @@
     loadComponent('header', './component/header.html');
     loadComponent('footer', './component/footer.html');
 
+    /* ================= SHOPEE AUTH ================= */
     function generateShopeeAuthURL() {
       const partnerId = 2013107;
       const partnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465";
@@ -78,9 +90,7 @@
         false,
         ["sign"]
       )
-        .then(key =>
-          crypto.subtle.sign("HMAC", key, new TextEncoder().encode(baseString))
-        )
+        .then(key => crypto.subtle.sign("HMAC", key, new TextEncoder().encode(baseString)))
         .then(sigBuf => {
           const signHex = Array.from(new Uint8Array(sigBuf))
             .map(b => b.toString(16).padStart(2, "0"))
@@ -89,76 +99,99 @@
         });
     }
 
-    document.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("btnAuthShopee").addEventListener("click", async () => {
-        const url = await generateShopeeAuthURL();
-        window.open(url, "_blank");
-      });
-    });
+    document.getElementById("btnAuthShopee").onclick = async () => {
+      const url = await generateShopeeAuthURL();
+      window.open(url, "_blank");
+    };
 
+    /* ================= TIKTOK AUTH ================= */
     const APP_KEY = "6i1cagd9f0p83";
     const REDIRECT_URI = "https://agnishopbjm.vercel.app/api/tiktok-callback";
     const STATE = "agnishopbjm";
 
-    document.getElementById("btnAuthTiktok").onclick = function () {
+    document.getElementById("btnAuthTiktok").onclick = () => {
       const authURL =
         `https://auth.tiktok-shops.com/openapi/v2/oauth/authorize?app_key=${APP_KEY}&state=${STATE}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
       window.location.href = authURL;
     };
 
+    /* ================= SHOW AUTH CODE ================= */
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get("code");
     if (code) {
       document.getElementById("result").innerHTML = `
-        <h3>✅ Berhasil mendapatkan kode otorisasi</h3>
-        <div class="code-box">Auth Code: ${code}</div>
+        <h4>✅ Auth Code TikTok</h4>
+        <div class="code-box">${code}</div>
       `;
     }
 
-    document.getElementById('btnShopee').addEventListener('click', async () => {
-      const btn = document.getElementById('btnShopee');
-      btn.innerText = 'Mengambil token...'; btn.disabled = true;
+    /* ================= GET TOKEN SHOPEE ================= */
+    document.getElementById('btnShopee').onclick = async () => {
+      const btn = event.target;
+      btn.disabled = true; btn.innerText = "Loading...";
       try {
         const res = await fetch('/api/get-token');
         const data = await res.json();
-        alert('✅ Token Shopee:\n' + JSON.stringify(data, null, 2));
-      } catch (err) {
-        alert('❌ Gagal: ' + err.message);
+        alert("✅ Token Shopee\n" + JSON.stringify(data, null, 2));
+      } catch (e) {
+        alert("❌ Gagal: " + e.message);
       }
-      btn.innerText = 'GET TOKEN SHOPEE'; btn.disabled = false;
-    });
+      btn.innerText = "GET TOKEN SHOPEE";
+      btn.disabled = false;
+    };
 
-    document.getElementById('btnTiktok').addEventListener('click', async () => {
-      const btn = document.getElementById('btnTiktok');
-      btn.innerText = 'Mengambil token...'; btn.disabled = true;
+    /* ================= GET TOKEN TIKTOK ================= */
+    document.getElementById('btnTiktok').onclick = async () => {
+      const btn = event.target;
+      btn.disabled = true; btn.innerText = "Loading...";
       try {
         const res = await fetch('/api/get-tiktok-token');
         const data = await res.json();
-        alert('✅ Token TikTok:\n' + JSON.stringify(data, null, 2));
-      } catch (err) {
-        alert('❌ Gagal: ' + err.message);
+        alert("✅ Token TikTok\n" + JSON.stringify(data, null, 2));
+      } catch (e) {
+        alert("❌ Gagal: " + e.message);
       }
-      btn.innerText = 'GET TOKEN TIKTOK'; btn.disabled = false;
-    });
+      btn.innerText = "GET TOKEN TIKTOK";
+      btn.disabled = false;
+    };
 
-    // 🔥 Tombol GET AUTH SHOP TIKTOK
-    document.getElementById('btnTiktokShop').addEventListener('click', async () => {
-      const btn = document.getElementById('btnTiktokShop');
-      btn.innerText = 'Mengambil data shop...';
+    /* ================= 🔄 REFRESH TOKEN TIKTOK ================= */
+    document.getElementById('btnRefreshTiktok').onclick = async () => {
+      const btn = event.target;
       btn.disabled = true;
+      btn.innerText = "Refreshing...";
+
+      try {
+        const res = await fetch('/api/refresh-tiktok-token', {
+          method: 'POST'
+        });
+        const data = await res.json();
+        alert("✅ Refresh Token Berhasil\n" + JSON.stringify(data, null, 2));
+      } catch (e) {
+        alert("❌ Refresh gagal: " + e.message);
+      }
+
+      btn.innerText = "🔄 REFRESH TOKEN TIKTOK";
+      btn.disabled = false;
+    };
+
+    /* ================= GET AUTH SHOP ================= */
+    document.getElementById('btnTiktokShop').onclick = async () => {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.innerText = "Loading...";
 
       try {
         const res = await fetch('/api/get-tiktok-shops');
         const data = await res.json();
-        alert('✅ Daftar Shop TikTok:\n' + JSON.stringify(data, null, 2));
-      } catch (err) {
-        alert('❌ Gagal: ' + err.message);
+        alert("✅ Shop TikTok\n" + JSON.stringify(data, null, 2));
+      } catch (e) {
+        alert("❌ Gagal: " + e.message);
       }
 
-      btn.innerText = 'GET AUTH SHOP TIKTOK';
+      btn.innerText = "GET AUTH SHOP TIKTOK";
       btn.disabled = false;
-    });
-
+    };
   </script>
 
 </body>
