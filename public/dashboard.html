@@ -162,7 +162,7 @@
       btn.innerText = "Refreshing...";
 
       try {
-        const res = await fetch('/api/refresh-tiktok-token', {
+        const res = await fetch('/api/get-tiktok-refresh-token', {
           method: 'POST'
         });
         const data = await res.json();
