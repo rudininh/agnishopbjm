@@ -42,6 +42,9 @@
 
         <!-- ================= REFRESH TOKEN ================= -->
         <div class="btn-row">
+          <button id="btnRefreshShopee" class="btn-shopee">
+            🔄 REFRESH TOKEN SHOPEE
+          </button>
           <button id="btnRefreshTiktok" class="btn-tiktok">
             🔄 REFRESH TOKEN TIKTOK
           </button>
@@ -126,7 +129,7 @@
     }
 
     /* ================= GET TOKEN SHOPEE ================= */
-    document.getElementById('btnShopee').onclick = async () => {
+    document.getElementById('btnShopee').onclick = async (event) => {
       const btn = event.target;
       btn.disabled = true; btn.innerText = "Loading...";
       try {
@@ -141,7 +144,7 @@
     };
 
     /* ================= GET TOKEN TIKTOK ================= */
-    document.getElementById('btnTiktok').onclick = async () => {
+    document.getElementById('btnTiktok').onclick = async (event) => {
       const btn = event.target;
       btn.disabled = true; btn.innerText = "Loading...";
       try {
@@ -155,8 +158,40 @@
       btn.disabled = false;
     };
 
+    /* ================= 🔄 REFRESH TOKEN SHOPEE ================= */
+    document.getElementById('btnRefreshShopee').onclick = async (event) => {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.innerText = "Refreshing...";
+
+      try {
+        const res = await fetch('/api/refresh-shopee-token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!res.ok) {
+          throw new Error("HTTP " + res.status);
+        }
+
+        const data = await res.json();
+
+        alert(
+          "✅ Refresh Token Shopee Berhasil\n\n" +
+          JSON.stringify(data, null, 2)
+        );
+      } catch (e) {
+        alert("❌ Refresh Shopee gagal: " + e.message);
+      }
+
+      btn.innerText = "🔄 REFRESH TOKEN SHOPEE";
+      btn.disabled = false;
+    };
+
     /* ================= 🔄 REFRESH TOKEN TIKTOK ================= */
-    document.getElementById('btnRefreshTiktok').onclick = async () => {
+    document.getElementById('btnRefreshTiktok').onclick = async (event) => {
       const btn = event.target;
       btn.disabled = true;
       btn.innerText = "Refreshing...";
@@ -166,7 +201,7 @@
           method: 'POST'
         });
         const data = await res.json();
-        alert("✅ Refresh Token Berhasil\n" + JSON.stringify(data, null, 2));
+        alert("✅ Refresh Token TikTok\n" + JSON.stringify(data, null, 2));
       } catch (e) {
         alert("❌ Refresh gagal: " + e.message);
       }
@@ -176,7 +211,7 @@
     };
 
     /* ================= GET AUTH SHOP ================= */
-    document.getElementById('btnTiktokShop').onclick = async () => {
+    document.getElementById('btnTiktokShop').onclick = async (event) => {
       const btn = event.target;
       btn.disabled = true;
       btn.innerText = "Loading...";
