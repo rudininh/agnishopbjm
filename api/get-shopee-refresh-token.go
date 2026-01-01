@@ -1,31 +1,24 @@
-package shopee
+package handler
 
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
+
+	"agnishopbjm/shopee"
 )
 
 /*
 =====================================================
-TABEL shopee_tokens
-
-id
-shop_id
-access_token
-refresh_token
-expire_in
-request_id
-created_at
+ENDPOINT
+GET /api/get-shopee-refresh-token?shop_id=XXXXX
 =====================================================
 */
 
@@ -42,50 +35,60 @@ type ShopeeRefreshTokenResponse struct {
 
 /*
 =====================================================
-Generate Shopee Signature
-sign = HMAC_SHA256(partner_id + path + timestamp)
+VERCEL HTTP HANDLER (EXPORT WAJIB)
 =====================================================
 */
-func generateShopeeSign(
-	partnerID int64,
-	partnerKey string,
-	path string,
-	timestamp int64,
-) string {
+func ShopeeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
-	baseString :=
-		strconv.FormatInt(partnerID, 10) +
-			path +
-			strconv.FormatInt(timestamp, 10)
+	shopIDStr := r.URL.Query().Get("shop_id")
+	if shopIDStr == "" {
+		writeJSON(w, 400, map[string]string{
+			"error": "shop_id wajib",
+		})
+		return
+	}
 
-	h := hmac.New(sha256.New, []byte(partnerKey))
-	h.Write([]byte(baseString))
+	shopID, err := strconv.ParseInt(shopIDStr, 10, 64)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{
+			"error": "shop_id tidak valid",
+		})
+		return
+	}
 
-	return hex.EncodeToString(h.Sum(nil))
+	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer db.Close()
+
+	result, err := refreshShopeeAccessToken(ctx, db, shopID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, 200, result)
 }
 
 /*
 =====================================================
-Refresh Access Token (STEP 3 & 4 DOKUMENTASI)
-
-- Ambil refresh_token TERAKHIR dari DB
-- Call RefreshAccessToken API
-- Simpan token BARU ke shopee_tokens
+BUSINESS LOGIC
 =====================================================
 */
-func RefreshShopeeAccessToken(
+func refreshShopeeAccessToken(
 	ctx context.Context,
 	db *sql.DB,
 	shopID int64,
 ) (*ShopeeRefreshTokenResponse, error) {
 
-	// 1. Ambil partner config
-	cfg, err := GetShopeeConfig(ctx, db)
+	cfg, err := shopee.GetShopeeConfig(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Ambil refresh_token TERAKHIR
 	var refreshToken string
 	err = db.QueryRowContext(ctx, `
 		SELECT refresh_token
@@ -94,9 +97,8 @@ func RefreshShopeeAccessToken(
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, shopID).Scan(&refreshToken)
-
 	if err != nil {
-		return nil, fmt.Errorf("refresh_token tidak ditemukan untuk shop_id %d", shopID)
+		return nil, err
 	}
 
 	const (
@@ -105,24 +107,18 @@ func RefreshShopeeAccessToken(
 	)
 
 	timestamp := time.Now().Unix()
-	sign := generateShopeeSign(
+	sign := shopee.GenerateShopeeSign(
 		cfg.PartnerID,
 		cfg.PartnerKey,
 		path,
 		timestamp,
 	)
 
-	// 3. Build URL
 	url := fmt.Sprintf(
 		"%s%s?partner_id=%d&timestamp=%d&sign=%s",
-		baseURL,
-		path,
-		cfg.PartnerID,
-		timestamp,
-		sign,
+		baseURL, path, cfg.PartnerID, timestamp, sign,
 	)
 
-	// 4. BODY SESUAI DOKUMENTASI
 	payload := map[string]interface{}{
 		"shop_id":       shopID,
 		"refresh_token": refreshToken,
@@ -131,7 +127,7 @@ func RefreshShopeeAccessToken(
 
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequestWithContext(
+	reqHTTP, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
 		url,
@@ -140,11 +136,10 @@ func RefreshShopeeAccessToken(
 	if err != nil {
 		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
+	reqHTTP.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(reqHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -152,32 +147,19 @@ func RefreshShopeeAccessToken(
 
 	respBody, _ := io.ReadAll(resp.Body)
 
-	// 5. Parse response
 	var result ShopeeRefreshTokenResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, err
 	}
 
 	if result.Error != "" {
-		return nil, fmt.Errorf(
-			"shopee refresh token error: %s - %s",
-			result.Error,
-			result.Message,
-		)
+		return nil, fmt.Errorf("shopee error: %s", result.Message)
 	}
 
-	// 6. SIMPAN TOKEN BARU
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO shopee_tokens (
-			shop_id,
-			access_token,
-			refresh_token,
-			expire_in,
-			request_id,
-			created_at
-		) VALUES (
-			$1, $2, $3, $4, $5, NOW()
-		)
+		INSERT INTO shopee_tokens
+		(shop_id, access_token, refresh_token, expire_in, request_id, created_at)
+		VALUES ($1,$2,$3,$4,$5,NOW())
 	`,
 		shopID,
 		result.AccessToken,
@@ -185,10 +167,27 @@ func RefreshShopeeAccessToken(
 		result.ExpireIn,
 		result.RequestID,
 	)
-
 	if err != nil {
 		return nil, err
 	}
 
 	return &result, nil
+}
+
+/*
+=====================================================
+HELPERS
+=====================================================
+*/
+func writeJSON(w http.ResponseWriter, code int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(data)
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	writeJSON(w, 500, map[string]string{
+		"error": err.Error(),
+	})
 }

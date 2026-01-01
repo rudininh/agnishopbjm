@@ -33,7 +33,7 @@ func getDBConn(ctx context.Context) (*pgx.Conn, error) {
 }
 
 // ===== Generate Shopee Signature =====
-func generateShopeeSign(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
+func generateShopeeSigns(partnerID int64, path, accessToken string, shopID int64, timestamp int64, partnerKey string) string {
 	baseString := fmt.Sprintf("%d%s%d%s%d", partnerID, path, timestamp, accessToken, shopID)
 	h := hmac.New(sha256.New, []byte(partnerKey))
 	h.Write([]byte(baseString))
@@ -238,7 +238,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	// === STEP 1: GET ITEM LIST ===
 	timestamp := time.Now().Unix()
 	path := "/api/v2/product/get_item_list"
-	sign := generateShopeeSign(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
+	sign := generateShopeeSigns(partnerID, path, token.AccessToken, token.ShopID, timestamp, partnerKey)
 
 	url := fmt.Sprintf(
 		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&offset=0&page_size=100&item_status=NORMAL",
@@ -294,7 +294,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	// === STEP 2: GET ITEM BASE INFO ===
 	path2 := "/api/v2/product/get_item_base_info"
 	timestamp2 := time.Now().Unix()
-	sign2 := generateShopeeSign(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
+	sign2 := generateShopeeSigns(partnerID, path2, token.AccessToken, token.ShopID, timestamp2, partnerKey)
 
 	url2 := fmt.Sprintf(
 		"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id_list=%s",
@@ -321,7 +321,7 @@ func ShopeeGetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	for _, id := range itemIDs {
 		path3 := "/api/v2/product/get_model_list"
 		timestamp3 := time.Now().Unix()
-		sign3 := generateShopeeSign(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
+		sign3 := generateShopeeSigns(partnerID, path3, token.AccessToken, token.ShopID, timestamp3, partnerKey)
 
 		url3 := fmt.Sprintf(
 			"https://partner.shopeemobile.com%s?partner_id=%d&shop_id=%d&timestamp=%d&access_token=%s&sign=%s&item_id=%d",
