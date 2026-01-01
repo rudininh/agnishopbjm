@@ -165,7 +165,7 @@
       btn.innerText = "Refreshing...";
 
       try {
-        const res = await fetch('/api/refresh-shopee-token', {
+        const res = await fetch('/api/get-shopee-refresh-token', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
