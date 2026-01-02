@@ -8,7 +8,7 @@ import (
 )
 
 /*
-Struktur tabel yang dipakai:
+TABEL: shopee_config
 
 partner_id  BIGINT NOT NULL
 partner_key TEXT NOT NULL
@@ -23,7 +23,9 @@ type ShopeeConfig struct {
 	CreatedAt  time.Time
 }
 
-// GetShopeeConfig mengambil 1 config Shopee yang aktif
+// ================================
+// GET CONFIG SHOPEE (AKTIF)
+// ================================
 func GetShopeeConfig(
 	ctx context.Context,
 	db *sql.DB,
@@ -57,4 +59,68 @@ func GetShopeeConfig(
 	}
 
 	return &cfg, nil
+}
+
+/*
+TABEL: shopee_tokens
+
+shop_id        BIGINT NOT NULL
+access_token   TEXT NOT NULL
+refresh_token  TEXT NOT NULL
+expire_at      TIMESTAMP NOT NULL
+is_active      BOOLEAN NOT NULL DEFAULT TRUE
+updated_at     TIMESTAMP NOT NULL DEFAULT NOW()
+*/
+
+type ShopeeToken struct {
+	ShopID       int64
+	AccessToken  string
+	RefreshToken string
+	ExpireAt     time.Time
+	IsActive     bool
+	UpdatedAt    time.Time
+}
+
+// ================================
+// GET TOKEN SHOPEE PER SHOP_ID
+// ================================
+func GetShopeeToken(
+	ctx context.Context,
+	db *sql.DB,
+	shopID int64,
+) (*ShopeeToken, error) {
+
+	const query = `
+		SELECT
+			shop_id,
+			access_token,
+			refresh_token,
+			expire_at,
+			is_active,
+			updated_at
+		FROM shopee_tokens
+		WHERE shop_id = $1
+		  AND is_active = TRUE
+		LIMIT 1
+	`
+
+	var token ShopeeToken
+
+	err := db.QueryRowContext(ctx, query, shopID).Scan(
+		&token.ShopID,
+		&token.AccessToken,
+		&token.RefreshToken,
+		&token.ExpireAt,
+		&token.IsActive,
+		&token.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("shopee token tidak ditemukan")
+		}
+		return nil, err
+	}
+
+	return &token, nil
 }
