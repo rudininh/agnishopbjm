@@ -19,14 +19,15 @@ import (
 )
 
 /*
-=====================================================
+========================================
 ENDPOINT
 POST /api/get-shopee-refresh-token
-=====================================================
+========================================
 */
 
+// ================= RESPONSE SHOPEE (FIX SESUAI ASLI) =================
 type ShopeeRefreshTokenResponse struct {
-	PartnerID    int64  `json:"partner_id"`
+	PartnerID    int    `json:"partner_id"`
 	ShopID       int64  `json:"shop_id"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -36,12 +37,9 @@ type ShopeeRefreshTokenResponse struct {
 	Message      string `json:"message"`
 }
 
-/*
-=====================================================
-HANDLER
-=====================================================
-*/
-func ShopeeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+// ===================================================================
+
+func ShopeeRefreshHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("=== SHOPEE REFRESH TOKEN START ===")
 
 	if r.Method != http.MethodPost {
@@ -52,23 +50,20 @@ func ShopeeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Println("METHOD :", r.Method)
-	log.Println("URL    :", r.URL.String())
+	log.Println("URL    :", r.URL.Path)
 
-	// ===== READ RAW BODY =====
+	// ===== RAW BODY =====
 	var rawBody []byte
 	if r.Body != nil {
 		rawBody, _ = io.ReadAll(r.Body)
-		r.Body = io.NopCloser(bytes.NewBuffer(rawBody))
 	}
-
 	if len(rawBody) == 0 {
 		log.Println("RAW BODY: <KOSONG>")
 	} else {
 		log.Println("RAW BODY:", string(rawBody))
 	}
 
-	ctx := r.Context()
-	var shopID int64
+	ctx := context.Background()
 
 	// ===== DB CONNECT =====
 	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
@@ -78,7 +73,9 @@ func ShopeeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer db.Close()
 
-	// ===== 1️⃣ QUERY STRING =====
+	var shopID int64
+
+	// ===== 1. QUERY STRING =====
 	if v := r.URL.Query().Get("shop_id"); v != "" {
 		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
 			shopID = id
@@ -86,186 +83,151 @@ func ShopeeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ===== 2️⃣ BODY JSON =====
+	// ===== 2. BODY =====
 	if shopID == 0 && len(rawBody) > 0 {
-		var payload map[string]interface{}
-		if err := json.Unmarshal(rawBody, &payload); err == nil {
-			if v, ok := payload["shop_id"]; ok {
+		var body map[string]interface{}
+		if json.Unmarshal(rawBody, &body) == nil {
+			if v, ok := body["shop_id"]; ok {
 				switch t := v.(type) {
 				case float64:
 					shopID = int64(t)
 				case string:
 					shopID, _ = strconv.ParseInt(t, 10, 64)
 				}
-				if shopID != 0 {
-					log.Println("SHOP ID dari BODY:", shopID)
-				}
+				log.Println("SHOP ID dari BODY:", shopID)
 			}
 		}
 	}
 
-	// ===== 3️⃣ FALLBACK DATABASE =====
+	// ===== 3. FALLBACK DB =====
 	if shopID == 0 {
 		log.Println("ℹ️ shop_id tidak dikirim, ambil dari database...")
-		id, err := getLastShopeeShopID(ctx, db)
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT shop_id FROM shopee_tokens ORDER BY created_at DESC LIMIT 1`,
+		).Scan(&shopID)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "shop_id tidak dikirim dan database kosong",
+				"error": "shop_id tidak ditemukan",
 			})
 			return
 		}
-		shopID = id
 		log.Println("SHOP ID dari DB:", shopID)
 	}
 
-	// ===== BUSINESS =====
-	result, err := refreshShopeeAccessToken(ctx, db, shopID)
+	// ===== AMBIL REFRESH TOKEN TERAKHIR =====
+	var refreshToken string
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT refresh_token
+		 FROM shopee_tokens
+		 WHERE shop_id=$1
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		shopID,
+	).Scan(&refreshToken)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	log.Println("=== SHOPEE REFRESH TOKEN SUCCESS ===")
-	writeJSON(w, http.StatusOK, result)
-}
-
-/*
-=====================================================
-BUSINESS LOGIC
-=====================================================
-*/
-func refreshShopeeAccessToken(
-	ctx context.Context,
-	db *sql.DB,
-	shopID int64,
-) (*ShopeeRefreshTokenResponse, error) {
-
+	// ===== CONFIG =====
 	cfg, err := shopee.GetShopeeConfig(ctx, db)
 	if err != nil {
-		return nil, err
+		writeError(w, err)
+		return
 	}
 
-	token, err := shopee.GetShopeeToken(ctx, db, shopID)
-	if err != nil {
-		return nil, err
-	}
+	// ===== REQUEST KE SHOPEE =====
+	const path = "/api/v2/auth/access_token/get"
+	ts := time.Now().Unix()
 
-	const (
-		baseURL = "https://partner.shopeemobile.com"
-		path    = "/api/v2/auth/access_token/get"
-	)
-
-	timestamp := time.Now().Unix()
 	sign := shopee.GenerateShopeeSign(
 		cfg.PartnerID,
 		cfg.PartnerKey,
 		path,
-		timestamp,
+		ts,
 	)
 
 	url := fmt.Sprintf(
-		"%s%s?partner_id=%d&timestamp=%d&sign=%s",
-		baseURL,
+		"https://partner.shopeemobile.com%s?partner_id=%d&timestamp=%d&sign=%s",
 		path,
 		cfg.PartnerID,
-		timestamp,
+		ts,
 		sign,
 	)
 
 	payload := map[string]interface{}{
 		"partner_id":    cfg.PartnerID,
 		"shop_id":       shopID,
-		"refresh_token": token.RefreshToken,
+		"refresh_token": refreshToken,
 	}
 
-	body, _ := json.MarshalIndent(payload, "", "  ")
+	bodyJSON, _ := json.Marshal(payload)
 
-	// ===== FULL CURL LOG =====
-	log.Println("=== SHOPEE CURL (COPY PASTEABLE) ===")
+	log.Println("=== CURL ===")
 	log.Printf(
 		`curl -X POST "%s" -H "Content-Type: application/json" -d '%s'`,
 		url,
-		string(body),
+		string(bodyJSON),
 	)
-	log.Println("===================================")
 
-	req, _ := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		url,
-		bytes.NewBuffer(body),
-	)
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		writeError(w, err)
+		return
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	log.Println("SHOPEE HTTP STATUS:", resp.StatusCode)
-	log.Println("SHOPEE RAW RESPONSE:", string(respBody))
+	log.Println("SHOPEE RESPONSE:", string(respBody))
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("shopee http %d: %s", resp.StatusCode, string(respBody))
+	var shResp ShopeeRefreshTokenResponse
+	if err := json.Unmarshal(respBody, &shResp); err != nil {
+		writeError(w, err)
+		return
 	}
 
-	var result ShopeeRefreshTokenResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, err
+	// ===== VALIDASI TOKEN (WAJIB) =====
+	if shResp.AccessToken == "" || shResp.RefreshToken == "" {
+		log.Println("❌ TOKEN DARI SHOPEE KOSONG")
+		writeJSON(w, http.StatusBadGateway, shResp)
+		return
 	}
 
-	if result.Error != "" {
-		return nil, fmt.Errorf("shopee error: %s", result.Message)
-	}
-
-	// ===== INSERT TOKEN =====
-	_, err = db.ExecContext(ctx, `
+	// ===== INSERT DB (SATU KALI) =====
+	res, err := db.ExecContext(ctx, `
 		INSERT INTO shopee_tokens
 		(shop_id, access_token, refresh_token, expire_in, request_id, created_at)
 		VALUES ($1, $2, $3, $4, $5, NOW())
 	`,
-		result.ShopID,
-		result.AccessToken,
-		result.RefreshToken,
-		result.ExpireIn,
-		result.RequestID,
+		shopID,
+		shResp.AccessToken,
+		shResp.RefreshToken,
+		shResp.ExpireIn,
+		shResp.RequestID,
 	)
 	if err != nil {
-		return nil, err
+		log.Println("❌ DB INSERT ERROR:", err)
+		writeError(w, err)
+		return
 	}
 
-	return &result, nil
+	rows, _ := res.RowsAffected()
+	log.Printf("✅ DB INSERT SUCCESS: %d row(s) affected", rows)
+
+	writeJSON(w, http.StatusOK, shResp)
 }
 
-/*
-=====================================================
-FALLBACK SHOP ID
-=====================================================
-*/
-func getLastShopeeShopID(ctx context.Context, db *sql.DB) (int64, error) {
-	var shopID int64
-	err := db.QueryRowContext(ctx, `
-		SELECT shop_id
-		FROM shopee_tokens
-		ORDER BY created_at DESC
-		LIMIT 1
-	`).Scan(&shopID)
-	return shopID, err
-}
+// =====================================================
 
-/*
-=====================================================
-HELPERS
-=====================================================
-*/
-func writeJSON(w http.ResponseWriter, code int, data interface{}) {
+func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeError(w http.ResponseWriter, err error) {
