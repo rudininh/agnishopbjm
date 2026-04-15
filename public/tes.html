@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penegakan Disiplin ASN - PPT Template 4:3</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@700;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        /* =========================================
+           PENGATURAN UTAMA (MUDAH DIEDIT)
+           ========================================= */
+        :root {
+            --navy-dark: #001a35;
+            --navy-light: #002d5a;
+            --signal-red: #dc2626;
+            --slate-grey: #64748b;
+            --text-white: #f8fafc;
+            --bg-accent: rgba(255, 255, 255, 0.05);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: #0f172a;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 50px;
+            padding: 50px 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* UKURAN STANDAR 4:3 (1024px x 768px) */
+        .slide-container {
+            width: 1024px;
+            height: 768px;
+            background-color: var(--navy-dark);
+            color: var(--text-white);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            padding: 60px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+
+        /* AKSEN BACKGROUND */
+        .slide-container::before {
+            content: ""; position: absolute; top: 0; right: 0;
+            width: 300px; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(220, 38, 38, 0.03));
+        }
+
+        /* HEADER SLIDE */
+        .slide-header {
+            border-left: 8px solid var(--signal-red);
+            padding-left: 20px;
+            margin-bottom: 40px;
+            z-index: 2;
+        }
+
+        .slide-header h2 {
+            font-family: 'Urbanist', sans-serif;
+            font-size: 36px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* KONTEN MODULAR */
+        .content-grid {
+            display: grid;
+            gap: 20px;
+            z-index: 2;
+            flex-grow: 1;
+        }
+
+        .card {
+            background: var(--bg-accent);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 25px;
+        }
+
+        .card-title {
+            font-family: 'Urbanist', sans-serif;
+            font-size: 14px;
+            color: var(--slate-grey);
+            text-transform: uppercase;
+            margin-bottom: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* TABEL DATA */
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 12px; color: var(--slate-grey); padding-bottom: 10px; text-transform: uppercase; }
+        td { padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 14px; }
+
+        /* FOOTER */
+        .slide-footer {
+            margin-top: auto;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #475569;
+            padding-top: 20px;
+            z-index: 2;
+        }
+
+        /* HIGHLIGHT */
+        .text-red { color: var(--signal-red); font-weight: 700; }
+        .big-number { font-size: 72px; font-weight: 800; color: var(--signal-red); line-height: 1; font-family: 'Urbanist'; }
+
+        /* PRINT SETTINGS */
+        @media print {
+            body { padding: 0; background: none; }
+            .slide-container { box-shadow: none; page-break-after: always; margin: 0; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- SLIDE 1: COVER -->
+<div class="slide-container">
+    <div style="display: flex; flex-direction: column; justify-content: center; height: 100%; text-align: center;">
+        <p style="font-size: 18px; color: var(--slate-grey); letter-spacing: 5px; text-transform: uppercase; margin-bottom: 20px;">Evaluasi</p>
+        <h1 style="font-family: 'Urbanist'; font-size: 64px; font-weight: 800; line-height: 1.1; margin-bottom: 40px;">PENEGAKAN DISIPLIN ASN<br><span style="color: var(--signal-red);">TAHUN 2023-2025</span></h1>
+        <div style="width: 150px; height: 8px; background: var(--signal-red); margin: 0 auto;"></div>
+        <p style="margin-top: 60px; font-size: 16px; color: var(--slate-grey);">Badan Kepegawaian Daerah, Pendidikan dan Pelatihan Kota Banjarmasin</p>
+    </div>
+</div>
+
+<!-- SLIDE 2: REKAP HUKDIS 2023-2025 -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>Rekapitulasi Hukuman Disiplin 
+            <span style="color: var(--slate-grey); font-weight:400;">| 2023–2025</span>
+        </h2>
+    </div>
+
+    <!-- GRID UTAMA -->
+    <div class="content-grid" style="grid-template-columns: 1fr 1.2fr 1.3fr; align-items:start; gap:20px;">
+
+        <!-- ================= KIRI ================= -->
+        <div class="card">
+            <div class="card-title">
+                <span>Komposisi Kasus per Tahun</span>
+            </div>
+
+            <!-- 2023 -->
+            <div style="margin-top:10px;">
+                <div style="font-size:14px; font-weight:700;">
+                    2023 <span style="color:var(--slate-grey);">(5 kasus)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:12px; margin-top:5px;">
+                    <span>Berat: <span class="text-red">4</span></span>
+                    <span>Sedang: 1</span>
+                    <span>Ringan: 0</span>
+                </div>
+                <div style="height:6px; background:#334155; margin-top:6px; border-radius:3px;">
+                    <div style="width:80%; height:100%; background:var(--signal-red);"></div>
+                </div>
+            </div>
+
+            <!-- 2024 -->
+            <div style="margin-top:15px;">
+                <div style="font-size:14px; font-weight:700;">
+                    2024 <span style="color:var(--slate-grey);">(8 kasus)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:12px; margin-top:5px;">
+                    <span>Berat: <span class="text-red">4</span></span>
+                    <span>Sedang: 4</span>
+                    <span>Ringan: 0</span>
+                </div>
+                <div style="height:6px; background:#334155; margin-top:6px; border-radius:3px;">
+                    <div style="width:50%; height:100%; background:var(--signal-red);"></div>
+                </div>
+            </div>
+
+            <!-- 2025 -->
+            <div style="margin-top:15px;">
+                <div style="font-size:14px; font-weight:700;">
+                    2025 <span style="color:var(--slate-grey);">(7 kasus)</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:12px; margin-top:5px;">
+                    <span>Berat: <span class="text-red">7</span></span>
+                    <span>Sedang: 0</span>
+                    <span>Ringan: 0</span>
+                </div>
+                <div style="height:6px; background:#334155; margin-top:6px; border-radius:3px;">
+                    <div style="width:100%; height:100%; background:var(--signal-red);"></div>
+                </div>
+            </div>
+
+            <!-- INSIGHT -->
+            <div style="margin-top:20px; background:rgba(220,38,38,0.1); padding:10px; border-radius:6px;">
+                <p style="font-size:12px;">
+                    Tren menunjukkan dominasi 
+                    <span class="text-red">Hukuman Berat</span>, terutama 2025 (100%).
+                </p>
+            </div>
+
+            <!-- TOTAL -->
+            <div style="margin-top:15px; border-top:1px solid rgba(255,255,255,0.1); padding-top:15px;">
+                <div style="font-size:14px; font-weight:700;">
+                    TOTAL 2023–2025 
+                    <span style="color:var(--slate-grey);">(20 kasus)</span>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:12px;">
+                    
+                    <div style="background:rgba(220,38,38,0.1); padding:10px; border-radius:6px;">
+                        <div style="font-size:11px; color:#fca5a5;">BERAT</div>
+                        <div style="font-size:20px; font-weight:800; color:var(--signal-red);">15</div>
+                    </div>
+
+                    <div style="background:rgba(59,130,246,0.1); padding:10px; border-radius:6px;">
+                        <div style="font-size:11px; color:#93c5fd;">SEDANG</div>
+                        <div style="font-size:20px; font-weight:800; color:#3b82f6;">5</div>
+                    </div>
+
+                    <div style="background:rgba(100,116,139,0.15); padding:10px; border-radius:6px;">
+                        <div style="font-size:11px; color:#94a3b8;">RINGAN</div>
+                        <div style="font-size:20px; font-weight:800; color:#64748b;">0</div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+      <!-- ================= TENGAH ================= -->
+<div style="display:flex; flex-direction:column; gap:15px;">
+
+    <!-- ===== ATAS: JENIS PELANGGARAN ===== -->
+    <div class="card" style="padding:15px;">
+        <div class="card-title">
+            <span>Jenis Pelanggaran Tahun 2023-2025</span>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+
+            <!-- Perselingkuhan -->
+            <div>
+                <div style="display:flex; justify-content:space-between; font-size:13px;">
+                    <span>Perselingkuhan</span>
+                    <span class="text-red" style="font-weight:700;">13</span>
+                </div>
+                <div style="height:6px; background:#334155; border-radius:3px;">
+                    <div style="width:100%; height:100%; background:var(--signal-red);"></div>
+                </div>
+            </div>
+
+            <!-- Jam Kerja -->
+            <div>
+                <div style="display:flex; justify-content:space-between; font-size:13px;">
+                    <span>Tidak Mematuhi Jam Kerja</span>
+                    <span style="font-weight:700;">5</span>
+                </div>
+                <div style="height:6px; background:#334155; border-radius:3px;">
+                    <div style="width:45%; height:100%; background:#f97316;"></div>
+                </div>
+            </div>
+
+            <!-- Kelalaian -->
+            <div>
+                <div style="display:flex; justify-content:space-between; font-size:13px;">
+                    <span>Kelalaian dalam Jabatan</span>
+                    <span style="font-weight:700;">2</span>
+                </div>
+                <div style="height:6px; background:#334155; border-radius:3px;">
+                    <div style="width:20%; height:100%; background:#38bdf8;"></div>
+                </div>
+            </div>
+
+            <!-- Narkoba -->
+            <div>
+                <div style="display:flex; justify-content:space-between; font-size:13px;">
+                    <span>Narkotika (non hukdis)</span>
+                    <span style="font-weight:700;">11</span>
+                </div>
+                
+     
+                <div style="height:6px; background:#334155; border-radius:3px;">
+                    <div style="width:25%; height:100%; background:#a855f7;"></div>
+                </div>
+                   <div style="margin-top:12px; font-size:12px; color:var(--slate-grey);">
+          5 Non-ASN diberhentikan + 6 ASN dibina
+        </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ===== BAWAH: JENIS HUKUMAN ===== -->
+    <div class="card" style="padding:15px;">
+        <div class="card-title">
+            <span>Jenis Hukuman Disiplin Tahun 2023-2025</span>
+        </div>
+
+        <table>
+            <tbody>
+                <tr>
+                    <td>Pembebasan Jabatan</td>
+                    <td style="text-align:right;">7</td>
+                </tr>
+                <tr>
+                    <td>Penurunan Pangkat</td>
+                    <td style="text-align:right;">5</td>
+                </tr>
+                <tr>
+                    <td>Penurunan Jabatan</td>
+                    <td style="text-align:right;">1</td>
+                </tr>
+                <tr>
+                    <td class="text-red">Pemberhentian (PNS)</td>
+                    <td class="text-red" style="text-align:right;">5</td>
+                </tr>
+                <tr>
+                    <td class="text-red">Pemutusan (PPPK)</td>
+                    <td class="text-red" style="text-align:right;">2</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="margin-top:12px; font-size:12px; color:var(--slate-grey);">
+            Dominasi pada <span class="text-red">pemberhentian & pembebasan jabatan</span> 
+            sebagai respon pelanggaran integritas.
+        </div>
+    </div>
+
+</div>
+        <!-- ================= KANAN ================= -->
+   <div class="card" style="height:fit-content;">
+    <div class="card-title">
+        <span>Pemeriksaan Narkoba 2023–2025</span>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+
+        <!-- 2023 -->
+        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px;">
+            <div style="font-weight:700; font-size:13px;">2023</div>
+            <div style="font-size:12px; margin-top:5px;">
+                • 8 orang terindikasi positif<br>
+                • 5 ASN → <span style="color:#22c55e;">obat resep dokter</span><br>
+                • 3 non-ASN → tanpa resep & narkotika berat
+            </div>
+
+            <div style="margin-top:8px; font-size:11px; color:var(--slate-grey);">
+                Tanpa resep → sanksi disiplin & rehabilitasi
+            </div>
+        </div>
+
+        <!-- 2024 -->
+        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px;">
+            <div style="font-weight:700; font-size:13px;">2024</div>
+            <div style="font-size:12px; margin-top:5px;">
+                Tidak dilakukan pemeriksaan
+            </div>
+            <div style="font-size:11px; color:var(--slate-grey);">
+                (Refocusing anggaran)
+            </div>
+        </div>
+
+        <!-- 2025 -->
+        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px;">
+            <div style="font-weight:700; font-size:13px;">2025</div>
+
+            <div style="font-size:12px; margin-top:5px;">
+                Pemeriksaan pada Dishub, Satpol PP, Dinsos, Disdukcapil, BPBD dan Pejabat SKPD
+            </div>
+
+            <div style="margin-top:6px; font-size:12px;">
+                • Kasus reaktif:
+            </div>
+
+            <div style="font-size:12px; margin-left:10px;">
+                - Dishub: 3 orang<br>
+                - Satpol PP: 9 orang<br>
+                - Pejabat SKPD: 4 orang
+            </div>
+        </div>
+
+        <!-- KLASIFIKASI -->
+        <div style="border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
+
+            <div style="font-size:13px; font-weight:700; margin-bottom:6px;">
+                Klasifikasi & Tindak Lanjut
+            </div>
+
+            <!-- Berat -->
+            <div style="border-left:3px solid var(--signal-red); padding-left:10px; margin-bottom:8px;">
+                <div style="font-size:12px;">Zat Berat (Methamphetamine)</div>
+                <div class="text-red" style="font-size:12px; font-weight:600;">
+                    PEMBERHENTIAN
+                </div>
+            </div>
+
+            <!-- Zat lain -->
+            <div style="border-left:3px solid #f97316; padding-left:10px; margin-bottom:8px;">
+                <div style="font-size:12px;">Zat Lain (SOMA, Benzodiazepine, dll)</div>
+                <div style="font-size:12px;">
+                    Pembinaan + Hukdis + Monitoring
+                </div>
+            </div>
+
+            <!-- Resep -->
+            <div style="border-left:3px solid #22c55e; padding-left:10px;">
+                <div style="font-size:12px;">ASN (Pejabat SKPD) Seluruhnya dengan resep dokter (klarifikasi medis)</div>
+               
+            </div>
+
+        </div>
+
+       
+
+    </div>
+</div>
+
+    </div>
+</div>
+
+
+
+    <div class="slide-footer">
+        <div>Data Periode 2023–2025</div>
+        <div>Slide 02</div>
+    </div>
+</div>
+<!-- SLIDE 3: HASIL SIDAK 2026 -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>Hasil Sidak Apel Pagi Awal Tahun 2026</h2>
+    </div>
+
+    <div class="content-grid" style="grid-template-columns: 300px 1fr; gap:20px;">
+
+        <!-- KIRI -->
+        <div class="card" style="text-align: center;">
+            <div class="card-title"><span>Total Kehadiran</span></div>
+
+            <div class="big-number" style="font-size: 80px; margin: 30px 0;">
+                65,6%
+            </div>
+
+            <div style="background: rgba(220, 38, 38, 0.1); padding: 15px; border-radius: 4px;">
+                <p class="text-red" style="font-size: 12px;">
+                    DI BAWAH TARGET OPTIMAL (&lt;70%)
+                </p>
+            </div>
+
+            <div style="margin-top: 30px; text-align: left; font-size: 13px;">
+                <p>Jumlah SKPD: <b>25</b></p>
+                <p>Target ASN: <b>1.054 orang</b></p>
+                <p>Hadir: <b>691 orang</b></p>
+            </div>
+        </div>
+
+        <!-- KANAN -->
+        <div class="card">
+            <div class="card-title"><span>Sebaran Kehadiran per Status</span></div>
+
+            <div style="display: flex; justify-content: space-around; padding: 20px 0;">
+                <div style="text-align:center;">
+                    <div style="font-size: 36px; font-weight: 800; color: #22c55e;">70%</div>
+                    <p style="font-size: 11px;">PPPK</p>
+                </div>
+
+                <div style="text-align:center;">
+                    <div style="font-size: 36px; font-weight: 800; color: #3b82f6;">67%</div>
+                    <p style="font-size: 11px;">PNS</p>
+                </div>
+
+                <div style="text-align:center;">
+                    <div style="font-size: 36px; font-weight: 800; color: var(--signal-red);">58%</div>
+                    <p style="font-size: 11px;">PPPK PARUH WAKTU</p>
+                </div>
+            </div>
+
+            <!-- LOKASI SIDAK PER POINT -->
+            <div style="margin-top: 20px;">
+                <p style="font-size: 12px; color: var(--slate-grey); text-transform: uppercase; margin-bottom: 10px;">
+                    Lokasi Sidak:
+                </p>
+
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 11px;">
+
+                    <!-- SKPD -->
+                    <div>Dinas Sosial</div>
+                    <div>DPMPTSP</div>
+                    <div>Disdukcapil</div>
+                    <div>DP3A</div>
+                    <div>Disbudporapar</div>
+                    <div>DKP3</div>
+                    <div>DPPKBPM</div>
+                    <div>PUPR</div>
+
+                    <!-- Kecamatan -->
+                    <div>Kec. Banjarmasin Barat</div>
+                    <div>Kec. Banjarmasin Timur</div>
+                    <div>Kec. Banjarmasin Selatan</div>
+
+                    <!-- Puskesmas -->
+                    <div style="color:#f87171;">Puskesmas Cempaka Putih</div>
+                    <div style="color:#f87171;">Puskesmas Mantuil</div>
+                    <div style="color:#f87171;">Puskesmas Cempaka</div>
+                    <div style="color:#f87171;">Puskesmas Beruntung Raya</div>
+                    <div style="color:#f87171;">Puskesmas Alalak Selatan</div>
+
+                    <!-- SDN (dipisah semua) -->
+                    <div style="color:#f87171;">SDN Kuin Selatan 1</div>
+                    <div style="color:#f87171;">SDN Kuin Selatan 3</div>
+                    <div style="color:#f87171;">SDN Kuin Selatan 4</div>
+                    <div style="color:#f87171;">SDN Kuin Selatan 5</div>
+                    <div style="color:#f87171;">SDN Kuin Selatan 6</div>
+
+                    <div style="color:#f87171;">SDN Kelayan Selatan 1</div>
+
+                    <!-- SMP -->
+                    <div style="color:#f87171;">SMPN 3</div>
+                    <div style="color:#f87171;">SMPN 11</div>
+                    <div style="color:#f87171;">SMPN 34</div>
+
+                </div>
+            </div>
+
+            <!-- CATATAN -->
+            <div style="margin-top: 20px; padding: 12px; background: rgba(220,38,38,0.08); border-radius: 6px;">
+                <p style="font-size: 12px;">
+                    • Tingkat kehadiran belum optimal<br>
+                    • PPPK Paruh Waktu terendah → <b>perlu perhatian khusus</b>
+                </p>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Inspeksi Lapangan Januari 2026</div>
+        <div>Slide 03</div>
+    </div>
+</div>
+
+<!-- SLIDE 4: PRINSIP & PROSES DISIPLIN -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>Prinsip & Proses Penegakan Disiplin ASN</h2>
+    </div>
+
+    <div class="content-grid" style="grid-template-columns: 1fr 1fr; gap:20px;">
+
+        <!-- KIRI: PRINSIP -->
+        <div class="card">
+            <div class="card-title"><span>Prinsip Penegakan Disiplin</span></div>
+
+            <div style="font-size: 13px; line-height: 1.8;">
+                <p>• Penegakan disiplin <b>berbasis pembinaan oleh atasan langsung</b>, bukan semata penjatuhan hukuman.</p>
+                <p>• Atasan langsung <b>bertanggung jawab penuh</b> atas disiplin pegawai.</p>
+                <p>• Pencegahan pelanggaran harus dioptimalkan sebelum terjadi hukuman disiplin.</p>
+            </div>
+            
+
+               <!-- HIGHLIGHT UTAMA -->
+            <div style="
+                background: linear-gradient(135deg, rgba(220,38,38,0.95), rgba(153,27,27,0.95));
+                padding:18px;
+                border-radius:10px;
+                margin-bottom:5 px;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+            ">
+                <div style="font-size:12px; letter-spacing:1px; opacity:0.8; margin-bottom:6px;">
+                    PERAN KUNCI
+                </div>
+                <div style="font-size:12px; font-weight:700; line-height:1.5;">
+                    Disiplin ASN dimulai dari <b>Atasan Langsung</b>.<br>
+                    Kelalaian dalam pembinaan dan pemeriksaan<br>
+                    <b>dapat berujung hukuman disiplin bagi atasan itu sendiri.</b>
+                </div>
+            </div>
+
+            <div style="margin-top:5px; padding:10px; background: rgba(220,38,38,0.08); border-radius:6px; font-size:12px;">
+                <b>Kewajiban Atasan:</b><br>
+                • Wajib memanggil & memeriksa ASN (Pasal 26 ayat 1)<br>
+                • Wajib melaporkan hasil pemeriksaan ke pejabat berwenang
+            </div>
+
+            <div style="margin-top:5px; padding:10px; background: rgba(220,38,38,0.12); border-radius:6px; font-size:12px;">
+                ⚠️ <b>Risiko:</b> Atasan yang lalai melakukan pemeriksaan<br>
+                dapat dijatuhi hukuman disiplin (Pasal 28)
+            </div>
+
+            <div style="margin-top:5px;">
+                <div class="card-title"><span>3 Aspek Wajib</span></div>
+
+                <div style="display: flex; flex-direction: column; gap: 10px; font-size:13px;">
+                    <div>1. <b>Kewenangan</b> → siapa yang berhak memproses</div>
+                    <div>2. <b>Prosedur</b> → tahapan harus sesuai aturan</div>
+                    <div>3. <b>Substansi</b> → pelanggaran terbukti</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KANAN: PROSES -->
+        <div class="card">
+            <div class="card-title"><span>Proses Penanganan Pelanggaran</span></div>
+
+            <div style="font-size: 13px; line-height: 1.9;">
+
+                <p><span class="text-red">01.</span> <b>Pemanggilan</b><br>
+                Pemanggilan tertulis (maks 2x, jarak ≤7 hari kerja)</p>
+
+                <p><span class="text-red">02.</span> <b>Pemeriksaan</b><br>
+                Oleh atasan langsung / tim, tertutup (tatap muka / virtual), dibuat BAP</p>
+
+                <p><span class="text-red">03.</span> <b>Penjatuhan Hukdis</b><br>
+                Ditetapkan oleh pejabat berwenang menghukum (PyBM)</p>
+
+                <p><span class="text-red">04.</span> <b>Penyampaian</b><br>
+                Maksimal 14 hari sejak keputusan ditetapkan</p>
+
+                <p><span class="text-red">05.</span> <b>Pemberlakuan</b><br>
+                Berlaku hari ke-15 sejak ditetapkan</p>
+
+            </div>
+
+            <div style="margin-top:15px; padding:10px; background: rgba(59,130,246,0.08); border-radius:6px; font-size:12px;">
+                • Jika tidak hadir → pemeriksaan berdasarkan bukti<br>
+                • Dapat ajukan upaya administratif (keberatan/banding)
+            </div>
+
+            <div style="margin-top:15px; font-size:12px; color: var(--slate-grey);">
+                Dasar: PP 94 Disiplin PNS, Perka BKN 6/2022, SE Menpan RB 11/2023
+            </div>
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Regulasi Disiplin ASN</div>
+        <div>Slide 04</div>
+    </div>
+</div>
+
+<!-- SLIDE 5: IZIN PERCERAIAN & PENUTUP -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>Tren Perceraian & Keterkaitan Disiplin ASN</h2>
+    </div>
+
+    <div class="content-grid" style="grid-template-columns: 1fr 1fr; gap:20px;">
+
+        <!-- KIRI: DATA -->
+        <div class="card">
+            <div class="card-title"><span>Volume Izin Cerai 2023-2025</span></div>
+
+            <div style="display: flex; flex-direction: column; gap: 15px; margin: 20px 0;">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <span style="width: 50px; font-weight: 700;">2023</span>
+                    <div style="flex-grow: 1; height: 25px; background: rgba(255,255,255,0.05); border-radius: 4px; padding-left: 10px; font-size: 12px; display: flex; align-items: center;">8 KASUS</div>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <span style="width: 50px; font-weight: 700;">2024</span>
+                    <div style="flex-grow: 1; height: 25px; background: rgba(220, 38, 38, 0.2); border-radius: 4px; padding-left: 10px; font-size: 12px; display: flex; align-items: center;">12 KASUS</div>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <span style="width: 50px; font-weight: 700; color: var(--signal-red);">2025</span>
+                    <div style="flex-grow: 1; height: 25px; background: var(--signal-red); border-radius: 4px; padding-left: 10px; font-size: 12px; display: flex; align-items: center;">14 KASUS</div>
+                </div>
+            </div>
+
+            <div style="font-size: 12px; color: var(--slate-grey);">
+                Faktor dominan: <b>perselingkuhan</b> dan <b>indisipliner kerja</b>
+            </div>
+
+            <!-- NARASI KETERKAITAN -->
+            <div style="margin-top:15px; padding:12px; background: rgba(220,38,38,0.08); border-radius:6px; font-size:12px;">
+                <b>Keterkaitan:</b><br>
+                • Indisipliner kerja (terlihat pada sidak apel) mencerminkan lemahnya kontrol atasan<br>
+                • Pelanggaran berat (termasuk narkoba) menunjukkan degradasi integritas ASN<br>
+                • Permasalahan rumah tangga (perceraian) sering berjalan paralel dengan penurunan disiplin kerja
+            </div>
+        </div>
+
+        <!-- KANAN: INSIGHT -->
+        <div class="card" style="display: flex; flex-direction: column; justify-content: center; border: 2px solid var(--signal-red);">
+
+            <div style="text-align:center;">
+                <i class="fa-solid fa-shield-halved" style="font-size: 50px; color: var(--signal-red); margin-bottom: 20px;"></i>
+                <h3 style="color: #fff;">INSIGHT STRATEGIS</h3>
+            </div>
+
+            <div style="font-size: 14px; line-height: 1.7; margin-top:15px;">
+
+                <p>
+                    Peningkatan izin perceraian, rendahnya kehadiran apel,
+                    serta kasus pelanggaran berat seperti narkoba
+                    <b>bukan fenomena yang berdiri sendiri</b>.
+                </p>
+
+                <p>
+                    Seluruhnya merupakan indikator dari <b>melemahnya disiplin dan integritas ASN</b>
+                    yang berakar pada kurang optimalnya pembinaan oleh atasan langsung.
+                </p>
+
+                <p style="margin-top:10px; font-weight:600; color:#fff;">
+                    Penguatan peran atasan langsung menjadi kunci
+                    dalam pencegahan pelanggaran, peningkatan disiplin,
+                    serta menjaga stabilitas kinerja dan kehidupan ASN.
+                </p>
+
+            </div>
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Laporan Bidang Kepegawaian</div>
+        <div>Slide 05</div>
+    </div>
+</div>
+
+</body>
+</html>
