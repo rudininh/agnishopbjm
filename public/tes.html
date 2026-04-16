@@ -13,18 +13,19 @@
            PENGATURAN UTAMA (MUDAH DIEDIT)
            ========================================= */
         :root {
-            --navy-dark: #001a35;
-            --navy-light: #002d5a;
-            --signal-red: #dc2626;
-            --slate-grey: #64748b;
-            --text-white: #f8fafc;
-            --bg-accent: rgba(255, 255, 255, 0.05);
+            --navy-dark: #0f766e;          /* hijau utama */
+            --navy-light: #0d9488;         /* hijau terang */
+            --signal-red: #facc15;         /* kuning aksen */
+            --slate-grey: #a7f3d0;         /* hijau muda untuk text sekunder */
+            --text-white: #ecfdf5;         /* putih kehijauan */
+            --bg-accent: rgba(255, 255, 255, 0.08);
         }
+
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            background-color: #0f172a;
+            background: linear-gradient(135deg, #065f46, #0f766e, #0d9488);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -34,26 +35,50 @@
         }
 
         /* UKURAN STANDAR 4:3 (1024px x 768px) */
-        .slide-container {
+            .slide-container {
             width: 1024px;
             height: 768px;
-            background-color: var(--navy-dark);
-            color: var(--text-white);
             position: relative;
             overflow: hidden;
             display: flex;
             flex-direction: column;
             padding: 60px;
-            box-shadow: 0 30px 60px rgba(0,0,0,0.5);
             margin-bottom: 20px;
+            color: var(--text-white);
+
+            /* BACKGROUND UTAMA: IMAGE + OVERLAY */
+            background:
+                url('bg.png');
+
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+
+            box-shadow: 0 30px 60px rgba(0,0,0,0.5);
         }
 
-        /* AKSEN BACKGROUND */
+
         .slide-container::before {
-            content: ""; position: absolute; top: 0; right: 0;
-            width: 300px; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(165, 220, 38, 0.03));
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+
+            /* layer efek visual */
+            background:
+                radial-gradient(circle at 20% 30%, rgba(255,255,255,0.12), transparent 60%),
+                radial-gradient(circle at 80% 70%, rgba(255,255,255,0.08), transparent 60%),
+                radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px);
+
+            background-size: cover, cover, 40px 40px;
+
+            opacity: 0.6;
+            pointer-events: none;
         }
+
+
 
         /* HEADER SLIDE */
         .slide-header {
@@ -79,7 +104,8 @@
         }
 
         .card {
-            background: var(--bg-accent);
+            background: rgba(255, 255, 255, 0.12);
+            backdrop-filter: blur(6px);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 8px;
             padding: 25px;
@@ -128,15 +154,1332 @@
 
 <!-- SLIDE 1: COVER -->
 <div class="slide-container">
+
+    <!-- LOGO KIRI ATAS -->
+    <img src="pemko.png" style="position:absolute; top:20px; left:20px; width:100px; z-index:3;">
+
+    <!-- LOGO KANAN ATAS -->
+    <img src="logoataskanan.png" style="position:absolute; top:20px; right:20px; width:500px; z-index:3;">
+
+    <!-- GAMBAR KIRI BAWAH -->
+    <img src="kiribawah.png" style="position:absolute; bottom:20px; left:20px; width:250px; z-index:3;">
+
+    <!-- GAMBAR KANAN BAWAH -->
+    <img src="kananbawah.png" style="position:absolute; bottom:20px; right:20px; width:250px; z-index:3;">
+
     <div style="display: flex; flex-direction: column; justify-content: center; height: 100%; text-align: center;">
-        <p style="font-size: 18px; color: var(--slate-grey); letter-spacing: 5px; text-transform: uppercase; margin-bottom: 20px;">Evaluasi</p>
-        <h1 style="font-family: 'Urbanist'; font-size: 64px; font-weight: 800; line-height: 1.1; margin-bottom: 40px;">PENEGAKAN DISIPLIN ASN<br><span style="color: var(--signal-red);">TAHUN 2023-2025</span></h1>
+        <p style="font-size: 18px; color: var(--slate-grey); letter-spacing: 5px; text-transform: uppercase; margin-bottom: 20px;">RAPAT KOORDINASI</p>
+        <h1 style="font-family: 'Urbanist'; font-size: 64px; font-weight: 800; line-height: 1.1; margin-bottom: 40px;">KEPEGAWAIAN<br><span style="color: var(--signal-red);">TAHUN 2026</span></h1>
         <div style="width: 150px; height: 8px; background: var(--signal-red); margin: 0 auto;"></div>
-        <p style="margin-top: 60px; font-size: 16px; color: var(--slate-grey);">Badan Kepegawaian Daerah, Pendidikan dan Pelatihan Kota Banjarmasin</p>
+        <p style="margin-top: 60px; font-size: 16px; color: var(--slate-grey);">Badan Kepegawaian dan Pengembangan Sumber Daya Manusia Kota Banjarmasin</p>
     </div>
 </div>
 
-<!-- SLIDE 2: REKAP HUKDIS 2023-2025 -->
+
+<!-- SLIDE: TUJUAN & ISU UTAMA (1 CARD) -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>Rapat Koordinasi Kepegawaian Tahun 2026</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 90%;
+            padding: 30px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- TUJUAN -->
+            <div class="card-title"><span>TUJUAN :</span></div>
+
+            <div style="font-size:20px; line-height:2;">
+                <p>1. Menyelaraskan kebijakan Pusat dan Daerah terkait Manajemen ASN</p>
+                <p>2. Meningkatkan efektivitas pelaksanaan tugas ASN</p>
+                <p>3. Memastikan manajemen ASN berjalan sesuai dengan peraturan perundang-undangan yang berlaku</p>
+            </div>
+
+            <!-- ISU UTAMA -->
+            <div style="
+                margin-top:25px;
+                background: rgba(0,0,0,0.85);
+                padding:25px;
+                border-radius:10px;
+            ">
+                <div style="
+                    color:#facc15;
+                    font-weight:800;
+                    font-size:20px;
+                    margin-bottom:15px;
+                ">
+                    ISU UTAMA :
+                </div>
+
+                <div style="
+                    font-size:20px;
+                    line-height:2;
+                    color:#22c1f1;
+                    font-weight:700;
+                ">
+                    <div>1. Pengukuran Indeks Kualitas Data (IKADA) Tahun 2026</div>
+                    <div>2. Penerapan Manajemen Talenta</div>
+                    <div>3. Penerapan Hukuman Disiplin ASN</div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 02</div>
+    </div>
+</div>
+
+<!-- SLIDE 03: ISU 1 IKADA -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>ISU 1</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 85%;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="
+                font-size: 42px;
+                font-weight: 800;
+                line-height: 1.4;
+                letter-spacing: 1px;
+            ">
+                PENGUKURAN INDEKS <br>
+                KUALITAS DATA (IKADA) <br>
+                TAHUN 2026
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 03</div>
+    </div>
+</div>
+
+<!-- SLIDE 04: DASAR HUKUM IKADA -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>DASAR HUKUM</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 90%;
+            padding: 35px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="
+                font-size: 22px;
+                font-weight: 700;
+                line-height: 1.8;
+            ">
+
+                <p>1. Undang-Undang Nomor 20 Tahun 2023 tentang Aparatur Sipil Negara</p>
+
+                <p>2. Peraturan Badan Kepegawaian Negara Nomor 13 Tahun 2022 tentang Satu Data Bidang Aparatur Sipil Negara</p>
+
+                <p>3. Keputusan Kepala Badan Kepegawaian Negara Nomor 246.1 Tahun 2022 tentang Manajemen Data Bidang Aparatur Sipil Negara</p>
+
+                <p>4. Surat Edaran Kepala BKN Nomor 17 Tahun 2024 tentang Pengukuran Indeks Kualitas Data (IKADA) ASN</p>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 04</div>
+    </div>
+</div>
+
+<!-- SLIDE 05: INDIKATOR IKADA -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>INDIKATOR IKADA</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 95%;
+            padding: 25px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- JUDUL -->
+            <div style="font-size:18px; font-weight:700; line-height:1.8;">
+                <div>1. Dimensi Kelengkapan Data (Competeness)</div>
+                <div>Bobot Dimensi 0,28</div>
+            </div>
+
+            <!-- TABEL -->
+            <div style="margin-top:15px; overflow-x:auto;">
+
+                <table style="
+                    width:100%;
+                    border-collapse: collapse;
+                    font-size:13px;
+                ">
+
+                    <thead>
+                        <tr style="background:#1e293b; color:#fff;">
+                            <th rowspan="2" style="padding:8px; border:1px solid #ccc;">No.</th>
+                            <th rowspan="2" style="padding:8px; border:1px solid #ccc;">Indikator</th>
+                            <th rowspan="2" style="padding:8px; border:1px solid #ccc;">Bobot Indikator</th>
+                            <th colspan="3" style="padding:8px; border:1px solid #ccc;">
+                                Tanggung Jawab Penyelesaian Disparitas
+                            </th>
+                        </tr>
+                        <tr style="background:#334155; color:#fff;">
+                            <th style="padding:6px; border:1px solid #ccc;">BKD</th>
+                            <th style="padding:6px; border:1px solid #ccc;">SKPD</th>
+                            <th style="padding:6px; border:1px solid #ccc;">ASN</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">1.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Belum SKP Tahun Sebelumnya</td>
+                            <td style="padding:6px; border:1px solid #ccc;">20,00</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">2.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Jabatan Kosong</td>
+                            <td style="padding:6px; border:1px solid #ccc;">25,00</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">3.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Pendidikan Kosong</td>
+                            <td style="padding:6px; border:1px solid #ccc;">20,00</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">4.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">TMT PNS Kosong</td>
+                            <td style="padding:6px; border:1px solid #ccc;">12,00</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">5.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Gelar Kosong</td>
+                            <td style="padding:6px; border:1px solid #ccc;">17,50</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">6.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Email Pribadi Kosong/Salah Format</td>
+                            <td style="padding:6px; border:1px solid #ccc;">2,50</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">7.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Nomor HP Kosong</td>
+                            <td style="padding:6px; border:1px solid #ccc;">2,50</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+                    </tbody>
+
+                </table>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 05</div>
+    </div>
+</div>
+
+<!-- SLIDE 06: INDIKATOR IKADA -->
+<div class="slide-container">
+    <div class="slide-header">
+        <h2>INDIKATOR IKADA</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 95%;
+            padding: 25px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- JUDUL -->
+            <div style="font-size:18px; font-weight:700; line-height:1.8;">
+                <div>2. Dimensi Ketepatan Waktu (Timeliness)</div>
+                <div>Bobot Dimensi 0,31</div>
+            </div>
+
+            <!-- TABEL -->
+            <div style="margin-top:15px; overflow-x:auto;">
+
+                <table style="
+                    width:100%;
+                    border-collapse: collapse;
+                    font-size:13px;
+                ">
+
+                    <thead>
+                        <tr style="background:#1e293b; color:#fff;">
+                            <th rowspan="2" style="padding:8px; border:1px solid #ccc;">No.</th>
+                            <th rowspan="2" style="padding:8px; border:1px solid #ccc;">Indikator</th>
+                            <th rowspan="2" style="padding:8px; border:1px solid #ccc;">Bobot Indikator</th>
+                            <th colspan="3" style="padding:8px; border:1px solid #ccc;">
+                                Tanggung Jawab Penyelesaian Disparitas
+                            </th>
+                        </tr>
+                        <tr style="background:#334155; color:#fff;">
+                            <th style="padding:6px; border:1px solid #ccc;">BKD</th>
+                            <th style="padding:6px; border:1px solid #ccc;">SKPD</th>
+                            <th style="padding:6px; border:1px solid #ccc;">ASN</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">1.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Unor Tidak Aktif</td>
+                            <td style="padding:6px; border:1px solid #ccc;">22,73</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">2.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Formasi Jabatan Fungsional Belum Diangkat</td>
+                            <td style="padding:6px; border:1px solid #ccc;">18,18</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">3.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Masa CPNS Lebih dari 1 Tahun</td>
+                            <td style="padding:6px; border:1px solid #ccc;">13,64</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">4.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Struktural Ganda</td>
+                            <td style="padding:6px; border:1px solid #ccc;">15,91</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc;"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">5.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Telah Masuk BUP tetapi Masih Aktif</td>
+                            <td style="padding:6px; border:1px solid #ccc;">15,91</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">6.</td>
+                            <td style="padding:6px; border:1px solid #ccc;">Cuti di Luar Tanggungan Negara Setelah Tanggal Berakhir</td>
+                            <td style="padding:6px; border:1px solid #ccc;">13,64</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                            <td style="padding:6px; border:1px solid #ccc; text-align:center;">V</td>
+                        </tr>
+                    </tbody>
+
+                </table>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 06</div>
+    </div>
+</div>
+
+
+<!-- SLIDE 07: INDIKATOR IKADA -->
+<div class="slide-container">
+
+    <!-- HEADER -->
+    <div class="slide-header" style="margin-bottom:70px;">
+        <h2 style="margin-bottom:5px;">INDIKATOR IKADA</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 95%;
+            padding: 25px;
+            margin-top:0;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- JUDUL -->
+            <div style="font-size:18px; font-weight:700; line-height:1.6; margin-bottom:10px;">
+                <div>3. Dimensi Keakuratan Data (Accuracy)</div>
+                <div>Bobot Dimensi 0,30</div>
+            </div>
+
+            <!-- TABEL -->
+            <div style="margin-top:10px;">
+
+                <table style="
+                    width:100%;
+                    border-collapse: collapse;
+                    font-size:13px;
+                ">
+
+                    <thead>
+                        <tr style="background:#1e293b; color:#fff;">
+                            <th rowspan="2" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">No.</th>
+                            <th rowspan="2" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">Indikator</th>
+                            <th rowspan="2" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">Bobot Indikator</th>
+                            <th colspan="3" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">
+                                Tanggung Jawab Penyelesaian Disparitas
+                            </th>
+                        </tr>
+                        <tr style="background:#334155; color:#fff;">
+                            <th style="padding:6px; border:1.5px solid rgba(255,255,255,0.4);">BKD</th>
+                            <th style="padding:6px; border:1.5px solid rgba(255,255,255,0.4);">SKPD</th>
+                            <th style="padding:6px; border:1.5px solid rgba(255,255,255,0.4);">ASN</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">1.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">TMT CPNS Lebih Besar dari TMT PNS</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">9,52</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">2.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Jenis Pegawai Dipekerjakan/Diperbantukan Tidak Sesuai</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">21,43</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">3.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Masa Kerja Kurang dari 2 Tahun di Jabatan Struktural</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">7,14</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">4.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">NIK Belum Valid</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">4,76</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">5.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Tingkat Pendidikan Eselon Tidak Memenuhi Syarat</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">11,90</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">6.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Kesalahan NIP Tahun Pengangkatan PPPK</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">7,14</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">7.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Tingkat Pendidikan Jabatan Fungsional Tidak Memenuhi Syarat</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">14,29</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">8.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Pelaksana Nama Jabatan Fungsional</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">4,76</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">9.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Jabatan Pimpinan Tinggi di Bawah Pangkat Minimal</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">9,52</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                    </tbody>
+
+                </table>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer" style="margin-top: 50px;">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 07</div>
+    </div>
+
+</div>
+
+<!-- SLIDE 08: INDIKATOR IKADA -->
+<div class="slide-container">
+
+    <!-- HEADER -->
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">INDIKATOR IKADA</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 95%;
+            padding: 25px;
+            margin-top:0;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- JUDUL -->
+            <div style="font-size:18px; font-weight:700; line-height:1.6; margin-bottom:10px;">
+                <div>4. Dimensi Konsistensi Data (Consistency)</div>
+                <div>Bobot Dimensi 0,11</div>
+            </div>
+
+            <!-- TABEL -->
+            <div style="margin-top:10px;">
+
+                <table style="
+                    width:100%;
+                    border-collapse: collapse;
+                    font-size:13px;
+                ">
+
+                    <thead>
+                        <tr style="background:#1e293b; color:#fff;">
+                            <th rowspan="2" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">No.</th>
+                            <th rowspan="2" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">Indikator</th>
+                            <th rowspan="2" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">Bobot Indikator</th>
+                            <th colspan="3" style="padding:8px; border:1.5px solid rgba(255,255,255,0.4);">
+                                Tanggung Jawab Penyelesaian Disparitas
+                            </th>
+                        </tr>
+                        <tr style="background:#334155; color:#fff;">
+                            <th style="padding:6px; border:1.5px solid rgba(255,255,255,0.4);">BKD</th>
+                            <th style="padding:6px; border:1.5px solid rgba(255,255,255,0.4);">SKPD</th>
+                            <th style="padding:6px; border:1.5px solid rgba(255,255,255,0.4);">ASN</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">1.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Komponen TMT CPNS pada NIP PNS</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">25,00</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">2.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Komponen Tanggal Lahir pada NIP ASN</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">25,00</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">3.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Komponen Jenis Kelamin pada NIP ASN</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">25,00</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">4.</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">Komponen Tahun Pengangkatan pada NIP PPPK</td>
+                            <td style="padding:6px; border:1.2px solid rgba(255,255,255,0.25);">25,00</td>
+                            <td style="text-align:center; border:1.2px solid rgba(255,255,255,0.25);">V</td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                            <td style="border:1.2px solid rgba(255,255,255,0.25);"></td>
+                        </tr>
+
+                    </tbody>
+
+                </table>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 08</div>
+    </div>
+
+</div>
+
+
+
+<!-- SLIDE 09: PREDIKAT IKADA -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">PREDIKAT IKADA</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 85%;
+            padding: 30px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="
+                display:flex;
+                flex-direction:column;
+                gap:12px;
+                font-size:18px;
+                font-weight:600;
+            ">
+
+                <!-- 1 -->
+                <div style="
+                    background: linear-gradient(135deg,#16a34a,#15803d);
+                    color:#fff;
+                    padding:14px;
+                    border-radius:10px;
+                ">
+                    1. Sangat Tinggi yang memiliki nilai 100;
+                </div>
+
+                <!-- 2 -->
+                <div style="
+                    background: linear-gradient(135deg,#22c55e,#4ade80);
+                    color:#fff;
+                    padding:14px;
+                    border-radius:10px;
+                ">
+                    2. Tinggi yang memiliki rentang nilai antara 95,00 – 99,99;
+                </div>
+
+                <!-- 3 -->
+                <div style="
+                    background: linear-gradient(135deg,#eab308,#facc15);
+                    color:#000;
+                    padding:14px;
+                    border-radius:10px;
+                ">
+                    3. Sedang yang memiliki rentang nilai antara 85,00 – 94,99;
+                </div>
+
+                <!-- 4 -->
+                <div style="
+                    background: linear-gradient(135deg,#f97316,#fb923c);
+                    color:#fff;
+                    padding:14px;
+                    border-radius:10px;
+                ">
+                    4. Rendah yang memiliki rentang nilai antara 75,00 – 84,99; dan
+                </div>
+
+                <!-- 5 -->
+                <div style="
+                    background: linear-gradient(135deg,#dc2626,#991b1b);
+                    color:#fff;
+                    padding:14px;
+                    border-radius:10px;
+                ">
+                    5. Sangat Rendah yang memiliki rentang nilai 75,00 ke bawah. 1.
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 09</div>
+    </div>
+
+</div>
+
+
+<!-- SLIDE 10: HASIL IKADA -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            HASIL PENGUKURAN SEMENTARA IKADA 2026
+        </h2>
+        <div style="font-size:14px; opacity:0.8;">
+            (Wilayah Provinsi Kalimantan Selatan)
+        </div>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 90%;
+            padding: 25px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="
+                display:flex;
+                flex-direction:column;
+                gap:6px;
+                font-size:15px;
+            ">
+
+                <div>1. Pemerintah Kota Banjarbaru — 99,86 — Tinggi</div>
+                <div>2. Pemerintah Kab Hulu Sungai Utara — 99,86 — Tinggi</div>
+                <div>3. Pemerintah Kab. Balangan — 99,83 — Tinggi</div>
+                <div>4. Pemerintah Kab. Tapin — 99,15 — Tinggi</div>
+                <div>5. Pemerintah Kab. Kotabaru — 99,06 — Tinggi</div>
+                <div>6. Pemerintah Kab. Tanah Bumbu — 98,86 — Tinggi</div>
+
+                <!-- HIGHLIGHT BANJARMASIN -->
+                <div style="
+                    background: linear-gradient(135deg,#2563eb,#1d4ed8);
+                    color:#fff;
+                    padding:10px 15px;
+                    border-radius:8px;
+                    font-weight:700;
+                    box-shadow: 0 8px 20px rgba(37,99,235,0.5);
+                    transform: scale(1.02);
+                ">
+                    7. Pemerintah Kota Banjarmasin — 98,71 — Tinggi
+                </div>
+
+                <div>8. Pemerintah Kab. Hulu Sungai Tengah — 98,69 — Tinggi</div>
+                <div>9. Pemerintah Kab. Tanah Laut — 98,65 — Tinggi</div>
+                <div>10. Pemerintah Kab. Tabalong — 98,06 — Tinggi</div>
+                <div>11. Pemerintah Kab. Banjar — 97,48 — Tinggi</div>
+                <div>12. Pemerintah Kab. Hulu Sungai Selatan — 97,20 — Tinggi</div>
+                <div>13. Pemerintah Kab. Barito Kuala — 93,26 — Sedang</div>
+                <div>14. Pemerintah Provinsi Kalimantan Selatan — 91,83 — Sedang</div>
+
+            </div>
+
+            <!-- HIGHLIGHT BAWAH -->
+            <div style="
+                margin-top:15px;
+                padding:12px;
+                background: rgba(37,99,235,0.1);
+                border-radius:8px;
+                font-size:13px;
+                text-align:center;
+            ">
+                Pemerintah Kota Banjarmasin berada pada kategori <b>Tinggi</b> dengan nilai <b>98,71</b>
+        <div>Data per 31 Maret 2026</div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 10</div>
+    </div>
+
+</div>
+
+<!-- SLIDE 11: TARGET IKADA -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            TARGET CAPAIAN IKADA 2026 KOTA BANJARMASIN
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 85%;
+            padding: 40px;
+            text-align:center;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- ANGKA BESAR -->
+            <div style="
+                font-size:100px;
+                font-weight:900;
+                color:#e8d903;
+                line-height:1;
+                text-shadow: 0 10px 30px rgba(173, 197, 34, 0.6);
+                margin-bottom:20px;
+            ">
+                99,50
+            </div>
+
+            <!-- SUBTEXT -->
+            <div style="
+                font-size:20px;
+                font-weight:600;
+                line-height:1.6;
+            ">
+                DIPERLUKAN KERJASAMA SEMUA PIHAK UNTUK MEMENUHI TARGET TERSEBUT
+            </div>
+
+            <!-- GARIS AKSEN -->
+            <div style="
+                margin:25px auto 0;
+                width:120px;
+                height:4px;
+                background: linear-gradient(90deg,#e8d903,#4ade80);
+                border-radius:10px;
+            "></div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 11</div>
+    </div>
+
+</div>
+
+<!-- SLIDE 12: ISU 2 -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">ISU 2</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 80%;
+            padding: 40px;
+            text-align:center;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- JUDUL UTAMA -->
+            <div style="
+                font-size:42px;
+                font-weight:800;
+                line-height:1.3;
+                letter-spacing:1px;
+                margin-bottom:20px;
+            ">
+                PENERAPAN<br>
+                MANAJEMEN TALENTA
+            </div>
+
+      
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 12</div>
+    </div>
+
+</div>
+
+<!-- SLIDE 13: PENGERTIAN MANAJEMEN TALENTA -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">PENGERTIAN</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 80%;
+            padding: 40px;
+            text-align:justify;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- ISI -->
+            <div style="
+                font-size:26px;
+                font-weight:500;
+                line-height:1.6;
+                text-align:justify;
+            ">
+                Manajemen talenta adalah pendekatan strategis dan berkelanjutan untuk menarik, 
+                mengembangkan, memotivasi, dan mempertahankan pegawai berpotensi tinggi. 
+                Tujuannya adalah menempatkan orang yang tepat, di tempat yang tepat, pada waktu yang tepat 
+                untuk mencapai tujuan organisasi. Proses ini meliputi rekrutmen, penilaian kinerja, 
+                pengembangan karier, hingga perencanaan suksesi.
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 13</div>
+    </div>
+
+</div>
+
+<!-- SLIDE 14: DASAR HUKUM -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:60px;">
+        <h2 style="margin-bottom:5px;">DASAR HUKUM</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 80%;
+            padding: 40px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- ISI -->
+            <div style="
+                font-size:22px;
+                font-weight:500;
+                line-height:1.6;
+                text-align:justify;
+            ">
+                <ol style="margin:0; padding-left:20px;">
+                    <li>Peraturan Menteri Pendayagunaan Aparatur dan Reformasi Birokrasi Nomor 3 Tahun 2020 tentang Manajemen Talenta Aparatur Sipil Negara.</li>
+
+                    <li>Peraturan Menteri Pendayagunaan Aparatur dan Reformasi Birokrasi Nomor 20 Tahun 2025 tentang Perubahan Peraturan Menteri Pendayagunaan Aparatur dan Reformasi Birokrasi Nomor 3 Tahun 2020 tentang Manajemen Talenta Aparatur Sipil Negara.</li>
+
+                    <li>Keputusan Kepala BKN Nomor 411 Tahun 2025 tentang Percepatan Pembangunan dan Penerapan Manajemen Talenta ASN Instansi Pemerintah.</li>
+
+                    <li>Peraturan Walikota Nomor 23 Tahun 2026 tentang Manajemen Talenta Bagi Aparatur Sipil Negara.</li>
+                </ol>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 14</div>
+    </div>
+
+</div>
+
+
+<!-- SLIDE: PARAMETER PEMETAAN TALENTA (GAMBAR) -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">PARAMETER PEMETAAN TALENTA</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <img src="pemetaan talenta.png" 
+             alt="Pemetaan Talenta"
+             style="
+                max-width:90%;
+                max-height:90%;
+                object-fit:contain;
+                box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+                border-radius:10px;
+             ">
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 15</div>
+    </div>
+
+</div>
+
+
+
+
+<!-- SLIDE: KONDISI TERKINI - REGULASI -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            KONDISI TERKINI PENERAPAN MANAJEMEN TALENTA<br>
+            KOTA BANJARMASIN
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 85%;
+            padding: 35px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="font-size:20px; line-height:1.6; text-align:justify;">
+
+                <b>1. Penyusunan regulasi manajemen talenta, meliputi:</b>
+
+                <ol type="a" style="margin-top:10px; padding-left:20px;">
+                    <li>Pernyataan Komitmen Penerapan Manajemen Talenta oleh Walikota Banjarmasin (ditandatangani tanggal 28 Agustus 2025)</li>
+
+                    <li>
+                        Penyusunan Perwali tentang Manajemen Talenta 
+                        (Peraturan Walikota Nomor 23 Tahun 2026 tentang Manajemen Talenta Bagi Aparatur Sipil Negara, diundangkan tanggal 7 April 2026)
+                    </li>
+
+                    <li>Penyusunan SK Tim Komite Talenta dan SK Tim Sekretariat Komite Talenta (masih proses)</li>
+
+                    <li>Penyusunan SK Walikota tentang Strategi Retensi Talenta (masih proses)</li>
+                </ol>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 16</div>
+    </div>
+
+</div>
+
+<!-- SLIDE: KONDISI TERKINI - PENDAMPINGAN & PEMETAAN -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            KONDISI TERKINI PENERAPAN MANAJEMEN TALENTA  KOTA BANJARMASIN<br>
+           
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 85%;
+            padding: 35px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="font-size:20px; line-height:1.6; text-align:justify;">
+
+                <ol start="2" style="padding-left:20px;">
+
+                    <li>
+                        Pendampingan Persiapan Pra Ekspos oleh PIC Manajemen Talenta Kanreg VIII BKN terhadap Tim Kerja Manajemen Talenta 
+                        (sudah dilaksanakan 4 kali pendampingan)
+                    </li>
+
+                    <li>
+                        Pemetaan Talenta ke dalam 9 Kotak Talenta melalui aplikasi SIMATA milik BKN. Untuk memperbaiki hasil pemetaan talenta ASN, yang sudah dilakukan antara lain:
+
+                        <ol type="a" style="margin-top:10px;">
+                            <li>Melaksanakan Asesmen Potensi dan Kompetensi (CACT dan ProASN BKN)</li>
+                            <li>Memaksimalkan persentase penyelesaian SKP (membuka kembali aplikasi e-kinerja hingga 30 April 2026)</li>
+                            <li>Pendataan Keanggotaan ASN di Tim Kerja</li>
+                            <li>Himbauan update Riwayat Pengembangan Kompetensi/Diklat di MyASN</li>
+                        </ol>
+
+                    </li>
+
+                </ol>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 17</div>
+    </div>
+
+</div>
+
+<!-- SLIDE: RINGKASAN MANAJEMEN TALENTA (1) -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            RINGKASAN MANAJEMEN TALENTA KOTA BANJARMASIN DI SIMATA
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <img src="ringkasan1.png" 
+             alt="Ringkasan Manajemen Talenta 1"
+             style="
+                max-width:90%;
+                max-height:90%;
+                object-fit:contain;
+                box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+                border-radius:10px;
+             ">
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 18</div>
+    </div>
+
+</div>
+
+<!-- SLIDE: RINGKASAN MANAJEMEN TALENTA (2) -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            RINGKASAN MANAJEMEN TALENTA KOTA BANJARMASIN DI SIMATA
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <img src="ringkasan2.png" 
+             alt="Ringkasan Manajemen Talenta 2"
+             style="
+                max-width:90%;
+                max-height:90%;
+                object-fit:contain;
+                box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+                border-radius:10px;
+             ">
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 19</div>
+    </div>
+
+</div>
+
+
+<!-- SLIDE: REKAP MANAJEMEN TALENTA -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">
+            REKAP MANAJEMEN TALENTA KOTA BANJARMASIN DI SIMATA
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <img src="rekap.png" 
+             alt="Rekap Manajemen Talenta"
+             style="
+                max-width:90%;
+                max-height:90%;
+                object-fit:contain;
+                box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+                border-radius:10px;
+             ">
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 20</div>
+    </div>
+
+</div>
+
+
+<!-- SLIDE: PERMASALAHAN PEMETAAN TALENTA -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:50px;">
+        <h2 style="margin-bottom:5px;">
+            PERMASALAHAN DALAM PEMETAAN TALENTA
+        </h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 100%;
+            padding: 35px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <div style="font-size:18px; line-height:1.6; text-align:justify;">
+
+                <ol>
+
+                    <li>
+                        Kotak Talenta 9 dan 7 masih sangat sedikit terisi, masing-masing hanya 2 orang. Sedangkan pada Kotak 4 hanya diisi 6 orang, itupun hanya satu jabatan yaitu JFT Ahli Muda. Hal ini menunjukkan bahwa ASN Kota Banjarmasin sulit memenuhi unsur penilaian pada Sumbu Kinerja (Y) yang terdiri dari: Penilaian SKP (60%), Penghargaan (15%), Keanggotaan Tim Kerja (15%), dan Penilaian 360 derajat (10%).
+                    </li>
+
+                    <li>
+                        Jabatan Pengawas/Eselon IV, Jabatan Fungsional, dan Jabatan Pelaksana masih banyak berada di Kotak Talenta Rendah yaitu Kotak 3, Kotak 2, dan Kotak 1 (terutama JF Guru). Hal ini disebabkan antara lain:
+
+                        <ol type="a" style="margin-top:10px;">
+                            <li>Jabatan Pengawas/Eselon IV, Jabatan Fungsional, dan Jabatan Pelaksana masih banyak yang belum dilaksanakan asesmen. Saat ini, asesmen baru bisa dilaksanakan untuk 35% ASN.</li>
+
+                            <li>Masih banyak ASN yang tidak menginput Keanggotaan dalam Tim Kerja pada link yang telah diberikan untuk pendataan Tim Kerja.</li>
+
+                            <li>Masih terdapat ASN yang belum menyelesaikan SKP atau belum dinilai SKPnya untuk tahun sebelumnya (2025).</li>
+
+                            <li>Masih banyak ASN yang nilai pengembangan kompetensi (riwayat diklat)nya bernilai rendah (&lt; 30).</li>
+                        </ol>
+
+                    </li>
+
+                </ol>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 21</div>
+    </div>
+
+</div>
+
+<!-- SLIDE: ISU 3 -->
+<div class="slide-container">
+
+    <div class="slide-header" style="margin-bottom:10px;">
+        <h2 style="margin-bottom:5px;">ISU 3</h2>
+    </div>
+
+    <div style="display:flex; justify-content:center; align-items:center; height:75%;">
+
+        <div class="card" style="
+            width: 80%;
+            padding: 40px;
+            text-align:center;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        ">
+
+            <!-- JUDUL UTAMA -->
+            <div style="
+                font-size:42px;
+                font-weight:800;
+                line-height:1.3;
+                letter-spacing:1px;
+                margin-bottom:20px;
+            ">
+                PENERAPAN<br>
+                HUKUMAN DISIPLIN ASN
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="slide-footer">
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 22</div>
+    </div>
+
+</div>
+
+
+
+
+
+<!-- SLIDE 23: REKAP HUKDIS 2023-2025 -->
 <div class="slide-container">
     <div class="slide-header">
         <h2>Rekapitulasi Hukuman Disiplin 
@@ -216,123 +1559,187 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:12px;">
                     
                     <div style="background:rgba(220,38,38,0.1); padding:10px; border-radius:6px;">
-                        <div style="font-size:11px; color:#fca5a5;">BERAT</div>
+                        <div style="font-size:11px; color:#ffffff;">BERAT</div>
                         <div style="font-size:20px; font-weight:800; color:var(--signal-red);">15</div>
                     </div>
 
-                    <div style="background:rgba(59,130,246,0.1); padding:10px; border-radius:6px;">
-                        <div style="font-size:11px; color:#93c5fd;">SEDANG</div>
-                        <div style="font-size:20px; font-weight:800; color:#3b82f6;">5</div>
+                    <div style="background:rgba(220,38,38,0.1); padding:10px; border-radius:6px;">
+                        <div style="font-size:11px; color:#ffffff;">SEDANG</div>
+                        <div style="font-size:20px; font-weight:800; color:var(--signal-red);">5</div>
                     </div>
 
-                    <div style="background:rgba(100,116,139,0.15); padding:10px; border-radius:6px;">
-                        <div style="font-size:11px; color:#94a3b8;">RINGAN</div>
-                        <div style="font-size:20px; font-weight:800; color:#64748b;">0</div>
+                    <div style="background:rgba(220,38,38,0.1); padding:10px; border-radius:6px;">
+                        <div style="font-size:11px; color:#ffffff;">RINGAN</div>
+                        <div style="font-size:20px; font-weight:800; color:var(--signal-red)">0</div>
                     </div>
 
                 </div>
             </div>
         </div>
 
-      <!-- ================= TENGAH ================= -->
+   <!-- ================= TENGAH ================= -->
 <div style="display:flex; flex-direction:column; gap:15px;">
 
-    <!-- ===== ATAS: JENIS PELANGGARAN ===== -->
+    <!-- ===== 1 CARD GABUNGAN ===== -->
     <div class="card" style="padding:15px;">
         <div class="card-title">
-            <span>Jenis Pelanggaran Tahun 2023-2025</span>
+            <span>Jenis Pelanggaran 2023 - 2025</span>
         </div>
 
-        <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+        <div style="display:flex; flex-direction:column; gap:18px; margin-top:10px;">
 
-            <!-- Perselingkuhan -->
+            <!-- ===== 2023 ===== -->
             <div>
-                <div style="display:flex; justify-content:space-between; font-size:13px;">
-                    <span>Perselingkuhan</span>
-                    <span class="text-red" style="font-weight:700;">13</span>
+                <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Tahun 2023</div>
+
+                <!-- Perselingkuhan -->
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Perselingkuhan</span>
+                        <span class="text-red" style="font-weight:700;">3</span>
+                    </div>
+                    <div style="height:5px; background:#334155; border-radius:3px;">
+                        <div style="width:80%; height:100%; background:var(--signal-red);"></div>
+                    </div>
                 </div>
-                <div style="height:6px; background:#334155; border-radius:3px;">
-                    <div style="width:100%; height:100%; background:var(--signal-red);"></div>
+
+                <!-- Jam Kerja -->
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Tidak Mematuhi Jam Kerja</span>
+                        <span style="font-weight:700;">2</span>
+                    </div>
+                    <div style="height:5px; background:#334155; border-radius:3px;">
+                        <div style="width:20%; height:100%; background:#f97316;"></div>
+                    </div>
+                </div>
+
+                <!-- Kelalaian -->
+                <div>
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Kelalaian dalam Jabatan</span>
+                        <span style="font-weight:700;">0</span>
+                    </div>
+                    <div style="height:5px; background:#334155; border-radius:3px;">
+                        <div style="width:0%; height:100%; background:#38bdf8;"></div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Jam Kerja -->
+            <!-- ===== 2024 ===== -->
             <div>
-                <div style="display:flex; justify-content:space-between; font-size:13px;">
-                    <span>Tidak Mematuhi Jam Kerja</span>
-                    <span style="font-weight:700;">5</span>
+                <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Tahun 2024</div>
+
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Perselingkuhan</span>
+                        <span class="text-red" style="font-weight:700;">4</span>
+                    </div>
+                    <div style="height:5px; background:#334155;">
+                        <div style="width:50%; height:100%; background:var(--signal-red);"></div>
+                    </div>
                 </div>
-                <div style="height:6px; background:#334155; border-radius:3px;">
-                    <div style="width:45%; height:100%; background:#f97316;"></div>
+
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Tidak Mematuhi Jam Kerja</span>
+                        <span style="font-weight:700;">2</span>
+                    </div>
+                    <div style="height:5px; background:#334155;">
+                        <div style="width:25%; height:100%; background:#f97316;"></div>
+                    </div>
+                </div>
+
+                <div>
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Kelalaian dalam Jabatan</span>
+                        <span style="font-weight:700;">2</span>
+                    </div>
+                    <div style="height:5px; background:#334155;">
+                        <div style="width:25%; height:100%; background:#38bdf8;"></div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Kelalaian -->
+            <!-- ===== 2025 ===== -->
             <div>
-                <div style="display:flex; justify-content:space-between; font-size:13px;">
-                    <span>Kelalaian dalam Jabatan</span>
-                    <span style="font-weight:700;">2</span>
-                </div>
-                <div style="height:6px; background:#334155; border-radius:3px;">
-                    <div style="width:20%; height:100%; background:#38bdf8;"></div>
-                </div>
-            </div>
+                <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Tahun 2025</div>
 
-            <!-- Narkoba -->
-            <div>
-                <div style="display:flex; justify-content:space-between; font-size:13px;">
-                    <span>Narkotika (non hukdis)</span>
-                    <span style="font-weight:700;">11</span>
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Perselingkuhan</span>
+                        <span class="text-red" style="font-weight:700;">6</span>
+                    </div>
+                    <div style="height:5px; background:#334155;">
+                        <div style="width:80%; height:100%; background:var(--signal-red);"></div>
+                    </div>
                 </div>
-                
-     
-                <div style="height:6px; background:#334155; border-radius:3px;">
-                    <div style="width:25%; height:100%; background:#a855f7;"></div>
+
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Tidak Mematuhi Jam Kerja</span>
+                        <span style="font-weight:700;">1</span>
+                    </div>
+                    <div style="height:5px; background:#334155;">
+                        <div style="width:15%; height:100%; background:#f97316;"></div>
+                    </div>
                 </div>
-                   <div style="margin-top:12px; font-size:12px; color:var(--slate-grey);">
-          5 Non-ASN diberhentikan + 6 ASN dibina
-        </div>
+
+                <div>
+                    <div style="display:flex; justify-content:space-between; font-size:12px;">
+                        <span>Kelalaian dalam Jabatan</span>
+                        <span style="font-weight:700;">0</span>
+                    </div>
+                    <div style="height:5px; background:#334155;">
+                        <div style="width:0%; height:100%; background:#38bdf8;"></div>
+                    </div>
+                </div>
             </div>
 
         </div>
     </div>
 
-    <!-- ===== BAWAH: JENIS HUKUMAN ===== -->
-    <div class="card" style="padding:15px;">
-        <div class="card-title">
-            <span>Jenis Hukuman Disiplin Tahun 2023-2025</span>
-        </div>
 
-        <table>
-            <tbody>
-                <tr>
-                    <td>Pembebasan Jabatan</td>
-                    <td style="text-align:right;">7</td>
-                </tr>
-                <tr>
-                    <td>Penurunan Pangkat</td>
-                    <td style="text-align:right;">5</td>
-                </tr>
-                <tr>
-                    <td>Penurunan Jabatan</td>
-                    <td style="text-align:right;">1</td>
-                </tr>
-                <tr>
-                    <td class="text-red">Pemberhentian (PNS)</td>
-                    <td class="text-red" style="text-align:right;">5</td>
-                </tr>
-                <tr>
-                    <td class="text-red">Pemutusan (PPPK)</td>
-                    <td class="text-red" style="text-align:right;">2</td>
-                </tr>
-            </tbody>
-        </table>
-
-        <div style="margin-top:12px; font-size:12px; color:var(--slate-grey);">
-            Dominasi pada <span class="text-red">pemberhentian & pembebasan jabatan</span> 
-            sebagai respon pelanggaran integritas.
-        </div>
+<div class="card" style="padding:8px;">
+    <div class="card-title" style="font-size:13px; margin-bottom:6px;">
+        <span>Hukuman Disiplin 2023–2025</span>
     </div>
+
+    <!-- LIST COMPACT -->
+    <div style="display:flex; flex-direction:column; gap:6px; font-size:11px;">
+
+        <div style="display:flex; justify-content:space-between;">
+            <span>Pembebasan</span>
+            <b>7</b>
+        </div>
+
+        <div style="display:flex; justify-content:space-between;">
+            <span>Turun Pangkat</span>
+            <b>5</b>
+        </div>
+
+        <div style="display:flex; justify-content:space-between;">
+            <span>Turun Jabatan</span>
+            <b>1</b>
+        </div>
+
+        <div style="display:flex; justify-content:space-between;">
+            <span class="text-red">Pemberhentian</span>
+            <b class="text-red">5</b>
+        </div>
+
+        <div style="display:flex; justify-content:space-between;">
+            <span class="text-red">Pemutusan</span>
+            <b class="text-red">2</b>
+        </div>
+
+    </div>
+
+    <!-- NOTE MINI -->
+    <div style="margin-top:6px; font-size:10px; color:var(--slate-grey); line-height:1.3;">
+        Dominan: <span class="text-red">pemberhentian</span> & pembebasan
+    </div>
+</div>
 
 </div>
         <!-- ================= KANAN ================= -->
@@ -344,48 +1751,53 @@
     <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
 
         <!-- 2023 -->
-        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px;">
-            <div style="font-weight:700; font-size:13px;">2023</div>
-            <div style="font-size:12px; margin-top:5px;">
-                • 8 orang terindikasi positif<br>
-                • 5 ASN → <span style="color:#22c55e;">obat resep dokter</span><br>
-                • 3 non-ASN → tanpa resep & narkotika berat
-            </div>
+  <div class="card" style="padding:8px;">
 
-            <div style="margin-top:8px; font-size:11px; color:var(--slate-grey);">
-                Tanpa resep → sanksi disiplin & rehabilitasi
-            </div>
+    <div class="card-title" style="font-size:13px; margin-bottom:6px;">
+        <span>Pemeriksaan Narkotika 2023–2025</span>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:8px; font-size:11px;">
+
+        <!-- 2023 -->
+        <div style="display:flex; justify-content:space-between;">
+            <span><b>2023</b></span>
+            <span>8 org</span>
+        </div>
+        <div style="margin-left:8px; color:var(--slate-grey); line-height:1.3;">
+            5 ASN (resep) • 3 non-ASN (tanpa resep)
         </div>
 
         <!-- 2024 -->
-        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px;">
-            <div style="font-weight:700; font-size:13px;">2024</div>
-            <div style="font-size:12px; margin-top:5px;">
-                Tidak dilakukan pemeriksaan
-            </div>
-            <div style="font-size:11px; color:var(--slate-grey);">
-                (Refocusing anggaran)
-            </div>
+        <div style="display:flex; justify-content:space-between;">
+            <span><b>2024</b></span>
+            <span>-</span>
+        </div>
+        <div style="margin-left:8px; color:var(--slate-grey);">
+            Tidak ada pemeriksaan
         </div>
 
         <!-- 2025 -->
-        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px;">
-            <div style="font-weight:700; font-size:13px;">2025</div>
-
-            <div style="font-size:12px; margin-top:5px;">
-                Pemeriksaan pada Dishub, Satpol PP, Dinsos, Disdukcapil, BPBD dan Pejabat SKPD
-            </div>
-
-            <div style="margin-top:6px; font-size:12px;">
-                • Kasus reaktif:
-            </div>
-
-            <div style="font-size:12px; margin-left:10px;">
-                - Dishub: 3 orang<br>
-                - Satpol PP: 9 orang<br>
-                - Pejabat SKPD: 4 orang
-            </div>
+        <div style="display:flex; justify-content:space-between;">
+            <span><b>2025</b></span>
+            <span>16 org</span>
         </div>
+        <div style="margin-left:8px; color:var(--slate-grey); line-height:1.3;">
+            Dishub 3 • Satpol PP 9 • Pejabat 4
+        </div>
+
+    </div>
+
+    <!-- NOTE MINI -->
+    <div style="margin-top:6px; font-size:12px; color:var(--slate-grey);">
+        Tanpa resep → <span class="text-red">sanksi & rehabilitasi</span>
+    </div>
+
+</div>
+
+        
+           <div> <div style="display:flex; justify-content:space-between; font-size:13px;"> <span>Narkotika (non hukdis)</span> <span style="font-weight:700;">11</span> </div> <div style="height:6px; background:#334155; border-radius:3px;"> <div style="width:100%; height:100%; background:#a855f7;"></div> </div> <div style="margin-top:12px; font-size:12px; color:var(--slate-grey);"> 5 Non-ASN diberhentikan + 6 ASN dibina </div> </div>
+
 
         <!-- KLASIFIKASI -->
         <div style="border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
@@ -424,16 +1836,15 @@
 </div>
 
     </div>
-</div>
 
 
 
     <div class="slide-footer">
-        <div>Data Periode 2023–2025</div>
-        <div>Slide 02</div>
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 23</div>
     </div>
 </div>
-<!-- SLIDE 3: HASIL SIDAK 2026 -->
+<!-- SLIDE 24: HASIL SIDAK 2026 -->
 <div class="slide-container">
     <div class="slide-header">
         <h2>Hasil Sidak Apel Pagi Awal Tahun 2026</h2>
@@ -449,13 +1860,9 @@
                 65,6%
             </div>
 
-            <div style="background: rgba(220, 38, 38, 0.1); padding: 15px; border-radius: 4px;">
-                <p class="text-red" style="font-size: 12px;">
-                    DI BAWAH TARGET OPTIMAL (&lt;70%)
-                </p>
-            </div>
+      
 
-            <div style="margin-top: 30px; text-align: left; font-size: 13px;">
+            <div style="margin-top: 30px; text-align: left; font-size: 20px;">
                 <p>Jumlah SKPD: <b>25</b></p>
                 <p>Target ASN: <b>1.054 orang</b></p>
                 <p>Hadir: <b>691 orang</b></p>
@@ -468,12 +1875,12 @@
 
             <div style="display: flex; justify-content: space-around; padding: 20px 0;">
                 <div style="text-align:center;">
-                    <div style="font-size: 36px; font-weight: 800; color: #22c55e;">70%</div>
+                    <div style="font-size: 36px; font-weight: 800; color:var(--signal-red);">70%</div>
                     <p style="font-size: 11px;">PPPK</p>
                 </div>
 
                 <div style="text-align:center;">
-                    <div style="font-size: 36px; font-weight: 800; color: #3b82f6;">67%</div>
+                    <div style="font-size: 36px; font-weight: 800; color:var(--signal-red);">67%</div>
                     <p style="font-size: 11px;">PNS</p>
                 </div>
 
@@ -489,7 +1896,7 @@
                     Lokasi Sidak:
                 </p>
 
-                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 11px;">
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 12px;">
 
                     <!-- SKPD -->
                     <div>Dinas Sosial</div>
@@ -507,32 +1914,32 @@
                     <div>Kec. Banjarmasin Selatan</div>
 
                     <!-- Puskesmas -->
-                    <div style="color:#f87171;">Puskesmas Cempaka Putih</div>
-                    <div style="color:#f87171;">Puskesmas Mantuil</div>
-                    <div style="color:#f87171;">Puskesmas Cempaka</div>
-                    <div style="color:#f87171;">Puskesmas Beruntung Raya</div>
-                    <div style="color:#f87171;">Puskesmas Alalak Selatan</div>
+                    <div ">Puskesmas Cempaka Putih</div>
+                    <div>Puskesmas Mantuil</div>
+                    <div>Puskesmas Cempaka</div>
+                    <div>Puskesmas Beruntung Raya</div>
+                    <div>Puskesmas Alalak Selatan</div>
 
                     <!-- SDN (dipisah semua) -->
-                    <div style="color:#f87171;">SDN Kuin Selatan 1</div>
-                    <div style="color:#f87171;">SDN Kuin Selatan 3</div>
-                    <div style="color:#f87171;">SDN Kuin Selatan 4</div>
-                    <div style="color:#f87171;">SDN Kuin Selatan 5</div>
-                    <div style="color:#f87171;">SDN Kuin Selatan 6</div>
+                    <div>SDN Kuin Selatan 1</div>
+                    <div>SDN Kuin Selatan 3</div>
+                    <div>SDN Kuin Selatan 4</div>
+                    <div>SDN Kuin Selatan 5</div>
+                    <div>SDN Kuin Selatan 6</div>
 
-                    <div style="color:#f87171;">SDN Kelayan Selatan 1</div>
+                    <div>SDN Kelayan Selatan 1</div>
 
                     <!-- SMP -->
-                    <div style="color:#f87171;">SMPN 3</div>
-                    <div style="color:#f87171;">SMPN 11</div>
-                    <div style="color:#f87171;">SMPN 34</div>
+                    <div>SMPN 3</div>
+                    <div>SMPN 11</div>
+                    <div>SMPN 34</div>
 
                 </div>
             </div>
 
             <!-- CATATAN -->
             <div style="margin-top: 20px; padding: 12px; background: rgba(220,38,38,0.08); border-radius: 6px;">
-                <p style="font-size: 12px;">
+                <p style="font-size: 14px;">
                     • Tingkat kehadiran belum optimal<br>
                     • PPPK Paruh Waktu terendah → <b>perlu perhatian khusus</b>
                 </p>
@@ -542,12 +1949,12 @@
     </div>
 
     <div class="slide-footer">
-        <div>Inspeksi Lapangan Januari 2026</div>
-        <div>Slide 03</div>
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 24</div>
     </div>
 </div>
 
-<!-- SLIDE 4: PRINSIP & PROSES DISIPLIN -->
+<!-- SLIDE 25: PRINSIP & PROSES DISIPLIN -->
 <div class="slide-container">
     <div class="slide-header">
         <h2>Prinsip & Proses Penegakan Disiplin ASN</h2>
@@ -574,7 +1981,7 @@
                 margin-bottom:5 px;
                 box-shadow: 0 10px 25px rgba(0,0,0,0.4);
             ">
-                <div style="font-size:12px; letter-spacing:1px; opacity:0.8; margin-bottom:6px;">
+                <div style="font-size:12px; letter-spacing:1px; opacity:0.8; margin-bottom:6px; color:#ffffff;">
                     PERAN KUNCI
                 </div>
                 <div style="font-size:12px; font-weight:700; line-height:1.5;">
@@ -642,12 +2049,12 @@
     </div>
 
     <div class="slide-footer">
-        <div>Regulasi Disiplin ASN</div>
-        <div>Slide 04</div>
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 25</div>
     </div>
 </div>
 
-<!-- SLIDE 5: IZIN PERCERAIAN & PENUTUP -->
+<!-- SLIDE 26: IZIN PERCERAIAN & PENUTUP -->
 <div class="slide-container">
     <div class="slide-header">
         <h2>Tren Perceraian & Keterkaitan Disiplin ASN</h2>
@@ -662,7 +2069,7 @@
             <div style="display: flex; flex-direction: column; gap: 15px; margin: 20px 0;">
                 <div style="display: flex; align-items: center; gap: 15px;">
                     <span style="width: 50px; font-weight: 700;">2023</span>
-                    <div style="flex-grow: 1; height: 25px; background: rgba(255,255,255,0.05); border-radius: 4px; padding-left: 10px; font-size: 12px; display: flex; align-items: center;">8 KASUS</div>
+                    <div style="flex-grow: 1; height: 25px; background: rgba(239, 11, 11, 0.05); border-radius: 4px; padding-left: 10px; font-size: 12px; display: flex; align-items: center;">8 KASUS</div>
                 </div>
 
                 <div style="display: flex; align-items: center; gap: 15px;">
@@ -681,7 +2088,7 @@
             </div>
 
             <!-- NARASI KETERKAITAN -->
-            <div style="margin-top:15px; padding:12px; background: rgba(220,38,38,0.08); border-radius:6px; font-size:12px;">
+            <div style="margin-top:15px; padding:12px; background: rgba(220,38,38,0.08); border-radius:6px; font: size 18px;">
                 <b>Keterkaitan:</b><br>
                 • Indisipliner kerja (terlihat pada sidak apel) mencerminkan lemahnya kontrol atasan<br>
                 • Pelanggaran berat (termasuk narkoba) menunjukkan degradasi integritas ASN<br>
@@ -690,42 +2097,97 @@
         </div>
 
         <!-- KANAN: INSIGHT -->
-        <div class="card" style="display: flex; flex-direction: column; justify-content: center; border: 2px solid var(--signal-red);">
+     <div class="card" style="display:flex; flex-direction:column; justify-content:center; border:2px solid var(--signal-red); padding:15px;">
 
-            <div style="text-align:center;">
-                <i class="fa-solid fa-shield-halved" style="font-size: 50px; color: var(--signal-red); margin-bottom: 20px;"></i>
-                <h3 style="color: #fff;">INSIGHT STRATEGIS</h3>
-            </div>
+    <div style="text-align:center;">
+        <i class="fa-solid fa-shield-halved" 
+           style="font-size:60px; color:var(--signal-red); margin-bottom:12px;">
+        </i>
+        <h3 style="color:#fff; margin:0;">INSIGHT STRATEGIS</h3>
+    </div>
 
-            <div style="font-size: 14px; line-height: 1.7; margin-top:15px;">
+    <div style="font-size:16px; line-height:1.7; margin-top:12px; text-align:justify;">
 
-                <p>
-                    Peningkatan izin perceraian, rendahnya kehadiran apel,
-                    serta kasus pelanggaran berat seperti narkoba
-                    <b>bukan fenomena yang berdiri sendiri</b>.
-                </p>
+        <p style="margin-bottom:8px;">
+            Peningkatan izin perceraian, rendahnya kehadiran apel,
+            serta kasus pelanggaran berat seperti narkoba
+            <b>bukan fenomena yang berdiri sendiri</b>.
+        </p>
 
-                <p>
-                    Seluruhnya merupakan indikator dari <b>melemahnya disiplin dan integritas ASN</b>
-                    yang berakar pada kurang optimalnya pembinaan oleh atasan langsung.
-                </p>
+        <p style="margin-bottom:8px;">
+            Seluruhnya merupakan indikator dari <b>melemahnya disiplin dan integritas ASN</b>
+            yang berakar pada kurang optimalnya pembinaan oleh atasan langsung.
+        </p>
 
-                <p style="margin-top:10px; font-weight:600; color:#fff;">
-                    Penguatan peran atasan langsung menjadi kunci
-                    dalam pencegahan pelanggaran, peningkatan disiplin,
-                    serta menjaga stabilitas kinerja dan kehidupan ASN.
-                </p>
+        <p style="margin-top:6px; font-weight:600; color:#fff;">
+            Penguatan peran atasan langsung menjadi kunci dalam pencegahan pelanggaran,
+            peningkatan disiplin, serta menjaga stabilitas kinerja dan kehidupan ASN.
+        </p>
 
-            </div>
-        </div>
+    </div>
+</div>
+
 
     </div>
 
     <div class="slide-footer">
-        <div>Laporan Bidang Kepegawaian</div>
-        <div>Slide 05</div>
+        <div>Rakor Kepegawaian 2026</div>
+        <div>Slide 26</div>
     </div>
 </div>
+
+
+
+
+
+<!-- SLIDE: TINTON 2 FULL -->
+<div class="slide-container" style="margin:0; padding:0;">
+
+    <img src="tinton2.png" 
+         alt="TINTON 2"
+         style="
+            width:100%;
+            height:100%;
+            object-fit:contain;
+            display:block;
+         ">
+
+</div>
+
+<!-- SLIDE: TERIMA KASIH -->
+<div class="slide-container">
+
+    <div style="
+        display:flex;
+        justify-content:center;
+        align-items:center;
+        height:100%;
+        text-align:center;
+        flex-direction:column;
+    ">
+
+        <div style="
+            font-size:80px;
+            font-weight:800;
+            letter-spacing:2px;
+            margin-bottom:20px;
+        ">
+            TERIMA KASIH
+        </div>
+
+        <div style="
+            font-size:28px;
+            opacity:0.8;
+        ">
+            Atas perhatian dan kerja sama
+        </div>
+
+    </div>
+
+</div>
+
+
+
 
 </body>
 </html>
