@@ -21,6 +21,7 @@
       <div class="panel-title">
         <h2>Status Integrasi</h2>
       </div>
+      <p v-if="loadError" class="action-message error">{{ loadError }}</p>
       <div class="integration-grid">
         <article class="integration">
           <span>Shopee</span>
@@ -35,7 +36,7 @@
         <article class="integration">
           <span>Database</span>
           <strong>Aktif</strong>
-          <small>PostgreSQL Neon</small>
+          <small>{{ data.database?.name || '-' }}</small>
         </article>
       </div>
     </section>
@@ -120,6 +121,7 @@ import { omnichannelService } from '@/services'
 const loading = ref(false)
 const busyAction = ref('')
 const message = ref('')
+const loadError = ref('')
 const data = ref({ summary: {}, tokens: {} })
 
 const cards = computed(() => [
@@ -131,7 +133,15 @@ const cards = computed(() => [
   { label: 'SKU Mapping', value: data.value.summary?.sku_mappings || 0 }
 ])
 
-const shopeeTokenRows = computed(() => data.value.token_rows?.shopee || [])
+const shopeeTokenRows = computed(() => {
+  const rows = data.value.token_rows?.shopee || []
+
+  if (rows.length) {
+    return rows
+  }
+
+  return data.value.tokens?.shopee ? [data.value.tokens.shopee] : []
+})
 
 const tokenButtons = [
   { label: 'AUTH SHOPEE', action: 'auth-shopee', variant: 'shopee' },
@@ -147,9 +157,12 @@ const formatNumber = (value) => new Intl.NumberFormat('id-ID').format(value || 0
 
 const loadData = async () => {
   loading.value = true
+  loadError.value = ''
   try {
     const response = await omnichannelService.dashboard()
     data.value = response.data
+  } catch (error) {
+    loadError.value = error.response?.data?.message || 'Dashboard gagal memuat data dari API.'
   } finally {
     loading.value = false
   }
@@ -210,6 +223,7 @@ h1 { font-size: 28px; }
 .token-button.wide { grid-column: span 2; }
 .button-icon { font-size: 15px; line-height: 1; }
 .action-message { color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
+.action-message.error { color: #991b1b; background: #fef2f2; border-color: #fecaca; margin-top: 0; margin-bottom: 12px; }
 .token-table-wrap { margin-top: 16px; overflow-x: auto; border: 1px solid #d9e2ec; border-radius: 8px; }
 .token-table { width: 100%; border-collapse: collapse; min-width: 980px; background: #fff; }
 .token-table th, .token-table td { padding: 11px 12px; border-bottom: 1px solid #e5edf5; text-align: left; font-size: 13px; vertical-align: top; }
