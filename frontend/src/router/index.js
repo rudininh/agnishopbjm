@@ -1,7 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '@/stores/authStore'
 
-import Login from '@/pages/Login.vue'
 import Dashboard from '@/pages/Dashboard.vue'
 import ShopeeStock from '@/pages/ShopeeStock.vue'
 import TiktokStock from '@/pages/TiktokStock.vue'
@@ -13,8 +11,7 @@ const routes = [
   {
     path: '/login',
     name: 'login',
-    component: Login,
-    meta: { requiresAuth: false }
+    redirect: '/dashboard'
   },
   {
     path: '/',
@@ -23,38 +20,32 @@ const routes = [
   {
     path: '/dashboard',
     name: 'dashboard',
-    component: Dashboard,
-    meta: { requiresAuth: true }
+    component: Dashboard
   },
   {
     path: '/stok-shopee',
     name: 'shopee-stock',
-    component: ShopeeStock,
-    meta: { requiresAuth: true }
+    component: ShopeeStock
   },
   {
     path: '/stok-tiktok',
     name: 'tiktok-stock',
-    component: TiktokStock,
-    meta: { requiresAuth: true }
+    component: TiktokStock
   },
   {
     path: '/stock-master',
     name: 'stock-master',
-    component: StockMaster,
-    meta: { requiresAuth: true }
+    component: StockMaster
   },
   {
     path: '/sync-shopee-to-tiktok',
     name: 'sync-shopee-to-tiktok',
-    component: SyncShopeeTiktok,
-    meta: { requiresAuth: true }
+    component: SyncShopeeTiktok
   },
   {
     path: '/dokumentasi-shopee',
     name: 'dokumentasi-shopee',
-    component: DokumentasiShopee,
-    meta: { requiresAuth: true }
+    component: DokumentasiShopee
   },
   {
     path: '/:pathMatch(.*)*',
@@ -65,18 +56,6 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
-})
-
-router.beforeEach((to, from, next) => {
-  const authStore = useAuthStore()
-
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next('/login')
-  } else if (to.path === '/login' && authStore.isAuthenticated) {
-    next('/dashboard')
-  } else {
-    next()
-  }
 })
 
 export default router

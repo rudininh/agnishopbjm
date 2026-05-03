@@ -23,15 +23,10 @@
       </div>
       <p v-if="loadError" class="action-message error">{{ loadError }}</p>
       <div class="integration-grid">
-        <article class="integration">
-          <span>Shopee</span>
-          <strong>{{ data.tokens?.shopee ? 'Terhubung' : 'Belum ada token' }}</strong>
-          <small>{{ data.tokens?.shopee?.created_at || '-' }}</small>
-        </article>
-        <article class="integration">
-          <span>TikTok Shop</span>
-          <strong>{{ data.tokens?.tiktok ? 'Terhubung' : 'Belum ada token' }}</strong>
-          <small>{{ data.tokens?.tiktok?.created_at || data.tokens?.tiktok?.expire_at || '-' }}</small>
+        <article class="integration" v-for="account in marketplaceAccounts" :key="account.key">
+          <span>{{ account.name }}</span>
+          <strong>{{ accountStatus(account) }}</strong>
+          <small>{{ accountLatestDate(account) }}</small>
         </article>
         <article class="integration">
           <span>Database</span>
@@ -61,17 +56,25 @@
         </div>
       </div>
 
-      <div class="token-actions">
+      <div class="token-accounts">
+        <article v-for="account in marketplaceAccounts" :key="account.key" :class="['token-account', account.channel]">
+          <div class="token-account-head">
+            <span>{{ account.channelLabel }}</span>
+            <strong>{{ account.name }}</strong>
+          </div>
+          <div class="token-actions">
         <button
-          v-for="button in tokenButtons"
+          v-for="button in account.buttons"
           :key="button.action"
-          :class="['token-button', button.variant]"
+          :class="['token-button', account.channel, { wide: button.wide }]"
           :disabled="busyAction === button.action"
           @click="runTokenAction(button.action)"
         >
           <span v-if="button.icon" class="button-icon">↻</span>
           <span>{{ busyAction === button.action ? 'Memproses...' : button.label }}</span>
         </button>
+          </div>
+        </article>
       </div>
 
       <p v-if="message" class="action-message">{{ message }}</p>
@@ -80,6 +83,7 @@
         <table class="token-table">
           <thead>
             <tr>
+              <th>Akun</th>
               <th>Status</th>
               <th>Shop ID</th>
               <th>Access Token</th>
@@ -91,6 +95,7 @@
           </thead>
           <tbody>
             <tr v-for="token in shopeeTokenRows" :key="token.id">
+              <td>{{ token.account_name || accountLabel(token.account_key) }}</td>
               <td>
                 <span :class="['token-status', token.is_active ? 'active' : 'inactive']">
                   {{ token.is_active ? 'Aktif' : 'Nonaktif' }}
@@ -104,7 +109,7 @@
               <td>{{ token.created_at || '-' }}</td>
             </tr>
             <tr v-if="!shopeeTokenRows.length">
-              <td colspan="7" class="empty-state">Belum ada token Shopee tersimpan.</td>
+              <td colspan="8" class="empty-state">Belum ada token Shopee tersimpan.</td>
             </tr>
           </tbody>
         </table>
@@ -123,6 +128,43 @@ const busyAction = ref('')
 const message = ref('')
 const loadError = ref('')
 const data = ref({ summary: {}, tokens: {} })
+
+const marketplaceAccounts = [
+  {
+    key: 'shopee-agnishopbjm',
+    name: 'Shopee AgniShopBJM',
+    channel: 'shopee',
+    channelLabel: 'Shopee',
+    buttons: [
+      { label: 'AUTH', action: 'auth-shopee-agnishopbjm' },
+      { label: 'GET TOKEN', action: 'get-token-shopee-agnishopbjm' },
+      { label: 'REFRESH TOKEN', action: 'refresh-token-shopee-agnishopbjm' }
+    ]
+  },
+  {
+    key: 'shopee-gitacollectionbjm',
+    name: 'Shopee GitaCollectionBJM',
+    channel: 'shopee',
+    channelLabel: 'Shopee',
+    buttons: [
+      { label: 'AUTH', action: 'auth-shopee-gitacollectionbjm' },
+      { label: 'GET TOKEN', action: 'get-token-shopee-gitacollectionbjm' },
+      { label: 'REFRESH TOKEN', action: 'refresh-token-shopee-gitacollectionbjm' }
+    ]
+  },
+  {
+    key: 'tiktok-agnishopbjm',
+    name: 'TikTok AgniShopBJM',
+    channel: 'tiktok',
+    channelLabel: 'TikTok Shop',
+    buttons: [
+      { label: 'AUTH', action: 'auth-tiktok-agnishopbjm' },
+      { label: 'GET TOKEN', action: 'get-token-tiktok-agnishopbjm' },
+      { label: 'REFRESH TOKEN', action: 'refresh-token-tiktok-agnishopbjm' },
+      { label: 'GET AUTH SHOP', action: 'get-auth-shop-tiktok-agnishopbjm', wide: true }
+    ]
+  }
+]
 
 const cards = computed(() => [
   { label: 'Stock Master', value: data.value.summary?.stock_master || 0 },
@@ -143,17 +185,25 @@ const shopeeTokenRows = computed(() => {
   return data.value.tokens?.shopee ? [data.value.tokens.shopee] : []
 })
 
-const tokenButtons = [
-  { label: 'AUTH SHOPEE', action: 'auth-shopee', variant: 'shopee' },
-  { label: 'AUTH TIKTOK', action: 'auth-tiktok', variant: 'tiktok' },
-  { label: 'GET TOKEN SHOPEE', action: 'get-token-shopee', variant: 'shopee' },
-  { label: 'GET TOKEN TIKTOK', action: 'get-token-tiktok', variant: 'tiktok' },
-  { label: 'REFRESH TOKEN SHOPEE', action: 'refresh-token-shopee', variant: 'shopee', icon: true },
-  { label: 'REFRESH TOKEN TIKTOK', action: 'refresh-token-tiktok', variant: 'tiktok', icon: true },
-  { label: 'GET AUTH SHOP TIKTOK', action: 'get-auth-shop-tiktok', variant: 'tiktok wide' }
-]
-
 const formatNumber = (value) => new Intl.NumberFormat('id-ID').format(value || 0)
+
+const accountLabel = (key) => marketplaceAccounts.find((account) => account.key === key)?.name || '-'
+
+const accountToken = (account) => {
+  if (account.channel === 'shopee') {
+    return shopeeTokenRows.value.find((token) => token.account_key === account.key)
+  }
+
+  return data.value.tokens?.tiktok || null
+}
+
+const accountStatus = (account) => accountToken(account) ? 'Terhubung' : 'Belum ada token'
+
+const accountLatestDate = (account) => {
+  const token = accountToken(account)
+
+  return token?.created_at || token?.expire_at || '-'
+}
 
 const loadData = async () => {
   loading.value = true
@@ -206,7 +256,7 @@ h1 { font-size: 28px; }
 .panel-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .panel-title h2 { font-size: 18px; }
 .panel-title p { color: #64748b; font-size: 13px; margin-top: 4px; }
-.integration-grid, .quick-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.integration-grid, .quick-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .integration { padding: 14px; }
 .integration small { color: #64748b; display: block; margin-top: 8px; }
 .quick-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -215,7 +265,12 @@ h1 { font-size: 28px; }
 .tiktok { background: #111827; }
 .master { background: #15803d; }
 .sync { background: #6d28d9; }
-.token-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.token-accounts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.token-account { border: 1px solid #d9e2ec; border-radius: 8px; padding: 14px; background: #fff; }
+.token-account-head { display: grid; gap: 4px; margin-bottom: 12px; }
+.token-account-head span { color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+.token-account-head strong { color: #1f2933; font-size: 15px; }
+.token-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .token-button { min-height: 46px; border: 0; border-radius: 6px; color: #fff; padding: 12px 14px; font-size: 14px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-align: center; }
 .token-button:disabled { cursor: wait; opacity: .72; }
 .token-button.shopee { background: #ff5528; }
@@ -234,6 +289,6 @@ h1 { font-size: 28px; }
 .token-status.active { color: #166534; background: #dcfce7; }
 .token-status.inactive { color: #475569; background: #e2e8f0; }
 .empty-state { color: #64748b; text-align: center; }
-@media (max-width: 1040px) { .token-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 820px) { .page-shell { margin-left: 0; padding: 18px; } .stats, .integration-grid, .quick-actions, .token-actions { grid-template-columns: 1fr; } .token-button.wide { grid-column: auto; } }
+@media (max-width: 1040px) { .integration-grid, .token-accounts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 820px) { .page-shell { margin-left: 0; padding: 18px; } .stats, .integration-grid, .quick-actions, .token-accounts, .token-actions { grid-template-columns: 1fr; } .token-button.wide { grid-column: auto; } }
 </style>

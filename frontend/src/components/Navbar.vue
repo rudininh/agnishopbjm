@@ -1,5 +1,5 @@
 <template>
-  <aside v-if="authStore.isAuthenticated" class="sidebar">
+  <aside class="sidebar">
     <RouterLink to="/dashboard" class="brand">
       <span class="brand-mark">A</span>
       <span>
@@ -16,29 +16,11 @@
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
     </nav>
-
-    <button class="logout" @click="handleLogout">Logout</button>
   </aside>
 </template>
 
 <script setup>
-import { RouterLink, useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/authStore'
-import { authService } from '@/services'
-
-const router = useRouter()
-const authStore = useAuthStore()
-
-const handleLogout = async () => {
-  try {
-    await authService.logout()
-  } catch (error) {
-    console.error('Logout error:', error)
-  }
-
-  authStore.logout()
-  router.push('/login')
-}
+import { RouterLink } from 'vue-router'
 </script>
 
 <style scoped>
