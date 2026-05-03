@@ -28,6 +28,9 @@ class OmnichannelController extends Controller
                 'shopee' => DB::table('shopee_tokens')->latest('created_at')->first(),
                 'tiktok' => DB::table('tiktok_tokens')->latest('created_at')->first(),
             ],
+            'token_rows' => [
+                'shopee' => $this->latestShopeeTokens(),
+            ],
         ]);
     }
 
@@ -138,10 +141,8 @@ class OmnichannelController extends Controller
             ? 'Authorization berhasil. Kamu bisa kembali ke dashboard.'
             : ($result['message'] ?? 'Shopee mengembalikan error.');
 
-        return response(
-            '<!doctype html><html lang="id"><head><meta charset="utf-8"><title>'.$title.'</title></head><body style="font-family:Arial,sans-serif;padding:32px;line-height:1.5"><h1>'.$title.'</h1><p>'.$message.'</p><pre style="background:#f3f4f6;padding:16px;border-radius:8px;white-space:pre-wrap">'.e(json_encode($result, JSON_PRETTY_PRINT)).'</pre><p><a href="/dashboard">Kembali ke Dashboard</a></p></body></html>',
-            $ok ? 200 : 422
-        )->header('Content-Type', 'text/html');
+        return response($this->renderShopeeCallbackPage($title, $message, $result), $ok ? 200 : 422)
+            ->header('Content-Type', 'text/html');
     }
 
     public function tiktokItems(): JsonResponse
@@ -288,6 +289,83 @@ class OmnichannelController extends Controller
     private function formatRupiah(int $value): string
     {
         return 'Rp '.number_format($value, 0, ',', '.');
+    }
+
+    private function latestShopeeTokens(): array
+    {
+        return DB::table('shopee_tokens')
+            ->select([
+                'id',
+                'partner_id',
+                'shop_id',
+                'merchant_id',
+                'supplier_id',
+                'user_id',
+                'access_token',
+                'refresh_token',
+                'expire_in',
+                'expire_at',
+                'request_id',
+                'error',
+                'message',
+                'is_active',
+                'created_at',
+            ])
+            ->latest('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn ($token) => [
+                'id' => $token->id,
+                'partner_id' => $token->partner_id,
+                'shop_id' => $token->shop_id,
+                'merchant_id' => $token->merchant_id,
+                'supplier_id' => $token->supplier_id,
+                'user_id' => $token->user_id,
+                'access_token' => $this->maskToken($token->access_token),
+                'refresh_token' => $this->maskToken($token->refresh_token),
+                'expire_in' => $token->expire_in,
+                'expire_at' => $token->expire_at,
+                'request_id' => $token->request_id,
+                'error' => $token->error,
+                'message' => $token->message,
+                'is_active' => (bool) $token->is_active,
+                'created_at' => $token->created_at,
+            ])
+            ->all();
+    }
+
+    private function maskToken(?string $token): string
+    {
+        if (! $token) {
+            return '-';
+        }
+
+        if (strlen($token) <= 12) {
+            return $token;
+        }
+
+        return substr($token, 0, 8).'...'.substr($token, -6);
+    }
+
+    private function renderShopeeCallbackPage(string $title, string $message, array $result): string
+    {
+        $rows = [
+            'Status' => $result['status'] ?? '-',
+            'Action' => $result['action'] ?? '-',
+            'Shop ID' => implode(', ', $result['shop_id_list'] ?? []),
+            'Access Token' => $this->maskToken($result['access_token'] ?? null),
+            'Refresh Token' => $this->maskToken($result['refresh_token'] ?? null),
+            'Expire In' => $result['expire_in'] ?? '-',
+            'Request ID' => $result['request_id'] ?? '-',
+            'Error' => $result['error'] ?? '-',
+            'Message' => $result['message'] ?? '-',
+        ];
+
+        $tableRows = collect($rows)->map(function ($value, string $label) {
+            return '<tr><th>'.e($label).'</th><td>'.e((string) ($value ?: '-')).'</td></tr>';
+        })->implode('');
+
+        return '<!doctype html><html lang="id"><head><meta charset="utf-8"><title>'.e($title).'</title><style>body{font-family:Arial,sans-serif;padding:32px;line-height:1.5;color:#0f172a}h1{margin-bottom:12px}table{border-collapse:collapse;width:100%;margin:18px 0;background:#fff}th,td{border:1px solid #d9e2ec;padding:10px 12px;text-align:left}th{width:180px;background:#f8fafc}a{color:#0f5fc7}</style></head><body><h1>'.e($title).'</h1><p>'.e($message).'</p><table>'.$tableRows.'</table><p><a href="/dashboard">Kembali ke Dashboard</a></p></body></html>';
     }
 
     private function buildShopeeAuthUrl(): string
