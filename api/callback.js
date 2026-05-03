@@ -1,44 +1,27 @@
-
-
-import { Client } from "pg";
-
-console.log("DATABASE_URL:", process.env.DATABASE_URL);
-
-
 export default async function handler(req, res) {
   try {
-    const { code, shop_id } = req.query;
+    const { code } = req.query;
+    const localCallback =
+      process.env.LOCAL_SHOPEE_CALLBACK_URL ||
+      "http://agnishopbjm-laravel.test/api/shopee/callback";
 
-    if (!code || !shop_id) {
-      return res.status(400).json({ error: "Missing code or shop_id" });
+    if (!code) {
+      return res.status(400).json({ error: "Missing code" });
     }
 
-    const client = new Client({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-    });
-    await client.connect();
+    const url = new URL(localCallback);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS shopee_callbacks (
-        id SERIAL PRIMARY KEY,
-        code TEXT,
-        shop_id TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
+    for (const [key, value] of Object.entries(req.query)) {
+      if (Array.isArray(value)) {
+        value.forEach((item) => url.searchParams.append(key, item));
+      } else if (value !== undefined) {
+        url.searchParams.set(key, value);
+      }
+    }
 
-    await client.query(
-      "INSERT INTO shopee_callbacks (code, shop_id) VALUES ($1, $2)",
-      [code, shop_id]
-    );
-
-    await client.end();
-
-    // ✅ Redirect ke homepage (bukan JSON)
-    return res.redirect(302, "https://agnishopbjm.vercel.app/dashboard.html");
-  } catch (err) {
-    console.error("❌ Error:", err.message);
-    return res.status(500).json({ error: err.message });
+    return res.redirect(302, url.toString());
+  } catch (error) {
+    console.error("Shopee callback bridge error:", error.message);
+    return res.status(500).json({ error: error.message });
   }
 }
