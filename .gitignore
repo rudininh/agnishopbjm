@@ -2,3 +2,13 @@
 sdk_golang/.openapi-generator/
 node_modules/
 .vercel
+.cache/
+backend/vendor/
+backend/.env
+backend/storage/logs/*.log
+backend/storage/framework/views/*.php
+backend/bootstrap/cache/*.php
+backend/.phpunit.result.cache
+frontend/node_modules/
+frontend/dist/
+frontend/.env
