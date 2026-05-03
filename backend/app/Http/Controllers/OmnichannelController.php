@@ -12,6 +12,21 @@ use Illuminate\Support\Facades\Schema;
 
 class OmnichannelController extends Controller
 {
+    private const MARKETPLACE_ACCOUNTS = [
+        'shopee-agnishopbjm' => [
+            'channel' => 'shopee',
+            'name' => 'Shopee AgniShopBJM',
+        ],
+        'shopee-gitacollectionbjm' => [
+            'channel' => 'shopee',
+            'name' => 'Shopee GitaCollectionBJM',
+        ],
+        'tiktok-agnishopbjm' => [
+            'channel' => 'tiktok',
+            'name' => 'TikTok AgniShopBJM',
+        ],
+    ];
+
     public function dashboard(): JsonResponse
     {
         return response()->json([
@@ -75,17 +90,22 @@ class OmnichannelController extends Controller
 
     public function tokenAction(string $action): JsonResponse
     {
-        if ($action === 'auth-shopee') {
+        $account = $this->resolveAccountFromAction($action);
+
+        if ($account && str_starts_with($action, 'auth-shopee')) {
             return response()->json([
                 'status' => 'redirect',
                 'action' => $action,
-                'message' => 'Membuka halaman authorization Shopee.',
-                'redirect_url' => $this->buildShopeeAuthUrl(),
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Membuka halaman authorization '.$account['name'].'.',
+                'redirect_url' => $this->buildShopeeAuthUrl($account),
             ]);
         }
 
-        if ($action === 'get-token-shopee') {
+        if ($account && str_starts_with($action, 'get-token-shopee')) {
             $callback = DB::table('shopee_callbacks')
+                ->where('account_key', $account['key'])
                 ->whereNull('used_at')
                 ->latest('created_at')
                 ->first();
@@ -94,7 +114,9 @@ class OmnichannelController extends Controller
                 return response()->json([
                     'status' => 'error',
                     'action' => $action,
-                    'message' => 'Belum ada callback Shopee yang bisa ditukar menjadi token. Klik AUTH SHOPEE dulu.',
+                    'account_key' => $account['key'],
+                    'account_name' => $account['name'],
+                    'message' => 'Belum ada callback '.$account['name'].' yang bisa ditukar menjadi token. Klik AUTH dulu.',
                 ], 422);
             }
 
@@ -102,18 +124,23 @@ class OmnichannelController extends Controller
         }
 
         $labels = [
-            'auth-shopee' => 'AUTH SHOPEE',
-            'auth-tiktok' => 'AUTH TIKTOK',
-            'get-token-shopee' => 'GET TOKEN SHOPEE',
-            'get-token-tiktok' => 'GET TOKEN TIKTOK',
-            'refresh-token-shopee' => 'REFRESH TOKEN SHOPEE',
-            'refresh-token-tiktok' => 'REFRESH TOKEN TIKTOK',
-            'get-auth-shop-tiktok' => 'GET AUTH SHOP TIKTOK',
+            'auth-shopee-agnishopbjm' => 'AUTH SHOPEE AGNISHOPBJM',
+            'auth-shopee-gitacollectionbjm' => 'AUTH SHOPEE GITACOLLECTIONBJM',
+            'auth-tiktok-agnishopbjm' => 'AUTH TIKTOK AGNISHOPBJM',
+            'get-token-shopee-agnishopbjm' => 'GET TOKEN SHOPEE AGNISHOPBJM',
+            'get-token-shopee-gitacollectionbjm' => 'GET TOKEN SHOPEE GITACOLLECTIONBJM',
+            'get-token-tiktok-agnishopbjm' => 'GET TOKEN TIKTOK AGNISHOPBJM',
+            'refresh-token-shopee-agnishopbjm' => 'REFRESH TOKEN SHOPEE AGNISHOPBJM',
+            'refresh-token-shopee-gitacollectionbjm' => 'REFRESH TOKEN SHOPEE GITACOLLECTIONBJM',
+            'refresh-token-tiktok-agnishopbjm' => 'REFRESH TOKEN TIKTOK AGNISHOPBJM',
+            'get-auth-shop-tiktok-agnishopbjm' => 'GET AUTH SHOP TIKTOK AGNISHOPBJM',
         ];
 
         return response()->json([
             'status' => 'ok',
             'action' => $action,
+            'account_key' => $account['key'] ?? null,
+            'account_name' => $account['name'] ?? null,
             'message' => ($labels[$action] ?? strtoupper($action)).' diproses. Hubungkan logic OAuth/token Go lama di endpoint ini.',
         ]);
     }
@@ -121,12 +148,15 @@ class OmnichannelController extends Controller
     public function shopeeCallback(Request $request): Response
     {
         $code = $request->query('code');
+        $account = $this->resolveAccount((string) $request->query('account', 'shopee-agnishopbjm'), 'shopee');
 
         if (! $code) {
             return response('Callback Shopee tidak membawa code.', 422);
         }
 
         $callbackId = DB::table('shopee_callbacks')->insertGetId([
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
             'code' => $code,
             'shop_id' => $request->query('shop_id') ? (int) $request->query('shop_id') : null,
             'main_account_id' => $request->query('main_account_id') ? (int) $request->query('main_account_id') : null,
@@ -304,6 +334,8 @@ class OmnichannelController extends Controller
         return DB::table('shopee_tokens')
             ->select([
                 'id',
+                'account_key',
+                'account_name',
                 'partner_id',
                 'shop_id',
                 'merchant_id',
@@ -324,6 +356,8 @@ class OmnichannelController extends Controller
             ->get()
             ->map(fn ($token) => [
                 'id' => $token->id,
+                'account_key' => $token->account_key,
+                'account_name' => $token->account_name,
                 'partner_id' => $token->partner_id,
                 'shop_id' => $token->shop_id,
                 'merchant_id' => $token->merchant_id,
@@ -380,6 +414,7 @@ class OmnichannelController extends Controller
         $rows = [
             'Status' => $result['status'] ?? '-',
             'Action' => $result['action'] ?? '-',
+            'Akun' => $result['account_name'] ?? '-',
             'Shop ID' => implode(', ', $result['shop_id_list'] ?? []),
             'Access Token' => $this->maskToken($result['access_token'] ?? null),
             'Refresh Token' => $this->maskToken($result['refresh_token'] ?? null),
@@ -396,18 +431,21 @@ class OmnichannelController extends Controller
         return '<!doctype html><html lang="id"><head><meta charset="utf-8"><title>'.e($title).'</title><style>body{font-family:Arial,sans-serif;padding:32px;line-height:1.5;color:#0f172a}h1{margin-bottom:12px}table{border-collapse:collapse;width:100%;margin:18px 0;background:#fff}th,td{border:1px solid #d9e2ec;padding:10px 12px;text-align:left}th{width:180px;background:#f8fafc}a{color:#0f5fc7}</style></head><body><h1>'.e($title).'</h1><p>'.e($message).'</p><table>'.$tableRows.'</table><p><a href="/dashboard">Kembali ke Dashboard</a></p></body></html>';
     }
 
-    private function buildShopeeAuthUrl(): string
+    private function buildShopeeAuthUrl(array $account): string
     {
         $config = $this->shopeeConfig();
         $path = '/api/v2/shop/auth_partner';
         $timestamp = time();
         $sign = $this->generateShopeeSign($config['partner_id'], $config['partner_key'], $path, $timestamp);
+        $redirectUrl = $config['redirect_url'].(str_contains($config['redirect_url'], '?') ? '&' : '?').http_build_query([
+            'account' => $account['key'],
+        ]);
 
         return $config['host'].$path.'?'.http_build_query([
             'partner_id' => $config['partner_id'],
             'timestamp' => $timestamp,
             'sign' => $sign,
-            'redirect' => $config['redirect_url'],
+            'redirect' => $redirectUrl,
         ]);
     }
 
@@ -456,7 +494,9 @@ class OmnichannelController extends Controller
 
         return [
             'status' => ($data['error'] ?? '') === '' ? 'ok' : 'error',
-            'action' => 'get-token-shopee',
+            'action' => 'get-token-'.$callback->account_key,
+            'account_key' => $callback->account_key,
+            'account_name' => $callback->account_name,
             ...$data,
         ];
     }
@@ -472,10 +512,13 @@ class OmnichannelController extends Controller
         if ($shopId) {
             DB::table('shopee_tokens')
                 ->where('shop_id', $shopId)
+                ->where('account_key', $callback->account_key)
                 ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
         }
 
         DB::table('shopee_tokens')->insert([
+            'account_key' => $callback->account_key,
+            'account_name' => $callback->account_name,
             'partner_id' => $partnerId,
             'shop_id' => $shopId,
             'merchant_id' => $merchantIdList[0] ?? null,
@@ -530,6 +573,33 @@ class OmnichannelController extends Controller
     private function generateShopeeSign(int $partnerId, string $partnerKey, string $path, int $timestamp): string
     {
         return hash_hmac('sha256', $partnerId.$path.$timestamp, $partnerKey);
+    }
+
+    private function resolveAccountFromAction(string $action): ?array
+    {
+        foreach (self::MARKETPLACE_ACCOUNTS as $key => $account) {
+            if (str_ends_with($action, $key)) {
+                return ['key' => $key, ...$account];
+            }
+        }
+
+        return match ($action) {
+            'auth-shopee', 'get-token-shopee', 'refresh-token-shopee' => $this->resolveAccount('shopee-agnishopbjm', 'shopee'),
+            'auth-tiktok', 'get-token-tiktok', 'refresh-token-tiktok', 'get-auth-shop-tiktok' => $this->resolveAccount('tiktok-agnishopbjm', 'tiktok'),
+            default => null,
+        };
+    }
+
+    private function resolveAccount(string $key, string $channel): array
+    {
+        $resolvedKey = array_key_exists($key, self::MARKETPLACE_ACCOUNTS)
+            ? $key
+            : ($channel === 'tiktok' ? 'tiktok-agnishopbjm' : 'shopee-agnishopbjm');
+        $account = self::MARKETPLACE_ACCOUNTS[$resolvedKey];
+
+        abort_if($account['channel'] !== $channel, 422, 'Klasifikasi akun marketplace tidak valid.');
+
+        return ['key' => $resolvedKey, ...$account];
     }
 }
 

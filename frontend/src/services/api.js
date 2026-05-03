@@ -10,9 +10,12 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const authStore = useAuthStore()
+  const token = typeof authStore.token === 'string' ? authStore.token.trim() : ''
   
-  if (authStore.token) {
-    config.headers.Authorization = `Bearer ${authStore.token}`
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  } else {
+    delete config.headers.Authorization
   }
 
   return config
