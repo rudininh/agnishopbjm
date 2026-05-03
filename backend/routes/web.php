@@ -11,7 +11,27 @@ Route::get('assets/{path}', function (string $path) use ($frontendDist) {
 
     abort_if(! $assetPath || ! $assetsRoot || ! str_starts_with($assetPath, $assetsRoot), 404);
 
-    return response()->file($assetPath);
+    $mimeTypes = [
+        'css' => 'text/css',
+        'js' => 'application/javascript',
+        'mjs' => 'application/javascript',
+        'json' => 'application/json',
+        'map' => 'application/json',
+        'svg' => 'image/svg+xml',
+        'png' => 'image/png',
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'ico' => 'image/x-icon',
+        'woff' => 'font/woff',
+        'woff2' => 'font/woff2',
+    ];
+    $extension = strtolower(pathinfo($assetPath, PATHINFO_EXTENSION));
+
+    return response()->file($assetPath, [
+        'Content-Type' => $mimeTypes[$extension] ?? 'application/octet-stream',
+    ]);
 })->where('path', '.*');
 
 Route::fallback(function (Request $request) use ($frontendDist) {
