@@ -31,6 +31,7 @@ class OmnichannelController extends Controller
             'token_rows' => [
                 'shopee' => $this->latestShopeeTokens(),
             ],
+            'database' => $this->databaseInfo(),
         ]);
     }
 
@@ -332,6 +333,16 @@ class OmnichannelController extends Controller
                 'created_at' => $token->created_at,
             ])
             ->all();
+    }
+
+    private function databaseInfo(): array
+    {
+        $row = DB::selectOne('select current_database() as name, current_user as username');
+
+        return [
+            'name' => $row->name ?? config('database.connections.pgsql.database'),
+            'username' => $row->username ?? config('database.connections.pgsql.username'),
+        ];
     }
 
     private function maskToken(?string $token): string
