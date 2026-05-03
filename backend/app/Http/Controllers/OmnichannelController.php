@@ -8,6 +8,7 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 
 class OmnichannelController extends Controller
 {
@@ -15,18 +16,20 @@ class OmnichannelController extends Controller
     {
         return response()->json([
             'summary' => [
-                'stock_master' => DB::table('stock_master')->count(),
-                'shopee_products' => DB::table('shopee_product')->count(),
-                'shopee_variants' => DB::table('shopee_product_model')->count(),
-                'tiktok_products' => DB::table('tiktok_products')->distinct('product_id')->count('product_id'),
-                'tiktok_skus' => DB::table('tiktok_products')->count(),
-                'sku_mappings' => DB::table('sku_mapping')->count(),
-                'shopee_tokens' => DB::table('shopee_tokens')->count(),
-                'tiktok_tokens' => DB::table('tiktok_tokens')->count(),
+                'stock_master' => $this->tableCount('stock_master'),
+                'shopee_products' => $this->tableCount('shopee_product'),
+                'shopee_variants' => $this->tableCount('shopee_product_model'),
+                'tiktok_products' => Schema::hasTable('tiktok_products')
+                    ? DB::table('tiktok_products')->distinct('product_id')->count('product_id')
+                    : 0,
+                'tiktok_skus' => $this->tableCount('tiktok_products'),
+                'sku_mappings' => $this->tableCount('sku_mapping'),
+                'shopee_tokens' => $this->tableCount('shopee_tokens'),
+                'tiktok_tokens' => $this->tableCount('tiktok_tokens'),
             ],
             'tokens' => [
-                'shopee' => DB::table('shopee_tokens')->latest('created_at')->first(),
-                'tiktok' => DB::table('tiktok_tokens')->latest('created_at')->first(),
+                'shopee' => $this->latestRow('shopee_tokens'),
+                'tiktok' => $this->latestRow('tiktok_tokens'),
             ],
             'token_rows' => [
                 'shopee' => $this->latestShopeeTokens(),
@@ -294,6 +297,10 @@ class OmnichannelController extends Controller
 
     private function latestShopeeTokens(): array
     {
+        if (! Schema::hasTable('shopee_tokens')) {
+            return [];
+        }
+
         return DB::table('shopee_tokens')
             ->select([
                 'id',
@@ -333,6 +340,16 @@ class OmnichannelController extends Controller
                 'created_at' => $token->created_at,
             ])
             ->all();
+    }
+
+    private function tableCount(string $table): int
+    {
+        return Schema::hasTable($table) ? DB::table($table)->count() : 0;
+    }
+
+    private function latestRow(string $table): ?object
+    {
+        return Schema::hasTable($table) ? DB::table($table)->latest('created_at')->first() : null;
     }
 
     private function databaseInfo(): array
