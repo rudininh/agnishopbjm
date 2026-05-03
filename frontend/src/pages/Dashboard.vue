@@ -74,6 +74,40 @@
       </div>
 
       <p v-if="message" class="action-message">{{ message }}</p>
+
+      <div class="token-table-wrap">
+        <table class="token-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Shop ID</th>
+              <th>Access Token</th>
+              <th>Refresh Token</th>
+              <th>Expire</th>
+              <th>Request ID</th>
+              <th>Dibuat</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="token in shopeeTokenRows" :key="token.id">
+              <td>
+                <span :class="['token-status', token.is_active ? 'active' : 'inactive']">
+                  {{ token.is_active ? 'Aktif' : 'Nonaktif' }}
+                </span>
+              </td>
+              <td>{{ token.shop_id || '-' }}</td>
+              <td class="mono">{{ token.access_token || '-' }}</td>
+              <td class="mono">{{ token.refresh_token || '-' }}</td>
+              <td>{{ token.expire_at || token.expire_in || '-' }}</td>
+              <td class="mono">{{ token.request_id || '-' }}</td>
+              <td>{{ token.created_at || '-' }}</td>
+            </tr>
+            <tr v-if="!shopeeTokenRows.length">
+              <td colspan="7" class="empty-state">Belum ada token Shopee tersimpan.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </section>
 </template>
@@ -96,6 +130,8 @@ const cards = computed(() => [
   { label: 'SKU TikTok', value: data.value.summary?.tiktok_skus || 0 },
   { label: 'SKU Mapping', value: data.value.summary?.sku_mappings || 0 }
 ])
+
+const shopeeTokenRows = computed(() => data.value.token_rows?.shopee || [])
 
 const tokenButtons = [
   { label: 'AUTH SHOPEE', action: 'auth-shopee', variant: 'shopee' },
@@ -174,6 +210,16 @@ h1 { font-size: 28px; }
 .token-button.wide { grid-column: span 2; }
 .button-icon { font-size: 15px; line-height: 1; }
 .action-message { color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
+.token-table-wrap { margin-top: 16px; overflow-x: auto; border: 1px solid #d9e2ec; border-radius: 8px; }
+.token-table { width: 100%; border-collapse: collapse; min-width: 980px; background: #fff; }
+.token-table th, .token-table td { padding: 11px 12px; border-bottom: 1px solid #e5edf5; text-align: left; font-size: 13px; vertical-align: top; }
+.token-table th { color: #475569; background: #f8fafc; font-size: 12px; text-transform: uppercase; }
+.token-table tr:last-child td { border-bottom: 0; }
+.mono { font-family: Consolas, 'Courier New', monospace; color: #334155; }
+.token-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 12px; font-weight: 700; }
+.token-status.active { color: #166534; background: #dcfce7; }
+.token-status.inactive { color: #475569; background: #e2e8f0; }
+.empty-state { color: #64748b; text-align: center; }
 @media (max-width: 1040px) { .token-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 820px) { .page-shell { margin-left: 0; padding: 18px; } .stats, .integration-grid, .quick-actions, .token-actions { grid-template-columns: 1fr; } .token-button.wide { grid-column: auto; } }
 </style>
