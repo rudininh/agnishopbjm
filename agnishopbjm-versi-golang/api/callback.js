@@ -1,5 +1,3 @@
-
-
 import { Client } from "pg";
 
 console.log("DATABASE_URL:", process.env.DATABASE_URL);
@@ -35,10 +33,10 @@ export default async function handler(req, res) {
 
     await client.end();
 
-    // ✅ Redirect ke homepage (bukan JSON)
+    // Redirect ke homepage (bukan JSON)
     return res.redirect(302, "https://agnishopbjm.vercel.app/dashboard.html");
   } catch (err) {
-    console.error("❌ Error:", err.message);
+    console.error("Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 }
