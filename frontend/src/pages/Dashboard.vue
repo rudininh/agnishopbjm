@@ -126,6 +126,11 @@ const runTokenAction = async (action) => {
   try {
     const response = await omnichannelService.runTokenAction(action)
     message.value = response.data.message || 'Aksi berhasil diproses.'
+
+    if (response.data.redirect_url) {
+      window.location.href = response.data.redirect_url
+      return
+    }
   } catch (error) {
     message.value = error.response?.data?.message || 'Aksi gagal diproses.'
   } finally {

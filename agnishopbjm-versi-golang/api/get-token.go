@@ -19,7 +19,7 @@ import (
 
 const (
 	PartnerID  = 2013107
-	PartnerKey = "shpk5a76537146704b44656a4a6f4f685271464b596b71557353544a71436465"
+	PartnerKey = "shpk6a4a725154556c65586a565a4a4e6b67554b764d6d5776487a747a725643"
 	Host       = "https://partner.shopeemobile.com"
 )
 

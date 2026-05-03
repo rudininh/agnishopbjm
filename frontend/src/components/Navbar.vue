@@ -14,6 +14,7 @@
       <RouterLink to="/stok-tiktok">Stok TikTok</RouterLink>
       <RouterLink to="/stock-master">Stock Master</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
+      <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
     </nav>
 
     <button class="logout" @click="handleLogout">Logout</button>

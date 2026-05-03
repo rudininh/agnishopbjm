@@ -111,3 +111,15 @@ export const omnichannelService = {
     return api.post(`/omnichannel/${action}`)
   }
 }
+
+export const shopeeDocsService = {
+  modules() {
+    return api.get('/shopee-docs/modules')
+  },
+
+  apiDetail(apiName) {
+    return api.get('/shopee-docs/api', {
+      params: { api_name: apiName }
+    })
+  }
+}

@@ -7,6 +7,7 @@ import ShopeeStock from '@/pages/ShopeeStock.vue'
 import TiktokStock from '@/pages/TiktokStock.vue'
 import StockMaster from '@/pages/StockMaster.vue'
 import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
+import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 
 const routes = [
   {
@@ -47,6 +48,12 @@ const routes = [
     path: '/sync-shopee-to-tiktok',
     name: 'sync-shopee-to-tiktok',
     component: SyncShopeeTiktok,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/dokumentasi-shopee',
+    name: 'dokumentasi-shopee',
+    component: DokumentasiShopee,
     meta: { requiresAuth: true }
   },
   {
