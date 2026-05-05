@@ -5,28 +5,43 @@ use Illuminate\Support\Facades\Route;
 
 $frontendDist = dirname(base_path()).DIRECTORY_SEPARATOR.'frontend'.DIRECTORY_SEPARATOR.'dist';
 
-Route::get('assets/{path}', function (string $path) use ($frontendDist) {
+$mimeTypes = [
+    'css' => 'text/css',
+    'js' => 'application/javascript',
+    'mjs' => 'application/javascript',
+    'json' => 'application/json',
+    'map' => 'application/json',
+    'svg' => 'image/svg+xml',
+    'png' => 'image/png',
+    'jpg' => 'image/jpeg',
+    'jpeg' => 'image/jpeg',
+    'gif' => 'image/gif',
+    'webp' => 'image/webp',
+    'ico' => 'image/x-icon',
+    'woff' => 'font/woff',
+    'woff2' => 'font/woff2',
+];
+
+Route::get('{file}', function (string $file) use ($frontendDist, $mimeTypes) {
+    $filePath = realpath($frontendDist.DIRECTORY_SEPARATOR.$file);
+    $distRoot = realpath($frontendDist);
+
+    abort_if(! $filePath || ! $distRoot || ! str_starts_with($filePath, $distRoot), 404);
+    abort_if(! is_file($filePath), 404);
+
+    $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
+    return response()->file($filePath, [
+        'Content-Type' => $mimeTypes[$extension] ?? 'application/octet-stream',
+    ]);
+})->where('file', 'favicon\.png|agni-logo\.png|robots\.txt|manifest\.webmanifest|site\.webmanifest');
+
+Route::get('assets/{path}', function (string $path) use ($frontendDist, $mimeTypes) {
     $assetPath = realpath($frontendDist.DIRECTORY_SEPARATOR.'assets'.DIRECTORY_SEPARATOR.$path);
     $assetsRoot = realpath($frontendDist.DIRECTORY_SEPARATOR.'assets');
 
     abort_if(! $assetPath || ! $assetsRoot || ! str_starts_with($assetPath, $assetsRoot), 404);
 
-    $mimeTypes = [
-        'css' => 'text/css',
-        'js' => 'application/javascript',
-        'mjs' => 'application/javascript',
-        'json' => 'application/json',
-        'map' => 'application/json',
-        'svg' => 'image/svg+xml',
-        'png' => 'image/png',
-        'jpg' => 'image/jpeg',
-        'jpeg' => 'image/jpeg',
-        'gif' => 'image/gif',
-        'webp' => 'image/webp',
-        'ico' => 'image/x-icon',
-        'woff' => 'font/woff',
-        'woff2' => 'font/woff2',
-    ];
     $extension = strtolower(pathinfo($assetPath, PATHINFO_EXTENSION));
 
     return response()->file($assetPath, [
