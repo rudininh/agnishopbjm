@@ -43,11 +43,12 @@ class OmnichannelController extends Controller
                 'tiktok_tokens' => $this->tableCount('tiktok_tokens'),
             ],
             'tokens' => [
-                'shopee' => $this->latestRow('shopee_tokens'),
-                'tiktok' => $this->latestRow('tiktok_tokens'),
+                'shopee' => $this->latestShopeeTokens()[0] ?? null,
+                'tiktok' => $this->latestTokenPreview('tiktok_tokens'),
             ],
             'token_rows' => [
                 'shopee' => $this->latestShopeeTokens(),
+                'tiktok' => $this->latestTiktokTokens(),
             ],
             'database' => $this->databaseInfo(),
         ]);
@@ -120,7 +121,13 @@ class OmnichannelController extends Controller
                 ], 422);
             }
 
-            return response()->json($this->exchangeShopeeToken($callback));
+            return response()->json($this->maskShopeeTokenPayload($this->exchangeShopeeToken($callback)));
+        }
+
+        if ($account && str_starts_with($action, 'refresh-token-shopee')) {
+            $result = $this->refreshShopeeToken($account);
+
+            return response()->json($this->maskShopeeTokenPayload($result), ($result['status'] ?? '') === 'ok' ? 200 : 422);
         }
 
         $labels = [
@@ -352,7 +359,7 @@ class OmnichannelController extends Controller
                 'created_at',
             ])
             ->latest('created_at')
-            ->limit(10)
+            ->limit(100)
             ->get()
             ->map(fn ($token) => [
                 'id' => $token->id,
@@ -376,14 +383,60 @@ class OmnichannelController extends Controller
             ->all();
     }
 
+    private function latestTiktokTokens(): array
+    {
+        if (! Schema::hasTable('tiktok_tokens')) {
+            return [];
+        }
+
+        return DB::table('tiktok_tokens')
+            ->latest('created_at')
+            ->limit(100)
+            ->get()
+            ->map(function ($token) {
+                $row = (array) $token;
+
+                return [
+                    'id' => $row['id'] ?? null,
+                    'account_key' => $row['account_key'] ?? 'tiktok-agnishopbjm',
+                    'account_name' => $row['account_name'] ?? 'TikTok AgniShopBJM',
+                    'shop_id' => $row['shop_id'] ?? $row['seller_id'] ?? $row['shop_cipher'] ?? null,
+                    'access_token' => $this->maskToken($row['access_token'] ?? null),
+                    'refresh_token' => $this->maskToken($row['refresh_token'] ?? null),
+                    'expire_in' => $row['expire_in'] ?? $row['expires_in'] ?? null,
+                    'expire_at' => $row['expire_at'] ?? $row['access_token_expire_at'] ?? null,
+                    'request_id' => $row['request_id'] ?? null,
+                    'error' => $row['error'] ?? null,
+                    'message' => $row['message'] ?? null,
+                    'is_active' => (bool) ($row['is_active'] ?? true),
+                    'created_at' => $row['created_at'] ?? null,
+                ];
+            })
+            ->all();
+    }
+
     private function tableCount(string $table): int
     {
         return Schema::hasTable($table) ? DB::table($table)->count() : 0;
     }
 
-    private function latestRow(string $table): ?object
+    private function latestTokenPreview(string $table): ?array
     {
-        return Schema::hasTable($table) ? DB::table($table)->latest('created_at')->first() : null;
+        if (! Schema::hasTable($table)) {
+            return null;
+        }
+
+        $row = DB::table($table)->latest('created_at')->first();
+
+        if (! $row) {
+            return null;
+        }
+
+        $data = (array) $row;
+        $data['access_token'] = $this->maskToken($data['access_token'] ?? null);
+        $data['refresh_token'] = $this->maskToken($data['refresh_token'] ?? null);
+
+        return $data;
     }
 
     private function databaseInfo(): array
@@ -407,6 +460,17 @@ class OmnichannelController extends Controller
         }
 
         return substr($token, 0, 8).'...'.substr($token, -6);
+    }
+
+    private function maskShopeeTokenPayload(array $payload): array
+    {
+        foreach (['access_token', 'refresh_token'] as $key) {
+            if (array_key_exists($key, $payload)) {
+                $payload[$key] = $this->maskToken($payload[$key]);
+            }
+        }
+
+        return $payload;
     }
 
     private function renderShopeeCallbackPage(string $title, string $message, array $result): string
@@ -501,6 +565,85 @@ class OmnichannelController extends Controller
         ];
     }
 
+    private function refreshShopeeToken(array $account): array
+    {
+        $token = DB::table('shopee_tokens')
+            ->where('account_key', $account['key'])
+            ->whereRaw('is_active = true')
+            ->whereNotNull('refresh_token')
+            ->latest('created_at')
+            ->first();
+
+        if (! $token) {
+            return [
+                'status' => 'error',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Belum ada token aktif '.$account['name'].' yang bisa di-refresh. Jalankan AUTH dan GET TOKEN dulu.',
+            ];
+        }
+
+        $identifier = $this->shopeeRefreshIdentifier($token);
+
+        if (! $identifier) {
+            return [
+                'status' => 'error',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Token aktif '.$account['name'].' tidak memiliki shop_id, merchant_id, supplier_id, atau user_id.',
+            ];
+        }
+
+        $config = $this->shopeeConfig();
+        $path = '/api/v2/auth/access_token/get';
+        $timestamp = time();
+        $sign = $this->generateShopeeSign($config['partner_id'], $config['partner_key'], $path, $timestamp);
+        $url = $config['host'].$path.'?'.http_build_query([
+            'partner_id' => $config['partner_id'],
+            'timestamp' => $timestamp,
+            'sign' => $sign,
+        ]);
+
+        $payload = [
+            'refresh_token' => $token->refresh_token,
+            'partner_id' => $config['partner_id'],
+            $identifier['key'] => $identifier['value'],
+        ];
+
+        $response = Http::timeout(20)
+            ->acceptJson()
+            ->asJson()
+            ->post($url, $payload);
+
+        $data = $response->json() ?: [
+            'error' => 'error_network',
+            'message' => $response->body(),
+        ];
+
+        if (($data['error'] ?? '') === '' && ! empty($data['access_token']) && ! empty($data['refresh_token'])) {
+            $this->storeShopeeRefreshToken($data, $config['partner_id'], $account, $token);
+
+            return [
+                ...$data,
+                'status' => 'ok',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Refresh token '.$account['name'].' berhasil. Token baru sudah disimpan.',
+            ];
+        }
+
+        return [
+            'status' => 'error',
+            'action' => 'refresh-token-'.$account['key'],
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            ...$data,
+        ];
+    }
+
     private function storeShopeeToken(array $data, int $partnerId, object $callback): void
     {
         $shopIdList = $data['shop_id_list'] ?? [];
@@ -540,6 +683,55 @@ class OmnichannelController extends Controller
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    private function storeShopeeRefreshToken(array $data, int $partnerId, array $account, object $previousToken): void
+    {
+        $shopId = $data['shop_id'] ?? $previousToken->shop_id ?? null;
+        $merchantId = $data['merchant_id'] ?? $previousToken->merchant_id ?? null;
+        $supplierId = $data['supplier_id'] ?? $previousToken->supplier_id ?? null;
+        $userId = $data['user_id'] ?? $previousToken->user_id ?? null;
+
+        DB::table('shopee_tokens')
+            ->where('account_key', $account['key'])
+            ->whereRaw('is_active = true')
+            ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
+
+        DB::table('shopee_tokens')->insert([
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'partner_id' => $data['partner_id'] ?? $partnerId,
+            'shop_id' => $shopId,
+            'merchant_id' => $merchantId,
+            'supplier_id' => $supplierId,
+            'user_id' => $userId,
+            'shop_id_list' => json_encode($shopId ? [(int) $shopId] : []),
+            'merchant_id_list' => json_encode($merchantId ? [(int) $merchantId] : []),
+            'supplier_id_list' => json_encode($supplierId ? [(int) $supplierId] : []),
+            'user_id_list' => json_encode($userId ? [(int) $userId] : []),
+            'access_token' => $data['access_token'] ?? null,
+            'refresh_token' => $data['refresh_token'] ?? null,
+            'expire_in' => $data['expire_in'] ?? null,
+            'expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null),
+            'request_id' => $data['request_id'] ?? null,
+            'error' => $data['error'] ?? null,
+            'message' => $data['message'] ?? null,
+            'raw_response' => json_encode($data),
+            'is_active' => DB::raw('true'),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function shopeeRefreshIdentifier(object $token): ?array
+    {
+        foreach (['shop_id', 'merchant_id', 'supplier_id', 'user_id'] as $key) {
+            if (! empty($token->{$key})) {
+                return ['key' => $key, 'value' => (int) $token->{$key}];
+            }
+        }
+
+        return null;
     }
 
     private function resolveShopeeExpireAt(?int $expireIn): ?Carbon

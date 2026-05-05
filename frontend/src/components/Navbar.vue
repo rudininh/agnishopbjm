@@ -1,9 +1,9 @@
 <template>
   <aside class="sidebar">
     <RouterLink to="/dashboard" class="brand">
-      <span class="brand-mark">A</span>
+      <img class="brand-mark" src="/agni-logo.png?v=20260505" alt="Agni Shop Banjarmasin" />
       <span>
-        <strong>Agni Admin</strong>
+        <strong>Agni Shop</strong>
         <small>Omnichannel</small>
       </span>
     </RouterLink>
@@ -45,14 +45,13 @@ import { RouterLink } from 'vue-router'
 }
 
 .brand-mark {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 8px;
-  display: grid;
-  place-items: center;
   background: #fff;
-  color: #0f5fc7;
-  font-weight: 800;
+  object-fit: cover;
+  display: block;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .18);
 }
 
 .brand strong,

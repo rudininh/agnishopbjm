@@ -79,40 +79,62 @@
 
       <p v-if="message" class="action-message">{{ message }}</p>
 
-      <div class="token-table-wrap">
-        <table class="token-table">
-          <thead>
-            <tr>
-              <th>Akun</th>
-              <th>Status</th>
-              <th>Shop ID</th>
-              <th>Access Token</th>
-              <th>Refresh Token</th>
-              <th>Expire</th>
-              <th>Request ID</th>
-              <th>Dibuat</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="token in shopeeTokenRows" :key="token.id">
-              <td>{{ token.account_name || accountLabel(token.account_key) }}</td>
-              <td>
-                <span :class="['token-status', token.is_active ? 'active' : 'inactive']">
-                  {{ token.is_active ? 'Aktif' : 'Nonaktif' }}
-                </span>
-              </td>
-              <td>{{ token.shop_id || '-' }}</td>
-              <td class="mono">{{ token.access_token || '-' }}</td>
-              <td class="mono">{{ token.refresh_token || '-' }}</td>
-              <td>{{ token.expire_at || token.expire_in || '-' }}</td>
-              <td class="mono">{{ token.request_id || '-' }}</td>
-              <td>{{ token.created_at || '-' }}</td>
-            </tr>
-            <tr v-if="!shopeeTokenRows.length">
-              <td colspan="8" class="empty-state">Belum ada token Shopee tersimpan.</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="token-tables">
+        <section v-for="section in tokenTableSections" :key="section.key" class="token-history">
+          <div class="token-history-head">
+            <div>
+              <span>{{ section.channelLabel }}</span>
+              <h3>{{ section.name }}</h3>
+            </div>
+            <small>{{ section.rows.length }} riwayat token</small>
+          </div>
+
+          <div class="token-table-wrap">
+            <table class="token-table">
+              <thead>
+                <tr>
+                  <th>Akun</th>
+                  <th>Status</th>
+                  <th>Shop ID</th>
+                  <th>Access Token</th>
+                  <th>Refresh Token</th>
+                  <th>Expire</th>
+                  <th>Request ID</th>
+                  <th>Dibuat</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="token in section.pageRows" :key="`${section.key}-${token.id || token.created_at}`">
+                  <td>{{ token.account_name || section.name }}</td>
+                  <td>
+                    <span :class="['token-status', token.is_active ? 'active' : 'inactive']">
+                      {{ token.is_active ? 'Aktif' : 'Nonaktif' }}
+                    </span>
+                  </td>
+                  <td>{{ token.shop_id || '-' }}</td>
+                  <td class="mono">{{ token.access_token || '-' }}</td>
+                  <td class="mono">{{ token.refresh_token || '-' }}</td>
+                  <td>{{ token.expire_at || token.expire_in || '-' }}</td>
+                  <td class="mono">{{ token.request_id || '-' }}</td>
+                  <td>{{ token.created_at || '-' }}</td>
+                </tr>
+                <tr v-if="!section.rows.length">
+                  <td colspan="8" class="empty-state">Belum ada token {{ section.name }} tersimpan.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div v-if="section.totalPages > 1" class="pagination">
+            <button type="button" :disabled="section.page === 1" @click="setTokenPage(section.key, section.page - 1)">
+              Prev
+            </button>
+            <span>Halaman {{ section.page }} dari {{ section.totalPages }}</span>
+            <button type="button" :disabled="section.page === section.totalPages" @click="setTokenPage(section.key, section.page + 1)">
+              Next
+            </button>
+          </div>
+        </section>
       </div>
     </section>
   </section>
@@ -128,6 +150,8 @@ const busyAction = ref('')
 const message = ref('')
 const loadError = ref('')
 const data = ref({ summary: {}, tokens: {} })
+const tokenPages = ref({})
+const TOKEN_PAGE_SIZE = 5
 
 const marketplaceAccounts = [
   {
@@ -185,6 +209,32 @@ const shopeeTokenRows = computed(() => {
   return data.value.tokens?.shopee ? [data.value.tokens.shopee] : []
 })
 
+const tiktokTokenRows = computed(() => {
+  const rows = data.value.token_rows?.tiktok || []
+
+  if (rows.length) {
+    return rows
+  }
+
+  return data.value.tokens?.tiktok ? [data.value.tokens.tiktok] : []
+})
+
+const tokenTableSections = computed(() => marketplaceAccounts.map((account) => {
+  const sourceRows = account.channel === 'shopee' ? shopeeTokenRows.value : tiktokTokenRows.value
+  const rows = sourceRows.filter((token) => (token.account_key || account.key) === account.key)
+  const totalPages = Math.max(1, Math.ceil(rows.length / TOKEN_PAGE_SIZE))
+  const page = Math.min(tokenPages.value[account.key] || 1, totalPages)
+  const start = (page - 1) * TOKEN_PAGE_SIZE
+
+  return {
+    ...account,
+    rows,
+    page,
+    totalPages,
+    pageRows: rows.slice(start, start + TOKEN_PAGE_SIZE)
+  }
+}))
+
 const formatNumber = (value) => new Intl.NumberFormat('id-ID').format(value || 0)
 
 const accountLabel = (key) => marketplaceAccounts.find((account) => account.key === key)?.name || '-'
@@ -194,7 +244,7 @@ const accountToken = (account) => {
     return shopeeTokenRows.value.find((token) => token.account_key === account.key)
   }
 
-  return data.value.tokens?.tiktok || null
+  return tiktokTokenRows.value.find((token) => (token.account_key || account.key) === account.key) || null
 }
 
 const accountStatus = (account) => accountToken(account) ? 'Terhubung' : 'Belum ada token'
@@ -218,6 +268,13 @@ const loadData = async () => {
   }
 }
 
+const setTokenPage = (key, page) => {
+  tokenPages.value = {
+    ...tokenPages.value,
+    [key]: page
+  }
+}
+
 const runTokenAction = async (action) => {
   busyAction.value = action
   message.value = ''
@@ -230,6 +287,8 @@ const runTokenAction = async (action) => {
       window.location.href = response.data.redirect_url
       return
     }
+
+    await loadData()
   } catch (error) {
     message.value = error.response?.data?.message || 'Aksi gagal diproses.'
   } finally {
@@ -279,7 +338,14 @@ h1 { font-size: 28px; }
 .button-icon { font-size: 15px; line-height: 1; }
 .action-message { color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
 .action-message.error { color: #991b1b; background: #fef2f2; border-color: #fecaca; margin-top: 0; margin-bottom: 12px; }
+.token-tables { display: grid; gap: 18px; margin-top: 16px; }
+.token-history { border: 1px solid #d9e2ec; border-radius: 8px; background: #fff; overflow: hidden; }
+.token-history-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #e5edf5; background: #f8fafc; }
+.token-history-head span { color: #64748b; display: block; font-size: 12px; font-weight: 800; margin-bottom: 3px; text-transform: uppercase; }
+.token-history-head h3 { color: #1f2933; font-size: 16px; margin: 0; }
+.token-history-head small { color: #64748b; white-space: nowrap; }
 .token-table-wrap { margin-top: 16px; overflow-x: auto; border: 1px solid #d9e2ec; border-radius: 8px; }
+.token-history .token-table-wrap { margin-top: 0; border: 0; border-radius: 0; }
 .token-table { width: 100%; border-collapse: collapse; min-width: 980px; background: #fff; }
 .token-table th, .token-table td { padding: 11px 12px; border-bottom: 1px solid #e5edf5; text-align: left; font-size: 13px; vertical-align: top; }
 .token-table th { color: #475569; background: #f8fafc; font-size: 12px; text-transform: uppercase; }
@@ -289,6 +355,10 @@ h1 { font-size: 28px; }
 .token-status.active { color: #166534; background: #dcfce7; }
 .token-status.inactive { color: #475569; background: #e2e8f0; }
 .empty-state { color: #64748b; text-align: center; }
+.pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid #e5edf5; background: #fff; }
+.pagination button { border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #334155; cursor: pointer; font-weight: 700; padding: 7px 10px; }
+.pagination button:disabled { cursor: not-allowed; opacity: .45; }
+.pagination span { color: #64748b; font-size: 13px; }
 @media (max-width: 1040px) { .integration-grid, .token-accounts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 820px) { .page-shell { margin-left: 0; padding: 18px; } .stats, .integration-grid, .quick-actions, .token-accounts, .token-actions { grid-template-columns: 1fr; } .token-button.wide { grid-column: auto; } }
+@media (max-width: 820px) { .page-shell { margin-left: 0; padding: 18px; } .stats, .integration-grid, .quick-actions, .token-accounts, .token-actions { grid-template-columns: 1fr; } .token-button.wide { grid-column: auto; } .token-history-head, .pagination { align-items: flex-start; flex-direction: column; } }
 </style>
