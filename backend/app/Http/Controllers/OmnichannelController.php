@@ -1019,6 +1019,8 @@ class OmnichannelController extends Controller
         $expireAt = $this->resolveTiktokExpireAt($data['access_token_expire_in'] ?? null);
         $refreshExpireAt = $this->resolveTiktokExpireAt($data['refresh_token_expire_in'] ?? null);
 
+        $expireIn = $expireAt ? (int) floor(now()->diffInSeconds($expireAt, false)) : null;
+
         DB::table('tiktok_tokens')->insert([
             'account_key' => $account['key'],
             'account_name' => $account['name'],
@@ -1028,7 +1030,7 @@ class OmnichannelController extends Controller
             'access_token' => $data['access_token'] ?? null,
             'refresh_token' => $data['refresh_token'] ?? null,
             'expire_at' => $expireAt,
-            'expire_in' => $expireAt ? now()->diffInSeconds($expireAt, false) : null,
+            'expire_in' => $expireIn,
             'access_token_expire_at' => $expireAt,
             'refresh_token_expire_at' => $refreshExpireAt,
             'granted_scopes' => json_encode($data['granted_scopes'] ?? []),
