@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('health', fn () => response()->json(['status' => 'ok', 'service' => 'agnishop-api']));
 Route::get('shopee/callback', [OmnichannelController::class, 'shopeeCallback']);
+Route::get('tiktok/callback', [OmnichannelController::class, 'tiktokCallback']);
+Route::get('tiktok-callback', [OmnichannelController::class, 'tiktokCallback']);
 Route::get('shopee-docs/modules', function () {
     $response = Http::withUserAgent('Mozilla/5.0')
         ->timeout(20)

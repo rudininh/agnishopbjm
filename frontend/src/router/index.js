@@ -6,6 +6,7 @@ import TiktokStock from '@/pages/TiktokStock.vue'
 import StockMaster from '@/pages/StockMaster.vue'
 import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
 import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
+import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
 
 const routes = [
   {
@@ -46,6 +47,11 @@ const routes = [
     path: '/dokumentasi-shopee',
     name: 'dokumentasi-shopee',
     component: DokumentasiShopee
+  },
+  {
+    path: '/dokumentasi-tiktok',
+    name: 'dokumentasi-tiktok',
+    component: DokumentasiTiktok
   },
   {
     path: '/:pathMatch(.*)*',
