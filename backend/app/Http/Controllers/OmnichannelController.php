@@ -56,7 +56,20 @@ class OmnichannelController extends Controller
         ]);
     }
 
-    public function shopeeItems(): JsonResponse
+    public function shopeeItems(Request $request): JsonResponse
+    {
+        $this->ensureShopeeProductTables();
+
+        $syncResult = null;
+
+        if ($request->boolean('sync')) {
+            $syncResult = $this->syncShopeeProductsToDatabase();
+        }
+
+        return $this->shopeeItemsResponse($syncResult);
+    }
+
+    private function shopeeItemsResponse(?array $syncResult = null): JsonResponse
     {
         $shopNames = $this->shopeeShopNames();
         $products = DB::table('shopee_product')
@@ -72,7 +85,8 @@ class OmnichannelController extends Controller
                 'rating',
                 'status',
                 'create_time',
-                'update_time'
+                'update_time',
+                'updated_at'
             )
             ->orderBy('name')
             ->get();
@@ -83,21 +97,31 @@ class OmnichannelController extends Controller
             ->get()
             ->groupBy('item_id');
 
-        $images = Schema::hasTable('shopee_product_image')
-            ? DB::table('shopee_product_image')
-                ->select('item_id', DB::raw('MIN(image_url) as image_url'))
-                ->whereNotNull('image_url')
-                ->groupBy('item_id')
-                ->pluck('image_url', 'item_id')
-            : collect();
+        $images = DB::table('shopee_product_image')
+            ->select('item_id', DB::raw('MIN(image_url) as image_url'))
+            ->whereNotNull('image_url')
+            ->groupBy('item_id')
+            ->pluck('image_url', 'item_id');
+
+        $lastSyncAt = DB::table('shopee_sync_logs')->latest('synced_at')->value('synced_at')
+            ?: DB::table('shopee_product')->max('updated_at');
 
         return response()->json([
+            'status' => $syncResult['status'] ?? 'ok',
+            'message' => $syncResult['message'] ?? ($lastSyncAt ? 'Data Shopee dari cache database.' : 'Belum ada cache produk Shopee. Klik Sinkronkan Produk.'),
             'count' => $products->count(),
+            'last_sync_at' => $lastSyncAt,
+            'sync' => [
+                'status' => $syncResult['status'] ?? 'cached',
+                'message' => $syncResult['message'] ?? ($lastSyncAt ? 'Terakhir sinkron: '.$lastSyncAt : 'Belum pernah sinkron.'),
+                'last_sync_at' => $lastSyncAt,
+                ...($syncResult ?? []),
+            ],
             'items' => $products->map(fn ($item, int $index) => [
                 'no' => $index + 1,
                 'item_id' => (string) $item->item_id,
                 'shop_id' => $item->shop_id ? (string) $item->shop_id : null,
-                'shop_name' => $shopNames[(string) $item->shop_id] ?? 'Agni Shop Banjarmasin',
+                'shop_name' => $shopNames[(string) $item->shop_id] ?? 'Shopee',
                 'image_url' => $images[$item->item_id] ?? null,
                 'nama' => $item->name,
                 'sku' => (string) $item->item_id,
@@ -111,7 +135,7 @@ class OmnichannelController extends Controller
                 'status' => $item->status,
                 'is_live' => $this->isLiveShopeeStatus($item->status),
                 'created_at' => $item->create_time,
-                'updated_at' => $item->update_time,
+                'updated_at' => $item->update_time ?: $item->updated_at,
                 'models' => ($models[$item->item_id] ?? collect())->map(fn ($model) => [
                     'model_id' => (string) $model->model_id,
                     'name' => $model->name,
@@ -121,6 +145,303 @@ class OmnichannelController extends Controller
                 ])->values(),
             ])->values(),
         ]);
+    }
+
+    private function syncShopeeProductsToDatabase(): array
+    {
+        $this->normalizeActiveMarketplaceTokens();
+
+        if (! Schema::hasTable('shopee_tokens')) {
+            return [
+                'status' => 'error',
+                'message' => 'Tabel token Shopee belum tersedia.',
+                'accounts' => [],
+            ];
+        }
+
+        $tokens = DB::table('shopee_tokens')
+            ->whereRaw('is_active = true')
+            ->whereNotNull('shop_id')
+            ->whereNotNull('access_token')
+            ->orderBy('account_name')
+            ->get();
+
+        if ($tokens->isEmpty()) {
+            return [
+                'status' => 'error',
+                'message' => 'Belum ada token Shopee aktif. Jalankan AUTH / REFRESH Shopee dari dashboard dulu.',
+                'accounts' => [],
+            ];
+        }
+
+        $accounts = [];
+        $productCount = 0;
+        $variantCount = 0;
+        $config = $this->shopeeConfig();
+
+        foreach ($tokens as $token) {
+            $shopId = (int) $token->shop_id;
+            $accessToken = (string) $token->access_token;
+            $accountName = $token->account_name ?: 'Shopee';
+
+            try {
+                $itemIds = $this->fetchShopeeItemIds($config, $shopId, $accessToken);
+                $baseItems = [];
+
+                foreach (array_chunk($itemIds, 50) as $chunk) {
+                    $baseItems = array_merge($baseItems, $this->fetchShopeeBaseInfo($config, $shopId, $accessToken, $chunk));
+                }
+
+                foreach ($baseItems as $baseItem) {
+                    $models = $this->fetchShopeeModelList($config, $shopId, $accessToken, (int) ($baseItem['item_id'] ?? 0));
+                    $variantCount += max(1, count($models));
+                    $this->storeShopeeProductPayload($baseItem, $models, $shopId);
+                }
+
+                $productCount += count($baseItems);
+                $accounts[] = [
+                    'status' => 'ok',
+                    'account_key' => $token->account_key,
+                    'account_name' => $accountName,
+                    'shop_id' => (string) $shopId,
+                    'products' => count($baseItems),
+                ];
+            } catch (\Throwable $exception) {
+                $accounts[] = [
+                    'status' => 'error',
+                    'account_key' => $token->account_key,
+                    'account_name' => $accountName,
+                    'shop_id' => (string) $shopId,
+                    'products' => 0,
+                    'message' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        $hasError = collect($accounts)->contains(fn ($account) => ($account['status'] ?? '') === 'error');
+        $message = $productCount.' produk Shopee dan '.$variantCount.' varian berhasil disinkronkan ke database.';
+
+        if ($hasError && $productCount === 0) {
+            $message = collect($accounts)->firstWhere('status', 'error')['message'] ?? 'Gagal mengambil data Shopee.';
+        }
+
+        if ($productCount > 0) {
+            DB::table('shopee_sync_logs')->insert([
+                'status' => $hasError ? 'partial' : 'ok',
+                'message' => $message,
+                'product_count' => $productCount,
+                'variant_count' => $variantCount,
+                'synced_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        return [
+            'status' => $hasError ? ($productCount ? 'partial' : 'error') : 'ok',
+            'message' => $message,
+            'products' => $productCount,
+            'variants' => $variantCount,
+            'accounts' => $accounts,
+            'last_sync_at' => now()->toDateTimeString(),
+        ];
+    }
+
+    private function fetchShopeeItemIds(array $config, int $shopId, string $accessToken): array
+    {
+        $ids = [];
+        $offset = 0;
+        $pageSize = 100;
+        $statuses = ['NORMAL', 'UNLIST'];
+
+        foreach ($statuses as $status) {
+            $offset = 0;
+
+            do {
+                $response = $this->shopeeSignedGet($config, '/api/v2/product/get_item_list', $shopId, $accessToken, [
+                    'offset' => $offset,
+                    'page_size' => $pageSize,
+                    'item_status' => $status,
+                ]);
+
+                $items = data_get($response, 'response.item', []);
+                foreach ($items as $item) {
+                    if (! empty($item['item_id'])) {
+                        $ids[(string) $item['item_id']] = (int) $item['item_id'];
+                    }
+                }
+
+                $hasNextPage = (bool) data_get($response, 'response.has_next_page', false);
+                $offset = (int) data_get($response, 'response.next_offset', $offset + $pageSize);
+            } while ($hasNextPage);
+        }
+
+        return array_values($ids);
+    }
+
+    private function fetchShopeeBaseInfo(array $config, int $shopId, string $accessToken, array $itemIds): array
+    {
+        if ($itemIds === []) {
+            return [];
+        }
+
+        $response = $this->shopeeSignedGet($config, '/api/v2/product/get_item_base_info', $shopId, $accessToken, [
+            'item_id_list' => implode(',', $itemIds),
+            'need_tax_info' => 'false',
+            'need_complaint_policy' => 'false',
+        ]);
+
+        return data_get($response, 'response.item_list', []);
+    }
+
+    private function fetchShopeeModelList(array $config, int $shopId, string $accessToken, int $itemId): array
+    {
+        if ($itemId <= 0) {
+            return [];
+        }
+
+        $response = $this->shopeeSignedGet($config, '/api/v2/product/get_model_list', $shopId, $accessToken, [
+            'item_id' => $itemId,
+        ]);
+
+        return data_get($response, 'response.model', []);
+    }
+
+    private function shopeeSignedGet(array $config, string $path, int $shopId, string $accessToken, array $params = []): array
+    {
+        $timestamp = time();
+        $query = [
+            'partner_id' => $config['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+            'sign' => $this->generateShopeeApiSign($config['partner_id'], $config['partner_key'], $path, $timestamp, $accessToken, $shopId),
+            ...$params,
+        ];
+
+        $response = Http::timeout(45)->acceptJson()->get($config['host'].$path, $query);
+        $data = $response->json();
+
+        if (! is_array($data)) {
+            throw new \RuntimeException('Shopee tidak mengembalikan JSON valid untuk '.$path.'.');
+        }
+
+        if (($data['error'] ?? '') !== '') {
+            throw new \RuntimeException(($data['message'] ?? $data['error']).' ['.$path.']');
+        }
+
+        return $data;
+    }
+
+    private function storeShopeeProductPayload(array $item, array $models, int $shopId): void
+    {
+        $itemId = (int) ($item['item_id'] ?? 0);
+
+        if ($itemId <= 0) {
+            return;
+        }
+
+        $priceMin = $this->shopeePrice($this->shopeePriceInfoValue($item['price_info'] ?? null, 'current_price', $item['price_min'] ?? 0));
+        $priceMax = $this->shopeePrice($this->shopeePriceInfoValue($item['price_info'] ?? null, 'original_price', $item['price_max'] ?? $priceMin));
+        $stock = $this->shopeeStock($item);
+        $now = now();
+
+        DB::table('shopee_product')->updateOrInsert(
+            ['item_id' => $itemId],
+            [
+                'shop_id' => $shopId,
+                'name' => $item['item_name'] ?? '',
+                'description' => $item['description'] ?? null,
+                'category_id' => $this->toInt($item['category_id'] ?? null),
+                'price_min' => $priceMin,
+                'price_max' => max($priceMin, $priceMax),
+                'price_before_discount' => $this->shopeePrice($item['price_before_discount'] ?? null),
+                'currency' => $item['currency'] ?? null,
+                'stock' => $stock,
+                'sold' => $this->toInt($item['sold'] ?? null),
+                'liked_count' => $this->toInt($item['liked_count'] ?? null),
+                'rating' => (float) ($item['rating_star'] ?? 0),
+                'historical_sold' => $this->toInt($item['historical_sold'] ?? null),
+                'status' => $item['item_status'] ?? null,
+                'create_time' => $this->timestampToDate($item['create_time'] ?? null) ?? $now,
+                'update_time' => $this->timestampToDate($item['update_time'] ?? null) ?? $now,
+                'is_active' => DB::raw('true'),
+                'updated_at' => $now,
+                'created_at' => $now,
+            ]
+        );
+
+        $this->storeShopeeImages($itemId, null, data_get($item, 'image.image_url_list', []));
+
+        if ($models === []) {
+            $models = [[
+                'model_id' => 0,
+                'model_name' => 'Tanpa Varian',
+                'model_sku' => $item['item_sku'] ?? '',
+                'price_info' => [['current_price' => $priceMin]],
+                'stock' => $stock,
+            ]];
+        }
+
+        foreach ($models as $model) {
+            $this->storeShopeeModelPayload($itemId, (string) ($item['item_name'] ?? ''), $model);
+        }
+    }
+
+    private function storeShopeeModelPayload(int $itemId, string $itemName, array $model): void
+    {
+        $modelId = (string) ($model['model_id'] ?? '0');
+        $modelName = (string) ($model['model_name'] ?? $model['name'] ?? 'Tanpa Varian');
+        $modelSku = (string) ($model['model_sku'] ?? '');
+        $price = $this->shopeePrice($this->shopeePriceInfoValue($model['price_info'] ?? null, 'current_price', $model['price'] ?? 0));
+        $stock = $this->shopeeModelStock($model);
+        $now = now();
+
+        DB::table('shopee_product_model')->updateOrInsert(
+            ['model_id' => $modelId, 'item_id' => $itemId],
+            [
+                'name' => $modelName,
+                'price' => $price,
+                'stock' => $stock,
+                'updated_at' => $now,
+                'created_at' => $now,
+            ]
+        );
+
+        $skuFragment = $modelSku !== '' ? $modelSku : $modelName;
+        $internalSku = 'INT-'.$itemId.'-'.$this->sanitizeSkuFragment($skuFragment);
+
+        DB::table('stock_master')->updateOrInsert(
+            ['internal_sku' => $internalSku],
+            [
+                'shopee_product_id' => (string) $itemId,
+                'shopee_sku' => $modelId,
+                'product_name' => $itemName,
+                'variant_name' => $modelName,
+                'stock_qty' => $stock,
+                'updated_at' => $now,
+                'created_at' => $now,
+            ]
+        );
+    }
+
+    private function storeShopeeImages(int $itemId, ?string $modelId, array $urls): void
+    {
+        foreach ($urls as $url) {
+            if (! is_string($url) || trim($url) === '') {
+                continue;
+            }
+
+            if (! DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->where('image_url', $url)->exists()) {
+                DB::table('shopee_product_image')->insert([
+                    'item_id' => $itemId,
+                    'model_id' => $modelId,
+                    'image_url' => $url,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+        }
     }
 
     private function isLiveShopeeStatus(?string $status): bool
@@ -296,6 +617,8 @@ class OmnichannelController extends Controller
 
     public function tiktokItems(): JsonResponse
     {
+        $this->ensureTiktokProductTables();
+
         $rows = DB::table('tiktok_products')
             ->select('product_id', 'product_name', 'sku_name', 'stock_qty', 'price', 'subtotal', 'updated_at')
             ->orderBy('product_name')
@@ -303,8 +626,20 @@ class OmnichannelController extends Controller
             ->get()
             ->groupBy('product_id');
 
+        $lastSyncAt = Schema::hasTable('tiktok_products')
+            ? DB::table('tiktok_products')->max('updated_at')
+            : null;
+
         return response()->json([
             'count' => $rows->count(),
+            'last_sync_at' => $lastSyncAt,
+            'message' => $lastSyncAt ? 'Data TikTok dari cache database.' : 'Belum ada cache produk TikTok.',
+            'sync' => [
+                'status' => $lastSyncAt ? 'cached' : 'empty',
+                'message' => $lastSyncAt ? 'Terakhir sinkron: '.$lastSyncAt : 'Belum pernah sinkron.',
+                'last_sync_at' => $lastSyncAt,
+                'mode' => 'cache',
+            ],
             'items' => $rows->map(function ($group, string $productId) {
                 $first = $group->first();
 
@@ -321,6 +656,36 @@ class OmnichannelController extends Controller
                 ];
             })->values(),
         ]);
+    }
+
+    private function ensureTiktokProductTables(): void
+    {
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_products (
+                id BIGSERIAL PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                product_name TEXT NULL,
+                sku_name TEXT NULL,
+                stock_qty INTEGER DEFAULT 0,
+                price BIGINT DEFAULT 0,
+                subtotal BIGINT DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT NOW(),
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_sync_logs (
+                id BIGSERIAL PRIMARY KEY,
+                status TEXT NULL,
+                message TEXT NULL,
+                product_count INTEGER DEFAULT 0,
+                variant_count INTEGER DEFAULT 0,
+                synced_at TIMESTAMP DEFAULT NOW(),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
     }
 
     public function stockMaster(): JsonResponse
@@ -1455,6 +1820,187 @@ class OmnichannelController extends Controller
     private function generateShopeeSign(int $partnerId, string $partnerKey, string $path, int $timestamp): string
     {
         return hash_hmac('sha256', $partnerId.$path.$timestamp, $partnerKey);
+    }
+
+    private function generateShopeeApiSign(int $partnerId, string $partnerKey, string $path, int $timestamp, string $accessToken, int $shopId): string
+    {
+        return hash_hmac('sha256', $partnerId.$path.$timestamp.$accessToken.$shopId, $partnerKey);
+    }
+
+    private function ensureShopeeProductTables(): void
+    {
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS shopee_product (
+                item_id BIGINT PRIMARY KEY,
+                shop_id BIGINT NULL,
+                name TEXT NULL,
+                description TEXT NULL,
+                category_id BIGINT NULL,
+                price_min BIGINT DEFAULT 0,
+                price_max BIGINT DEFAULT 0,
+                price_before_discount BIGINT DEFAULT 0,
+                currency TEXT NULL,
+                stock INTEGER DEFAULT 0,
+                sold INTEGER DEFAULT 0,
+                liked_count INTEGER DEFAULT 0,
+                rating NUMERIC(8,2) DEFAULT 0,
+                historical_sold INTEGER DEFAULT 0,
+                status TEXT NULL,
+                create_time TIMESTAMP NULL,
+                update_time TIMESTAMP NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS shopee_product_model (
+                model_id TEXT NOT NULL,
+                item_id BIGINT NOT NULL,
+                name TEXT NULL,
+                price BIGINT DEFAULT 0,
+                stock INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (model_id, item_id)
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS shopee_product_image (
+                id BIGSERIAL PRIMARY KEY,
+                item_id BIGINT NOT NULL,
+                model_id TEXT NULL,
+                image_url TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS stock_master (
+                id BIGSERIAL PRIMARY KEY,
+                internal_sku TEXT UNIQUE NOT NULL,
+                shopee_product_id TEXT NULL,
+                shopee_sku TEXT NULL,
+                product_name TEXT NULL,
+                variant_name TEXT NULL,
+                stock_qty INTEGER DEFAULT 0,
+                tiktok_product_id TEXT NULL,
+                tiktok_sku TEXT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS shopee_sync_logs (
+                id BIGSERIAL PRIMARY KEY,
+                status TEXT NULL,
+                message TEXT NULL,
+                product_count INTEGER DEFAULT 0,
+                variant_count INTEGER DEFAULT 0,
+                synced_at TIMESTAMP DEFAULT NOW(),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        foreach ([
+            'shopee_product' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()'],
+            'shopee_product_model' => ['created_at TIMESTAMP DEFAULT NOW()'],
+            'shopee_product_image' => ['updated_at TIMESTAMP DEFAULT NOW()'],
+            'stock_master' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'tiktok_product_id TEXT NULL', 'tiktok_sku TEXT NULL'],
+        ] as $table => $columns) {
+            foreach ($columns as $definition) {
+                DB::statement('ALTER TABLE '.$table.' ADD COLUMN IF NOT EXISTS '.$definition);
+            }
+        }
+    }
+
+    private function shopeePrice(mixed $value): int
+    {
+        $number = $this->toInt($value);
+
+        if (abs($number) > 1000000) {
+            return (int) floor($number / 100000);
+        }
+
+        return $number;
+    }
+
+    private function shopeePriceInfoValue(mixed $priceInfo, string $key, mixed $fallback = 0): mixed
+    {
+        if (is_array($priceInfo)) {
+            if (array_key_exists($key, $priceInfo)) {
+                return $priceInfo[$key];
+            }
+
+            if (isset($priceInfo[0]) && is_array($priceInfo[0]) && array_key_exists($key, $priceInfo[0])) {
+                return $priceInfo[0][$key];
+            }
+        }
+
+        return $fallback;
+    }
+
+    private function shopeeStock(array $item): int
+    {
+        $stock = data_get($item, 'stock_info.normal_stock');
+
+        if ($stock === null) {
+            $stock = data_get($item, 'stock_info.0.normal_stock', $item['stock'] ?? 0);
+        }
+
+        return $this->toInt($stock);
+    }
+
+    private function shopeeModelStock(array $model): int
+    {
+        $stock = data_get($model, 'stock_info_v2.summary_info.total_available_stock');
+
+        if ($stock !== null) {
+            return $this->toInt($stock);
+        }
+
+        return $this->toInt($model['stock'] ?? 0);
+    }
+
+    private function toInt(mixed $value): int
+    {
+        if ($value === null || $value === '') {
+            return 0;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        $normalized = preg_replace('/[^\d.-]/', '', (string) $value);
+
+        return is_numeric($normalized) ? (int) $normalized : 0;
+    }
+
+    private function timestampToDate(mixed $value): ?Carbon
+    {
+        $timestamp = $this->toInt($value);
+
+        return $timestamp > 0 ? Carbon::createFromTimestamp($timestamp) : null;
+    }
+
+    private function timestampToDateString(mixed $value): ?string
+    {
+        return $this->timestampToDate($value)?->toDateTimeString();
+    }
+
+    private function sanitizeSkuFragment(string $value): string
+    {
+        $normalized = strtoupper(trim($value));
+        $normalized = preg_replace('/[^A-Z0-9_-]+/', '-', $normalized);
+        $normalized = trim((string) $normalized, '-');
+
+        return substr($normalized !== '' ? $normalized : 'X', 0, 30);
     }
 
     private function resolveAccountFromAction(string $action): ?array

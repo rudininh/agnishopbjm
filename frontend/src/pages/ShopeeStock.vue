@@ -7,8 +7,8 @@
       </div>
       <div class="header-actions">
         <button class="ghost" @click="resetFilters">Reset Filter</button>
-        <button class="primary shopee" @click="loadData" :disabled="loading">
-          {{ loading ? 'Memuat...' : 'Sinkronkan Produk' }}
+        <button class="primary shopee" @click="syncAndLoad" :disabled="loading">
+          {{ loading ? 'Memuat...' : 'Ambil Produk' }}
         </button>
       </div>
     </header>
@@ -98,6 +98,8 @@
       </nav>
       <span class="result-count">{{ filteredItems.length }} produk tampil</span>
     </div>
+
+    <p v-if="syncMessage" :class="['sync-message', syncTone]">{{ syncMessage }}</p>
 
     <div class="panel">
       <div class="table-wrap">
@@ -199,6 +201,8 @@ const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
 const brokenImages = ref({})
+const syncMessage = ref('')
+const syncTone = ref('info')
 const filters = reactive({
   store: 'all',
   status: 'all',
@@ -321,15 +325,30 @@ const resetFilters = () => {
   page.value = 1
 }
 
-const loadData = async () => {
+const loadData = async (syncMode = false) => {
   loading.value = true
+  syncMessage.value = ''
   try {
-    const response = await omnichannelService.shopeeItems()
+    const response = await omnichannelService.shopeeItems(syncMode)
     items.value = response.data.items || []
+    const syncResult = response.data.sync
+
+    if (syncResult?.message) {
+      syncMessage.value = syncResult.message
+      syncTone.value = syncResult.status === 'error' ? 'error' : syncResult.status === 'partial' ? 'warning' : syncResult.status === 'cached' ? 'info' : 'success'
+    }
+
     page.value = 1
+  } catch (error) {
+    syncMessage.value = error.response?.data?.message || 'Pengambilan produk Shopee gagal.'
+    syncTone.value = 'error'
   } finally {
     loading.value = false
   }
+}
+
+const syncAndLoad = async () => {
+  await loadData(true)
 }
 
 onMounted(loadData)
@@ -364,6 +383,11 @@ select, input { width: 100%; height: 36px; border: 1px solid #d7dde8; border-rad
 .tabs button { background: transparent; border-radius: 0; color: #64748b; padding: 10px 0; border-bottom: 2px solid transparent; white-space: nowrap; }
 .tabs button.active { color: #4f2ec7; border-bottom-color: #4f2ec7; }
 .result-count { color: #64748b; font-size: 13px; white-space: nowrap; }
+.sync-message { border: 1px solid #d9e2ec; border-radius: 6px; font-size: 13px; margin: 0 0 10px; padding: 10px 12px; }
+.sync-message.info { color: #334155; background: #f8fafc; }
+.sync-message.success { color: #166534; background: #ecfdf5; border-color: #86efac; }
+.sync-message.warning { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
+.sync-message.error { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
 .panel { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; overflow: hidden; }
 .table-wrap { max-height: 68vh; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1180px; }
