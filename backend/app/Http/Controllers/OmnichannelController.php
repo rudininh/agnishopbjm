@@ -29,6 +29,8 @@ class OmnichannelController extends Controller
 
     public function dashboard(): JsonResponse
     {
+        $this->normalizeActiveMarketplaceTokens();
+
         return response()->json([
             'summary' => [
                 'stock_master' => $this->tableCount('stock_master'),
@@ -130,6 +132,8 @@ class OmnichannelController extends Controller
 
     public function tokenAction(string $action): JsonResponse
     {
+        $this->normalizeActiveMarketplaceTokens();
+
         $account = $this->resolveAccountFromAction($action);
 
         if ($account && str_starts_with($action, 'connect-shopee')) {
@@ -481,7 +485,7 @@ class OmnichannelController extends Controller
                 'request_id' => $token->request_id,
                 'error' => $token->error,
                 'message' => $token->message,
-                'is_active' => (bool) $token->is_active,
+                'is_active' => $this->isLatestActiveToken('shopee_tokens', (int) $token->id, (string) $token->account_key),
                 'created_at' => $token->created_at,
             ])
             ->all();
@@ -521,9 +525,11 @@ class OmnichannelController extends Controller
             ->map(function ($token) {
                 $row = (array) $token;
 
+                $accountKey = $row['account_key'] ?? 'tiktok-agnishopbjm';
+
                 return [
                     'id' => $row['id'] ?? null,
-                    'account_key' => $row['account_key'] ?? 'tiktok-agnishopbjm',
+                    'account_key' => $accountKey,
                     'account_name' => $row['account_name'] ?? 'TikTok AgniShopBJM',
                     'shop_id' => $row['shop_id'] ?? $row['seller_id'] ?? $row['shop_cipher'] ?? null,
                     'access_token' => $this->maskToken($row['access_token'] ?? null),
@@ -533,11 +539,24 @@ class OmnichannelController extends Controller
                     'request_id' => $row['request_id'] ?? null,
                     'error' => $row['error'] ?? null,
                     'message' => $row['message'] ?? null,
-                    'is_active' => (bool) ($row['is_active'] ?? true),
+                    'is_active' => $this->isLatestActiveToken('tiktok_tokens', (int) ($row['id'] ?? 0), (string) $accountKey),
                     'created_at' => $row['created_at'] ?? null,
                 ];
             })
             ->all();
+    }
+
+    private function isLatestActiveToken(string $table, int $id, string $accountKey): bool
+    {
+        if ($id <= 0 || ! Schema::hasTable($table)) {
+            return false;
+        }
+
+        return (int) DB::table($table)
+            ->where('account_key', $accountKey)
+            ->whereRaw('is_active = true')
+            ->latest('created_at')
+            ->value('id') === $id;
     }
 
     private function tableCount(string $table): int
@@ -659,16 +678,6 @@ class OmnichannelController extends Controller
 
     private function connectShopee(array $account): array
     {
-        $callback = DB::table('shopee_callbacks')
-            ->where('account_key', $account['key'])
-            ->whereNull('used_at')
-            ->latest('created_at')
-            ->first();
-
-        if ($callback) {
-            return $this->exchangeShopeeToken($callback);
-        }
-
         $token = $this->latestActiveShopeeToken($account);
 
         if ($token && $this->tokenDateIsFuture($token->expire_at ?? null)) {
@@ -677,6 +686,16 @@ class OmnichannelController extends Controller
             if (($result['status'] ?? '') === 'ok') {
                 return $result;
             }
+        }
+
+        $callback = DB::table('shopee_callbacks')
+            ->where('account_key', $account['key'])
+            ->whereNull('used_at')
+            ->latest('created_at')
+            ->first();
+
+        if ($callback) {
+            return $this->exchangeShopeeToken($callback);
         }
 
         return [
@@ -948,16 +967,6 @@ class OmnichannelController extends Controller
 
     private function connectTiktok(array $account): array
     {
-        $callback = DB::table('tiktok_callbacks')
-            ->where('account_key', $account['key'])
-            ->whereNull('used_at')
-            ->latest('created_at')
-            ->first();
-
-        if ($callback) {
-            return $this->exchangeTiktokToken($account);
-        }
-
         $token = $this->latestActiveTiktokToken($account);
 
         if ($token && $this->tokenDateIsFuture($token->refresh_token_expire_at ?? null)) {
@@ -966,6 +975,30 @@ class OmnichannelController extends Controller
             if (($result['status'] ?? '') === 'ok') {
                 return $result;
             }
+        }
+
+        $callback = DB::table('tiktok_callbacks')
+            ->where('account_key', $account['key'])
+            ->whereNull('used_at')
+            ->latest('created_at')
+            ->first();
+
+        if ($callback && $this->callbackIsFresh($callback->created_at ?? null)) {
+            $result = $this->exchangeTiktokToken($account);
+
+            if (($result['status'] ?? '') === 'ok') {
+                return $result;
+            }
+
+            if (str_contains(strtolower((string) ($result['message'] ?? '')), 'invalid auth code')) {
+                DB::table('tiktok_callbacks')
+                    ->where('id', $callback->id)
+                    ->update(['used_at' => now(), 'updated_at' => now()]);
+            }
+        } elseif ($callback) {
+            DB::table('tiktok_callbacks')
+                ->where('id', $callback->id)
+                ->update(['used_at' => now(), 'updated_at' => now()]);
         }
 
         return [
@@ -1012,6 +1045,10 @@ class OmnichannelController extends Controller
         if ($ok) {
             $this->storeTiktokToken($data, $account);
 
+            DB::table('tiktok_callbacks')
+                ->where('id', $callback->id)
+                ->update(['used_at' => now(), 'updated_at' => now()]);
+        } elseif (str_contains(strtolower((string) ($data['message'] ?? '')), 'invalid auth code')) {
             DB::table('tiktok_callbacks')
                 ->where('id', $callback->id)
                 ->update(['used_at' => now(), 'updated_at' => now()]);
@@ -1218,6 +1255,55 @@ class OmnichannelController extends Controller
             return Carbon::parse($value)->isFuture();
         } catch (\Throwable) {
             return false;
+        }
+    }
+
+    private function callbackIsFresh(mixed $value): bool
+    {
+        if (! $value) {
+            return false;
+        }
+
+        try {
+            return Carbon::parse($value)->greaterThan(now()->subMinutes(30));
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function normalizeActiveMarketplaceTokens(): void
+    {
+        $tables = [
+            'shopee_tokens' => 'shopee',
+            'tiktok_tokens' => 'tiktok',
+        ];
+
+        foreach ($tables as $table => $channel) {
+            if (! Schema::hasTable($table)) {
+                continue;
+            }
+
+            foreach (self::MARKETPLACE_ACCOUNTS as $key => $account) {
+                if ($account['channel'] !== $channel) {
+                    continue;
+                }
+
+                $latestId = DB::table($table)
+                    ->where('account_key', $key)
+                    ->whereRaw('is_active = true')
+                    ->latest('created_at')
+                    ->value('id');
+
+                if (! $latestId) {
+                    continue;
+                }
+
+                DB::table($table)
+                    ->where('account_key', $key)
+                    ->where('id', '<>', $latestId)
+                    ->whereRaw('is_active = true')
+                    ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
+            }
         }
     }
 
