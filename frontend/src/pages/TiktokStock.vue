@@ -7,7 +7,7 @@
       </div>
       <div class="header-actions">
         <button class="ghost" @click="resetFilters">Reset Filter</button>
-        <button class="primary tiktok" @click="loadData" :disabled="loading">
+        <button class="primary tiktok" @click="syncAndLoad" :disabled="loading">
           {{ loading ? 'Memuat...' : 'Ambil Produk' }}
         </button>
       </div>
@@ -112,7 +112,8 @@
                 <td class="check-col"><input type="checkbox" /></td>
                 <td>
                   <div class="product-cell">
-                    <div class="thumb-fallback">{{ initials(item.product_name) }}</div>
+                    <img v-if="item.image_url" :src="item.image_url" :alt="item.product_name" class="thumb-image" />
+                    <div v-else class="thumb-fallback">{{ initials(item.product_name) }}</div>
                     <div>
                       <strong>{{ item.product_name }}</strong>
                       <small>Product ID: {{ item.product_id }}</small>
@@ -288,11 +289,11 @@ const setPage = (nextPage) => {
   page.value = Math.min(Math.max(Number(nextPage) || 1, 1), totalPages.value)
 }
 
-const loadData = async () => {
+const loadData = async (syncMode = false) => {
   loading.value = true
   syncMessage.value = ''
   try {
-    const response = await omnichannelService.tiktokItems()
+    const response = await omnichannelService.tiktokItems(syncMode)
     items.value = response.data.items || []
     lastSyncAt.value = response.data.last_sync_at || response.data.sync?.last_sync_at || ''
     syncMessage.value = response.data.sync?.message || response.data.message || ''
@@ -304,6 +305,10 @@ const loadData = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const syncAndLoad = async () => {
+  await loadData(true)
 }
 
 onMounted(loadData)
@@ -354,6 +359,7 @@ thead th { position: sticky; top: 0; background: #1f2937; color: #fff; }
 .check-col { width: 34px; text-align: center; }
 .product-row:hover { background: #fbfdff; }
 .product-cell { display: grid; grid-template-columns: 72px 1fr; gap: 10px; min-width: 380px; }
+.thumb-image { width: 72px; height: 72px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .thumb-fallback { width: 72px; height: 72px; border-radius: 6px; display: grid; place-items: center; background: #eef2f7; color: #64748b; font-weight: 800; }
 strong { display: block; color: #0f172a; line-height: 1.35; }
 small { display: block; color: #64748b; line-height: 1.55; }

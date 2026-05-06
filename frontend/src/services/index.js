@@ -97,8 +97,10 @@ export const omnichannelService = {
     })
   },
 
-  tiktokItems() {
-    return api.get('/get-tiktok-items')
+  tiktokItems(sync = false) {
+    return api.get('/get-tiktok-items', {
+      params: sync ? { sync: 1 } : {}
+    })
   },
 
   stockMaster() {
