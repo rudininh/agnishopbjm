@@ -63,16 +63,13 @@
             <strong>{{ account.name }}</strong>
           </div>
           <div class="token-actions">
-        <button
-          v-for="button in account.buttons"
-          :key="button.action"
-          :class="['token-button', account.channel, { wide: button.wide }]"
-          :disabled="busyAction === button.action"
-          @click="runTokenAction(button.action)"
-        >
-          <span v-if="button.icon" class="button-icon">↻</span>
-          <span>{{ busyAction === button.action ? 'Memproses...' : button.label }}</span>
-        </button>
+            <button
+              :class="['token-button', account.channel]"
+              :disabled="busyAction === account.connectAction"
+              @click="runTokenAction(account.connectAction)"
+            >
+              <span>{{ busyAction === account.connectAction ? 'Memproses...' : 'AUTH / REFRESH' }}</span>
+            </button>
           </div>
         </article>
       </div>
@@ -159,34 +156,21 @@ const marketplaceAccounts = [
     name: 'Shopee AgniShopBJM',
     channel: 'shopee',
     channelLabel: 'Shopee',
-    buttons: [
-      { label: 'AUTH', action: 'auth-shopee-agnishopbjm' },
-      { label: 'GET TOKEN', action: 'get-token-shopee-agnishopbjm' },
-      { label: 'REFRESH TOKEN', action: 'refresh-token-shopee-agnishopbjm' }
-    ]
+    connectAction: 'connect-shopee-agnishopbjm'
   },
   {
     key: 'shopee-gitacollectionbjm',
     name: 'Shopee GitaCollectionBJM',
     channel: 'shopee',
     channelLabel: 'Shopee',
-    buttons: [
-      { label: 'AUTH', action: 'auth-shopee-gitacollectionbjm' },
-      { label: 'GET TOKEN', action: 'get-token-shopee-gitacollectionbjm' },
-      { label: 'REFRESH TOKEN', action: 'refresh-token-shopee-gitacollectionbjm' }
-    ]
+    connectAction: 'connect-shopee-gitacollectionbjm'
   },
   {
     key: 'tiktok-agnishopbjm',
     name: 'TikTok AgniShopBJM',
     channel: 'tiktok',
     channelLabel: 'TikTok Shop',
-    buttons: [
-      { label: 'AUTH', action: 'auth-tiktok-agnishopbjm' },
-      { label: 'GET TOKEN', action: 'get-token-tiktok-agnishopbjm' },
-      { label: 'REFRESH TOKEN', action: 'refresh-token-tiktok-agnishopbjm' },
-      { label: 'GET AUTH SHOP', action: 'get-auth-shop-tiktok-agnishopbjm', wide: true }
-    ]
+    connectAction: 'connect-tiktok-agnishopbjm'
   }
 ]
 
@@ -329,7 +313,7 @@ h1 { font-size: 28px; }
 .token-account-head { display: grid; gap: 4px; margin-bottom: 12px; }
 .token-account-head span { color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; }
 .token-account-head strong { color: #1f2933; font-size: 15px; }
-.token-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.token-actions { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .token-button { min-height: 46px; border: 0; border-radius: 6px; color: #fff; padding: 12px 14px; font-size: 14px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-align: center; }
 .token-button:disabled { cursor: wait; opacity: .72; }
 .token-button.shopee { background: #ff5528; }
