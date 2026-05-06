@@ -15,6 +15,7 @@
       <RouterLink to="/stock-master">Stock Master</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
+      <RouterLink to="/dokumentasi-tiktok">Dokumentasi TikTok</RouterLink>
     </nav>
   </aside>
 </template>

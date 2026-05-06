@@ -57,7 +57,20 @@ class OmnichannelController extends Controller
     public function shopeeItems(): JsonResponse
     {
         $products = DB::table('shopee_product')
-            ->select('item_id', 'name', 'stock', 'price_min', 'price_max', 'status', 'update_time')
+            ->select(
+                'item_id',
+                'shop_id',
+                'name',
+                'stock',
+                'price_min',
+                'price_max',
+                'sold',
+                'liked_count',
+                'rating',
+                'status',
+                'create_time',
+                'update_time'
+            )
             ->orderBy('name')
             ->get();
 
@@ -67,16 +80,34 @@ class OmnichannelController extends Controller
             ->get()
             ->groupBy('item_id');
 
+        $images = Schema::hasTable('shopee_product_image')
+            ? DB::table('shopee_product_image')
+                ->select('item_id', DB::raw('MIN(image_url) as image_url'))
+                ->whereNotNull('image_url')
+                ->groupBy('item_id')
+                ->pluck('image_url', 'item_id')
+            : collect();
+
         return response()->json([
             'count' => $products->count(),
             'items' => $products->map(fn ($item, int $index) => [
                 'no' => $index + 1,
                 'item_id' => (string) $item->item_id,
+                'shop_id' => $item->shop_id ? (string) $item->shop_id : null,
+                'shop_name' => 'Agni Shop Banjarmasin',
+                'image_url' => $images[$item->item_id] ?? null,
                 'nama' => $item->name,
                 'sku' => (string) $item->item_id,
                 'stok' => (int) ($item->stock ?? 0),
+                'price_min' => (int) ($item->price_min ?? 0),
+                'price_max' => (int) ($item->price_max ?? 0),
                 'harga' => $this->formatRupiah((int) ($item->price_min ?? $item->price_max ?? 0)),
+                'sales' => (int) ($item->sold ?? 0),
+                'likes' => (int) ($item->liked_count ?? 0),
+                'rating' => (float) ($item->rating ?? 0),
                 'status' => $item->status,
+                'is_live' => $this->isLiveShopeeStatus($item->status),
+                'created_at' => $item->create_time,
                 'updated_at' => $item->update_time,
                 'models' => ($models[$item->item_id] ?? collect())->map(fn ($model) => [
                     'model_id' => (string) $model->model_id,
@@ -87,6 +118,13 @@ class OmnichannelController extends Controller
                 ])->values(),
             ])->values(),
         ]);
+    }
+
+    private function isLiveShopeeStatus(?string $status): bool
+    {
+        $normalized = strtoupper(trim((string) $status));
+
+        return $normalized === '' || in_array($normalized, ['NORMAL', 'LIVE', 'PUBLISHED', 'ACTIVE'], true);
     }
 
     public function tokenAction(string $action): JsonResponse
@@ -130,26 +168,42 @@ class OmnichannelController extends Controller
             return response()->json($this->maskShopeeTokenPayload($result), ($result['status'] ?? '') === 'ok' ? 200 : 422);
         }
 
-        $labels = [
-            'auth-shopee-agnishopbjm' => 'AUTH SHOPEE AGNISHOPBJM',
-            'auth-shopee-gitacollectionbjm' => 'AUTH SHOPEE GITACOLLECTIONBJM',
-            'auth-tiktok-agnishopbjm' => 'AUTH TIKTOK AGNISHOPBJM',
-            'get-token-shopee-agnishopbjm' => 'GET TOKEN SHOPEE AGNISHOPBJM',
-            'get-token-shopee-gitacollectionbjm' => 'GET TOKEN SHOPEE GITACOLLECTIONBJM',
-            'get-token-tiktok-agnishopbjm' => 'GET TOKEN TIKTOK AGNISHOPBJM',
-            'refresh-token-shopee-agnishopbjm' => 'REFRESH TOKEN SHOPEE AGNISHOPBJM',
-            'refresh-token-shopee-gitacollectionbjm' => 'REFRESH TOKEN SHOPEE GITACOLLECTIONBJM',
-            'refresh-token-tiktok-agnishopbjm' => 'REFRESH TOKEN TIKTOK AGNISHOPBJM',
-            'get-auth-shop-tiktok-agnishopbjm' => 'GET AUTH SHOP TIKTOK AGNISHOPBJM',
-        ];
+        if ($account && str_starts_with($action, 'auth-tiktok')) {
+            return response()->json([
+                'status' => 'redirect',
+                'action' => $action,
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Membuka halaman authorization '.$account['name'].'.',
+                'redirect_url' => $this->buildTiktokAuthUrl($account),
+            ]);
+        }
+
+        if ($account && str_starts_with($action, 'get-token-tiktok')) {
+            $result = $this->exchangeTiktokToken($account);
+
+            return response()->json($this->maskTiktokTokenPayload($result), ($result['status'] ?? '') === 'ok' ? 200 : 422);
+        }
+
+        if ($account && str_starts_with($action, 'refresh-token-tiktok')) {
+            $result = $this->refreshTiktokToken($account);
+
+            return response()->json($this->maskTiktokTokenPayload($result), ($result['status'] ?? '') === 'ok' ? 200 : 422);
+        }
+
+        if ($account && str_starts_with($action, 'get-auth-shop-tiktok')) {
+            $result = $this->getTiktokAuthorizedShops($account);
+
+            return response()->json($result, ($result['status'] ?? '') === 'ok' ? 200 : 422);
+        }
 
         return response()->json([
-            'status' => 'ok',
+            'status' => 'error',
             'action' => $action,
             'account_key' => $account['key'] ?? null,
             'account_name' => $account['name'] ?? null,
-            'message' => ($labels[$action] ?? strtoupper($action)).' diproses. Hubungkan logic OAuth/token Go lama di endpoint ini.',
-        ]);
+            'message' => 'Aksi marketplace tidak dikenali.',
+        ], 422);
     }
 
     public function shopeeCallback(Request $request): Response
@@ -183,6 +237,43 @@ class OmnichannelController extends Controller
             : ($result['message'] ?? 'Shopee mengembalikan error.');
 
         return response($this->renderShopeeCallbackPage($title, $message, $result), $ok ? 200 : 422)
+            ->header('Content-Type', 'text/html');
+    }
+
+    public function tiktokCallback(Request $request): Response
+    {
+        $code = $request->query('code');
+        $account = $this->resolveAccount((string) $request->query('state', 'tiktok-agnishopbjm'), 'tiktok');
+
+        if (! $code) {
+            return response('Callback TikTok tidak membawa code.', 422);
+        }
+
+        $this->ensureTiktokAuthTables();
+
+        DB::table('tiktok_callbacks')->insert([
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'code' => $code,
+            'app_key' => $request->query('app_key'),
+            'shop_region' => $request->query('shop_region'),
+            'state' => $request->query('state'),
+            'query_payload' => json_encode($request->query()),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $rows = [
+            'Status' => 'ok',
+            'Akun' => $account['name'],
+            'App Key' => $request->query('app_key', '-'),
+            'Shop Region' => $request->query('shop_region', '-'),
+            'Code' => $this->maskToken((string) $code),
+        ];
+
+        $tableRows = collect($rows)->map(fn ($value, string $label) => '<tr><th>'.e($label).'</th><td>'.e((string) ($value ?: '-')).'</td></tr>')->implode('');
+
+        return response('<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Callback TikTok tersimpan</title><style>body{font-family:Arial,sans-serif;padding:32px;line-height:1.5;color:#0f172a}h1{margin-bottom:12px}table{border-collapse:collapse;width:100%;margin:18px 0;background:#fff}th,td{border:1px solid #d9e2ec;padding:10px 12px;text-align:left}th{width:180px;background:#f8fafc}a{color:#0f5fc7}</style></head><body><h1>Callback TikTok tersimpan</h1><p>Authorization berhasil. Kembali ke dashboard lalu klik GET TOKEN.</p><table>'.$tableRows.'</table><p><a href="/dashboard">Kembali ke Dashboard</a></p></body></html>')
             ->header('Content-Type', 'text/html');
     }
 
@@ -473,6 +564,25 @@ class OmnichannelController extends Controller
         return $payload;
     }
 
+    private function maskTiktokTokenPayload(array $payload): array
+    {
+        foreach (['access_token', 'refresh_token'] as $key) {
+            if (array_key_exists($key, $payload)) {
+                $payload[$key] = $this->maskToken($payload[$key]);
+            }
+        }
+
+        if (isset($payload['data']) && is_array($payload['data'])) {
+            foreach (['access_token', 'refresh_token'] as $key) {
+                if (array_key_exists($key, $payload['data'])) {
+                    $payload['data'][$key] = $this->maskToken($payload['data'][$key]);
+                }
+            }
+        }
+
+        return $payload;
+    }
+
     private function renderShopeeCallbackPage(string $title, string $message, array $result): string
     {
         $rows = [
@@ -745,6 +855,354 @@ class OmnichannelController extends Controller
             : now()->addSeconds($expireIn);
     }
 
+    private function buildTiktokAuthUrl(array $account): string
+    {
+        $config = $this->tiktokConfig();
+
+        return $config['auth_host'].'/openapi/v2/oauth/authorize?'.http_build_query([
+            'app_key' => $config['app_key'],
+            'state' => $account['key'],
+            'redirect_uri' => $config['redirect_url'],
+        ]);
+    }
+
+    private function exchangeTiktokToken(array $account): array
+    {
+        $this->ensureTiktokAuthTables();
+
+        $callback = DB::table('tiktok_callbacks')
+            ->where('account_key', $account['key'])
+            ->whereNull('used_at')
+            ->latest('created_at')
+            ->first();
+
+        if (! $callback) {
+            return [
+                'status' => 'error',
+                'action' => 'get-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Belum ada callback '.$account['name'].' yang bisa ditukar menjadi token. Klik AUTH dulu.',
+            ];
+        }
+
+        $config = $this->tiktokConfig();
+        $response = Http::timeout(20)->get($config['auth_host'].'/api/v2/token/get', [
+            'app_key' => $config['app_key'],
+            'app_secret' => $config['app_secret'],
+            'auth_code' => $callback->code,
+            'grant_type' => 'authorized_code',
+        ]);
+
+        $data = $response->json() ?: ['code' => $response->status(), 'message' => $response->body()];
+        $ok = (int) ($data['code'] ?? -1) === 0 && ! empty($data['data']['access_token']);
+
+        if ($ok) {
+            $this->storeTiktokToken($data, $account);
+
+            DB::table('tiktok_callbacks')
+                ->where('id', $callback->id)
+                ->update(['used_at' => now(), 'updated_at' => now()]);
+        }
+
+        return [
+            'status' => $ok ? 'ok' : 'error',
+            'action' => 'get-token-'.$account['key'],
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'message' => $ok ? 'Token TikTok berhasil disimpan.' : ($data['message'] ?? 'TikTok mengembalikan error.'),
+            ...$data,
+        ];
+    }
+
+    private function refreshTiktokToken(array $account): array
+    {
+        $this->ensureTiktokAuthTables();
+
+        $token = DB::table('tiktok_tokens')
+            ->where('account_key', $account['key'])
+            ->whereNotNull('refresh_token')
+            ->latest('created_at')
+            ->first();
+
+        if (! $token) {
+            return [
+                'status' => 'error',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Belum ada token TikTok yang bisa di-refresh. Jalankan AUTH dan GET TOKEN dulu.',
+            ];
+        }
+
+        $config = $this->tiktokConfig();
+        $response = Http::timeout(20)->get($config['auth_host'].'/api/v2/token/refresh', [
+            'app_key' => $config['app_key'],
+            'app_secret' => $config['app_secret'],
+            'refresh_token' => $token->refresh_token,
+            'grant_type' => 'refresh_token',
+        ]);
+
+        $data = $response->json() ?: ['code' => $response->status(), 'message' => $response->body()];
+        $ok = (int) ($data['code'] ?? -1) === 0 && ! empty($data['data']['access_token']);
+
+        if ($ok) {
+            $this->storeTiktokToken($data, $account);
+        }
+
+        return [
+            'status' => $ok ? 'ok' : 'error',
+            'action' => 'refresh-token-'.$account['key'],
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'message' => $ok ? 'Refresh token TikTok berhasil. Token baru sudah disimpan.' : ($data['message'] ?? 'TikTok mengembalikan error.'),
+            ...$data,
+        ];
+    }
+
+    private function getTiktokAuthorizedShops(array $account): array
+    {
+        $this->ensureTiktokAuthTables();
+
+        $token = DB::table('tiktok_tokens')
+            ->where('account_key', $account['key'])
+            ->whereNotNull('access_token')
+            ->latest('created_at')
+            ->first();
+
+        if (! $token) {
+            return [
+                'status' => 'error',
+                'action' => 'get-auth-shop-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Belum ada access token TikTok. Jalankan AUTH dan GET TOKEN dulu.',
+            ];
+        }
+
+        $config = $this->tiktokConfig();
+        $path = '/authorization/202309/shops';
+        $timestamp = time();
+        $params = [
+            'app_key' => $config['app_key'],
+            'timestamp' => $timestamp,
+        ];
+        $params['sign'] = $this->generateTiktokSign($path, $params, $config['app_secret']);
+
+        $response = Http::timeout(20)
+            ->withHeaders(['x-tts-access-token' => $token->access_token])
+            ->get($config['api_host'].$path, $params);
+
+        $data = $response->json() ?: ['code' => $response->status(), 'message' => $response->body()];
+        $shops = $data['data']['shops'] ?? [];
+        $ok = (int) ($data['code'] ?? -1) === 0 && is_array($shops) && count($shops) > 0;
+
+        if ($ok) {
+            $this->storeTiktokShops($shops);
+        }
+
+        return [
+            'status' => $ok ? 'ok' : 'error',
+            'action' => 'get-auth-shop-'.$account['key'],
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'message' => $ok ? count($shops).' shop TikTok berhasil disimpan.' : ($data['message'] ?? 'TikTok tidak mengembalikan data shop.'),
+            ...$data,
+        ];
+    }
+
+    private function storeTiktokToken(array $response, array $account): void
+    {
+        $this->ensureTiktokAuthTables();
+
+        $data = $response['data'] ?? [];
+        $expireAt = $this->resolveTiktokExpireAt($data['access_token_expire_in'] ?? null);
+        $refreshExpireAt = $this->resolveTiktokExpireAt($data['refresh_token_expire_in'] ?? null);
+
+        DB::table('tiktok_tokens')->insert([
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'open_id' => $data['open_id'] ?? null,
+            'seller_name' => $data['seller_name'] ?? null,
+            'seller_region' => $data['seller_base_region'] ?? null,
+            'access_token' => $data['access_token'] ?? null,
+            'refresh_token' => $data['refresh_token'] ?? null,
+            'expire_at' => $expireAt,
+            'expire_in' => $expireAt ? now()->diffInSeconds($expireAt, false) : null,
+            'access_token_expire_at' => $expireAt,
+            'refresh_token_expire_at' => $refreshExpireAt,
+            'granted_scopes' => json_encode($data['granted_scopes'] ?? []),
+            'request_id' => $response['request_id'] ?? null,
+            'message' => $response['message'] ?? null,
+            'raw_response' => json_encode($response),
+            'is_active' => DB::raw('true'),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function storeTiktokShops(array $shops): void
+    {
+        $this->ensureTiktokAuthTables();
+
+        foreach ($shops as $shop) {
+            DB::table('tiktok_shops')->updateOrInsert(
+                ['id' => (string) ($shop['id'] ?? '')],
+                [
+                    'code' => $shop['code'] ?? null,
+                    'name' => $shop['name'] ?? null,
+                    'region' => $shop['region'] ?? null,
+                    'seller_type' => $shop['seller_type'] ?? null,
+                    'cipher' => $shop['cipher'] ?? null,
+                    'raw_response' => json_encode($shop),
+                    'updated_at' => now(),
+                    'created_at' => now(),
+                ]
+            );
+        }
+    }
+
+    private function resolveTiktokExpireAt(null|int|string $value): ?Carbon
+    {
+        if (! $value) {
+            return null;
+        }
+
+        $seconds = (int) $value;
+
+        return $seconds > time()
+            ? Carbon::createFromTimestamp($seconds)
+            : now()->addSeconds($seconds);
+    }
+
+    private function tiktokConfig(): array
+    {
+        $row = SchemaCache::activeTiktokConfig();
+
+        $appKey = (string) ($row->app_key ?? config('tiktok.app_key'));
+        $appSecret = (string) ($row->app_secret ?? config('tiktok.app_secret'));
+
+        abort_if($appKey === '' || $appSecret === '', 422, 'Konfigurasi TikTok belum lengkap.');
+
+        return [
+            'app_key' => $appKey,
+            'app_secret' => $appSecret,
+            'auth_host' => rtrim((string) config('tiktok.auth_host'), '/'),
+            'api_host' => rtrim((string) config('tiktok.api_host'), '/'),
+            'redirect_url' => (string) ($row->redirect_url ?? config('tiktok.redirect_url')),
+        ];
+    }
+
+    private function generateTiktokSign(string $path, array $params, string $secret, ?string $body = null): string
+    {
+        unset($params['sign'], $params['access_token']);
+        ksort($params);
+
+        $input = $path;
+        foreach ($params as $key => $value) {
+            $input .= $key.$value;
+        }
+
+        if ($body !== null && $body !== '') {
+            $input .= $body;
+        }
+
+        $input = $secret.$input.$secret;
+
+        return hash_hmac('sha256', $input, $secret);
+    }
+
+    private function ensureTiktokAuthTables(): void
+    {
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_callbacks (
+                id SERIAL PRIMARY KEY,
+                account_key TEXT,
+                account_name TEXT,
+                code TEXT,
+                app_key TEXT,
+                shop_region TEXT,
+                state TEXT,
+                query_payload JSONB,
+                used_at TIMESTAMP NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_tokens (
+                id SERIAL PRIMARY KEY,
+                account_key TEXT,
+                account_name TEXT,
+                open_id TEXT,
+                seller_name TEXT,
+                seller_region TEXT,
+                access_token TEXT,
+                refresh_token TEXT,
+                expire_at TIMESTAMP NULL,
+                expire_in INTEGER NULL,
+                access_token_expire_at TIMESTAMP NULL,
+                refresh_token_expire_at TIMESTAMP NULL,
+                granted_scopes JSONB,
+                shop_id TEXT,
+                request_id TEXT,
+                message TEXT,
+                raw_response JSONB,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_shops (
+                id TEXT PRIMARY KEY,
+                code TEXT,
+                name TEXT,
+                region TEXT,
+                seller_type TEXT,
+                cipher TEXT,
+                raw_response JSONB,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        foreach ([
+            'tiktok_callbacks' => [
+                'account_key TEXT',
+                'account_name TEXT',
+                'query_payload JSONB',
+                'used_at TIMESTAMP NULL',
+                'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
+            'tiktok_tokens' => [
+                'account_key TEXT',
+                'account_name TEXT',
+                'expire_in INTEGER NULL',
+                'access_token_expire_at TIMESTAMP NULL',
+                'refresh_token_expire_at TIMESTAMP NULL',
+                'granted_scopes JSONB',
+                'shop_id TEXT',
+                'request_id TEXT',
+                'message TEXT',
+                'raw_response JSONB',
+                'is_active BOOLEAN DEFAULT TRUE',
+                'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
+            'tiktok_shops' => [
+                'raw_response JSONB',
+                'created_at TIMESTAMP DEFAULT NOW()',
+                'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
+        ] as $table => $columns) {
+            foreach ($columns as $definition) {
+                DB::statement('ALTER TABLE '.$table.' ADD COLUMN IF NOT EXISTS '.$definition);
+            }
+        }
+    }
+
     private function shopeeConfig(): array
     {
         $row = SchemaCache::activeShopeeConfig();
@@ -801,6 +1259,15 @@ final class SchemaCache
     {
         try {
             return DB::table('shopee_config')->whereRaw('is_active = true')->first();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    public static function activeTiktokConfig(): ?object
+    {
+        try {
+            return DB::table('tiktok_config')->orderByDesc('id')->first();
         } catch (\Throwable) {
             return null;
         }
