@@ -619,8 +619,14 @@ class OmnichannelController extends Controller
     {
         $this->ensureTiktokProductTables();
 
+        $syncResult = null;
+
+        if (request()->boolean('sync')) {
+            $syncResult = $this->syncTiktokProductsToDatabase();
+        }
+
         $rows = DB::table('tiktok_products')
-            ->select('product_id', 'product_name', 'sku_name', 'stock_qty', 'price', 'subtotal', 'updated_at')
+            ->select('product_id', 'product_name', 'image_url', 'sku_name', 'stock_qty', 'price', 'subtotal', 'updated_at')
             ->orderBy('product_name')
             ->orderBy('sku_name')
             ->get()
@@ -633,21 +639,23 @@ class OmnichannelController extends Controller
         return response()->json([
             'count' => $rows->count(),
             'last_sync_at' => $lastSyncAt,
-            'message' => $lastSyncAt ? 'Data TikTok dari cache database.' : 'Belum ada cache produk TikTok.',
+            'message' => $syncResult['message'] ?? ($lastSyncAt ? 'Data TikTok dari cache database.' : 'Belum ada cache produk TikTok.'),
             'sync' => [
-                'status' => $lastSyncAt ? 'cached' : 'empty',
-                'message' => $lastSyncAt ? 'Terakhir sinkron: '.$lastSyncAt : 'Belum pernah sinkron.',
+                'status' => $syncResult['status'] ?? ($lastSyncAt ? 'cached' : 'empty'),
+                'message' => $syncResult['message'] ?? ($lastSyncAt ? 'Terakhir sinkron: '.$lastSyncAt : 'Belum pernah sinkron.'),
                 'last_sync_at' => $lastSyncAt,
+                ...($syncResult ?? []),
                 'mode' => 'cache',
             ],
             'items' => $rows->map(function ($group, string $productId) {
                 $first = $group->first();
 
                 return [
-                    'product_id' => $productId,
-                    'product_name' => $first->product_name,
-                    'updated_at' => $first->updated_at,
-                    'skus' => $group->map(fn ($sku) => [
+                'product_id' => $productId,
+                'product_name' => $first->product_name,
+                'image_url' => $first->image_url ?? null,
+                'updated_at' => $first->updated_at,
+                'skus' => $group->map(fn ($sku) => [
                         'sku_name' => $sku->sku_name,
                         'stock_qty' => (int) ($sku->stock_qty ?? 0),
                         'price' => (int) ($sku->price ?? 0),
@@ -658,6 +666,328 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    private function syncTiktokProductsToDatabase(): array
+    {
+        $this->ensureTiktokProductTables();
+
+        try {
+            $config = $this->tiktokConfig();
+            $shop = $this->latestTiktokShop();
+            $accessToken = $this->latestTiktokAccessToken();
+
+            if (! $shop) {
+                return [
+                    'status' => 'error',
+                    'message' => 'Belum ada shop TikTok tersimpan. Jalankan AUTH / GET SHOP dulu.',
+                    'products' => 0,
+                    'variants' => 0,
+                    'debug' => [
+                        'shop' => null,
+                        'access_token_present' => $accessToken !== '',
+                        'app_key' => $config['app_key'] ?? null,
+                    ],
+                ];
+            }
+
+            if ($accessToken === '') {
+                return [
+                    'status' => 'error',
+                    'message' => 'Belum ada access token TikTok aktif. Jalankan AUTH / GET TOKEN dulu.',
+                    'products' => 0,
+                    'variants' => 0,
+                    'debug' => [
+                        'shop_id' => (string) ($shop->shop_id ?? $shop->id ?? ''),
+                        'shop_cipher' => (string) ($shop->cipher ?? $shop->shop_cipher ?? ''),
+                        'app_key' => $config['app_key'] ?? null,
+                    ],
+                ];
+            }
+
+            $syncCount = 0;
+            $variantCount = 0;
+            $pageSize = 100;
+            $pageToken = null;
+            $apiHost = rtrim((string) $config['api_host'], '/');
+            $searchUrl = $apiHost.'/product/202502/products/search';
+            $detailBaseUrl = $apiHost.'/product/202309/products/';
+
+            do {
+                $timestamp = time();
+                $searchParams = [
+                    'app_key' => $config['app_key'],
+                    'timestamp' => $timestamp,
+                    'shop_cipher' => $shop->cipher,
+                    'page_size' => $pageSize,
+                ];
+                if ($pageToken) {
+                    $searchParams['page_token'] = $pageToken;
+                }
+                $searchBody = [
+                    'status' => 'ALL',
+                ];
+                $searchBodyString = json_encode($searchBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                $searchParams['sign'] = $this->generateTiktokSign(
+                    '/product/202502/products/search',
+                    $searchParams,
+                    $config['app_secret'],
+                    $searchBodyString
+                );
+
+                $searchResponse = Http::timeout(45)
+                    ->withHeaders(['x-tts-access-token' => $accessToken])
+                    ->withBody($searchBodyString, 'application/json')
+                    ->post($searchUrl.'?'.http_build_query($searchParams, '', '&', PHP_QUERY_RFC3986));
+
+                $payload = $searchResponse->json();
+
+                if (! is_array($payload)) {
+                    return [
+                        'status' => 'error',
+                        'message' => 'TikTok search API tidak mengembalikan JSON valid.',
+                        'products' => 0,
+                        'variants' => 0,
+                        'debug' => [
+                            'url' => $searchUrl,
+                            'query' => $searchParams,
+                            'request_body' => $searchBody,
+                            'http_status' => $searchResponse->status(),
+                            'response_body' => $searchResponse->body(),
+                            'shop_id' => (string) ($shop->shop_id ?? $shop->id ?? ''),
+                            'shop_cipher' => (string) ($shop->cipher ?? $shop->shop_cipher ?? ''),
+                            'app_key' => $config['app_key'] ?? null,
+                            'curl' => $this->buildTiktokCurl('POST', $searchUrl, $searchParams, [
+                                'x-tts-access-token' => $accessToken,
+                                'content-type' => 'application/json',
+                            ], $searchBody),
+                        ],
+                    ];
+                }
+
+                if ((int) ($payload['code'] ?? -1) !== 0) {
+                    return [
+                        'status' => 'error',
+                        'message' => $payload['message'] ?? 'TikTok search API error.',
+                        'products' => 0,
+                        'variants' => 0,
+                        'debug' => [
+                            'url' => $searchUrl,
+                            'query' => $searchParams,
+                            'request_body' => $searchBody,
+                            'response' => $payload,
+                            'shop_id' => (string) ($shop->shop_id ?? $shop->id ?? ''),
+                            'shop_cipher' => (string) ($shop->cipher ?? $shop->shop_cipher ?? ''),
+                            'app_key' => $config['app_key'] ?? null,
+                            'curl' => $this->buildTiktokCurl('POST', $searchUrl, $searchParams, [
+                                'x-tts-access-token' => $accessToken,
+                                'content-type' => 'application/json',
+                            ], $searchBody),
+                        ],
+                    ];
+                }
+
+                $products = data_get($payload, 'data.products', []);
+                $pageToken = data_get($payload, 'data.next_page_token');
+                if (! is_array($products) || $products === []) {
+                    break;
+                }
+
+                foreach ($products as $product) {
+                    $productId = (string) ($product['id'] ?? '');
+                    if ($productId === '') {
+                        continue;
+                    }
+
+                    $detail = $this->fetchTiktokProductDetail($config, $accessToken, $shop, $productId, $detailBaseUrl);
+                    $this->storeTiktokProductPayload($detail ?: $product);
+                    $syncCount++;
+                    $variantCount += count(data_get($detail ?: $product, 'skus', []));
+                }
+
+            } while ($pageToken);
+
+            DB::table('tiktok_sync_logs')->insert([
+                'status' => 'ok',
+                'message' => $syncCount.' produk TikTok berhasil disinkronkan.',
+                'product_count' => $syncCount,
+                'variant_count' => $variantCount,
+                'synced_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return [
+                'status' => 'ok',
+                'message' => $syncCount.' produk TikTok berhasil disinkronkan.',
+                'products' => $syncCount,
+                'variants' => $variantCount,
+                'last_sync_at' => now()->toDateTimeString(),
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+                'products' => 0,
+                'variants' => 0,
+                'debug' => [
+                    'shop_id' => isset($shop) ? (string) ($shop->shop_id ?? $shop->id ?? '') : null,
+                    'shop_cipher' => isset($shop) ? (string) ($shop->cipher ?? $shop->shop_cipher ?? '') : null,
+                    'app_key' => $config['app_key'] ?? null,
+                    'curl' => isset($searchUrl, $searchParams, $accessToken)
+                            ? $this->buildTiktokCurl('POST', $searchUrl, $searchParams, [
+                            'x-tts-access-token' => $accessToken,
+                            'content-type' => 'application/json',
+                        ], $searchBody ?? ['status' => 'ALL'])
+                        : null,
+                ],
+            ];
+        }
+    }
+
+    private function fetchTiktokProductDetail(array $config, string $accessToken, ?object $shop, string $productId, string $detailBaseUrl): ?array
+    {
+        $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
+        $shopId = (string) ($shop->shop_id ?? $shop->id ?? '');
+        $timestamp = time();
+        $params = [
+            'access_token' => $accessToken,
+            'timestamp' => $timestamp,
+            'app_key' => $config['app_key'],
+            'shop_cipher' => $shopCipher,
+            'shop_id' => $shopId,
+            'return_under_review_version' => 'false',
+            'return_draft_version' => 'false',
+            'locale' => 'en',
+            'version' => '202309',
+        ];
+        $params['sign'] = $this->generateTiktokSign('/product/202309/products/'.$productId, $params, $config['app_secret']);
+
+        $response = Http::timeout(45)
+            ->withHeaders([
+                'x-tts-access-token' => $accessToken,
+                'content-type' => 'application/json',
+            ])
+            ->get($detailBaseUrl.$productId, $params);
+
+        $payload = $response->json();
+
+        if (! is_array($payload) || (int) ($payload['code'] ?? -1) !== 0) {
+            logger()->warning('TikTok detail request failed', [
+                'product_id' => $productId,
+                'url' => $detailBaseUrl.$productId,
+                'params' => $params,
+                'http_status' => $response->status(),
+                'body' => $response->body(),
+                'payload' => $payload,
+            ]);
+        }
+
+        return is_array($payload) ? data_get($payload, 'data') : null;
+    }
+
+    private function buildTiktokCurl(string $method, string $url, array $query, array $headers = [], ?array $body = null): string
+    {
+        $queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $fullUrl = $queryString ? $url.'?'.$queryString : $url;
+        $parts = [
+            "curl -k -X '".strtoupper($method)."'",
+        ];
+
+        foreach ($headers as $name => $value) {
+            $parts[] = "-H '".str_replace("'", "'\"'\"'", $name.': '.$value)."'";
+        }
+
+        $parts[] = "'".str_replace("'", "'\"'\"'", $fullUrl)."'";
+
+        if ($body !== null && strtoupper($method) !== 'GET') {
+            $parts[] = "-d '".str_replace("'", "'\"'\"'", json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))."'";
+        }
+
+        return implode(' ', $parts);
+    }
+
+    private function storeTiktokProductPayload(array $data): void
+    {
+        $productId = (string) ($data['id'] ?? $data['product_id'] ?? '');
+        if ($productId === '') {
+            return;
+        }
+
+        $productName = (string) ($data['title'] ?? $data['product_name'] ?? 'TikTok Product');
+        $imageUrl = $this->extractTiktokImageUrl($data);
+        $skus = data_get($data, 'skus', []);
+
+        if (! is_array($skus) || $skus === []) {
+            $skus = [[
+                'id' => $productId.'-default',
+                'sku_name' => 'Default',
+                'stock' => data_get($data, 'stock', 0),
+                'price' => ['sale_price' => data_get($data, 'price', 0)],
+            ]];
+        }
+
+        foreach ($skus as $sku) {
+            $skuName = (string) ($sku['sku_name'] ?? $sku['name'] ?? 'Default');
+            $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
+            $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
+
+            DB::table('tiktok_products')->updateOrInsert(
+                ['product_id' => $productId, 'sku_name' => $skuName],
+                [
+                    'product_name' => $productName,
+                    'image_url' => $imageUrl,
+                    'stock_qty' => $stock,
+                    'price' => $price,
+                    'subtotal' => $price * $stock,
+                    'updated_at' => now(),
+                    'created_at' => now(),
+                ]
+            );
+        }
+    }
+
+    private function extractTiktokImageUrl(array $data): ?string
+    {
+        $mainImages = data_get($data, 'main_images', []);
+
+        if (is_array($mainImages)) {
+            foreach ($mainImages as $image) {
+                $urls = data_get($image, 'urls', []);
+                if (is_array($urls) && ! empty($urls[0])) {
+                    return (string) $urls[0];
+                }
+
+                $thumbUrls = data_get($image, 'thumb_urls', []);
+                if (is_array($thumbUrls) && ! empty($thumbUrls[0])) {
+                    return (string) $thumbUrls[0];
+                }
+            }
+        }
+
+        $skus = data_get($data, 'skus', []);
+
+        if (is_array($skus)) {
+            foreach ($skus as $sku) {
+                $skuImage = data_get($sku, 'sales_attributes.0.sku_img', []);
+                $urls = data_get($skuImage, 'urls', []);
+                if (is_array($urls) && ! empty($urls[0])) {
+                    return (string) $urls[0];
+                }
+
+                $thumbUrls = data_get($skuImage, 'thumb_urls', []);
+                if (is_array($thumbUrls) && ! empty($thumbUrls[0])) {
+                    return (string) $thumbUrls[0];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function latestTiktokAccessToken(): string
+    {
+        return (string) (DB::table('tiktok_tokens')->whereRaw('is_active = true')->orderByDesc('created_at')->value('access_token') ?? DB::table('tiktok_tokens')->orderByDesc('created_at')->value('access_token') ?? '');
+    }
+
     private function ensureTiktokProductTables(): void
     {
         DB::statement("
@@ -665,6 +995,7 @@ class OmnichannelController extends Controller
                 id BIGSERIAL PRIMARY KEY,
                 product_id TEXT NOT NULL,
                 product_name TEXT NULL,
+                image_url TEXT NULL,
                 sku_name TEXT NULL,
                 stock_qty INTEGER DEFAULT 0,
                 price BIGINT DEFAULT 0,
@@ -1322,12 +1653,16 @@ class OmnichannelController extends Controller
     private function buildTiktokAuthUrl(array $account): string
     {
         $config = $this->tiktokConfig();
-
-        return $config['auth_host'].'/openapi/v2/oauth/authorize?'.http_build_query([
+        $timestamp = time();
+        $params = [
             'app_key' => $config['app_key'],
-            'state' => $account['key'],
+            'timestamp' => $timestamp,
             'redirect_uri' => $config['redirect_url'],
-        ]);
+            'state' => $account['key'],
+        ];
+        $params['sign'] = $this->generateTiktokSign('/openapi/v2/oauth/authorize', $params, $config['app_secret']);
+
+        return $config['auth_host'].'/openapi/v2/oauth/authorize?'.http_build_query($params);
     }
 
     private function connectTiktok(array $account): array
@@ -1581,20 +1916,41 @@ class OmnichannelController extends Controller
         $this->ensureTiktokAuthTables();
 
         foreach ($shops as $shop) {
+            $shopId = (string) ($shop['id'] ?? $shop['shop_id'] ?? '');
+            $shopCipher = $shop['cipher'] ?? $shop['shop_cipher'] ?? null;
+
+            if ($shopId === '') {
+                continue;
+            }
+
             DB::table('tiktok_shops')->updateOrInsert(
-                ['id' => (string) ($shop['id'] ?? '')],
+                ['id' => $shopId],
                 [
+                    'shop_id' => $shopId,
                     'code' => $shop['code'] ?? null,
                     'name' => $shop['name'] ?? null,
                     'region' => $shop['region'] ?? null,
                     'seller_type' => $shop['seller_type'] ?? null,
-                    'cipher' => $shop['cipher'] ?? null,
+                    'cipher' => $shopCipher,
+                    'shop_cipher' => $shopCipher,
                     'raw_response' => json_encode($shop),
                     'updated_at' => now(),
                     'created_at' => now(),
                 ]
             );
         }
+    }
+
+    private function latestTiktokShop(): ?object
+    {
+        if (! Schema::hasTable('tiktok_shops')) {
+            return null;
+        }
+
+        return DB::table('tiktok_shops')
+            ->orderByDesc('updated_at')
+            ->orderByDesc('created_at')
+            ->first();
     }
 
     private function resolveTiktokExpireAt(null|int|string $value): ?Carbon
@@ -1644,7 +2000,13 @@ class OmnichannelController extends Controller
         ];
 
         foreach ($tables as $table => $channel) {
-            if (! Schema::hasTable($table)) {
+                if (! Schema::hasTable($table)) {
+                    continue;
+                }
+
+            $accountColumn = Schema::hasColumn($table, 'account_key') ? 'account_key' : (Schema::hasColumn($table, 'account_name') ? 'account_name' : null);
+
+            if (! $accountColumn) {
                 continue;
             }
 
@@ -1654,7 +2016,7 @@ class OmnichannelController extends Controller
                 }
 
                 $latestId = DB::table($table)
-                    ->where('account_key', $key)
+                    ->where($accountColumn, $accountColumn === 'account_key' ? $key : $account['name'])
                     ->whereRaw('is_active = true')
                     ->latest('created_at')
                     ->value('id');
@@ -1664,7 +2026,7 @@ class OmnichannelController extends Controller
                 }
 
                 DB::table($table)
-                    ->where('account_key', $key)
+                    ->where($accountColumn, $accountColumn === 'account_key' ? $key : $account['name'])
                     ->where('id', '<>', $latestId)
                     ->whereRaw('is_active = true')
                     ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
@@ -1674,19 +2036,25 @@ class OmnichannelController extends Controller
 
     private function tiktokConfig(): array
     {
+        $this->ensureTiktokAuthTables();
+
         $row = SchemaCache::activeTiktokConfig();
+        $appKey = trim((string) ($row->app_key ?? config('tiktok.app_key')));
+        $appSecret = trim((string) ($row->app_secret ?? config('tiktok.app_secret')));
+        $redirectUrl = trim((string) ($row->redirect_url ?? config('tiktok.redirect_url')));
+        $authHost = trim((string) config('tiktok.auth_host'));
+        $apiHost = trim((string) config('tiktok.api_host'));
 
-        $appKey = (string) ($row->app_key ?? config('tiktok.app_key'));
-        $appSecret = (string) ($row->app_secret ?? config('tiktok.app_secret'));
-
-        abort_if($appKey === '' || $appSecret === '', 422, 'Konfigurasi TikTok belum lengkap.');
+        if ($appKey === '' || $appSecret === '') {
+            abort(422, 'Konfigurasi TikTok belum lengkap. Isi `tiktok_config` atau `TIKTOK_APP_KEY` / `TIKTOK_APP_SECRET`.');
+        }
 
         return [
             'app_key' => $appKey,
             'app_secret' => $appSecret,
-            'auth_host' => rtrim((string) config('tiktok.auth_host'), '/'),
-            'api_host' => rtrim((string) config('tiktok.api_host'), '/'),
-            'redirect_url' => (string) ($row->redirect_url ?? config('tiktok.redirect_url')),
+            'auth_host' => rtrim($authHost, '/'),
+            'api_host' => rtrim($apiHost, '/'),
+            'redirect_url' => $redirectUrl,
         ];
     }
 
@@ -1695,22 +2063,33 @@ class OmnichannelController extends Controller
         unset($params['sign'], $params['access_token']);
         ksort($params);
 
-        $input = $path;
+        $stringToSign = $secret.$path;
         foreach ($params as $key => $value) {
-            $input .= $key.$value;
+            $stringToSign .= $key.$value;
         }
 
-        if ($body !== null && $body !== '') {
-            $input .= $body;
-        }
+        $stringToSign .= $body ?? '';
+        $stringToSign .= $secret;
 
-        $input = $secret.$input.$secret;
-
-        return hash_hmac('sha256', $input, $secret);
+        return hash_hmac('sha256', $stringToSign, $secret);
     }
 
     private function ensureTiktokAuthTables(): void
     {
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_config (
+                id BIGSERIAL PRIMARY KEY,
+                app_key TEXT NOT NULL,
+                app_secret TEXT NOT NULL,
+                auth_host TEXT DEFAULT 'https://auth.tiktok-shops.com',
+                api_host TEXT DEFAULT 'https://open-api.tiktokglobalshop.com',
+                redirect_url TEXT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
         DB::statement("
             CREATE TABLE IF NOT EXISTS tiktok_callbacks (
                 id SERIAL PRIMARY KEY,
@@ -1755,16 +2134,42 @@ class OmnichannelController extends Controller
         DB::statement("
             CREATE TABLE IF NOT EXISTS tiktok_shops (
                 id TEXT PRIMARY KEY,
+                shop_id TEXT NULL,
                 code TEXT,
                 name TEXT,
                 region TEXT,
                 seller_type TEXT,
                 cipher TEXT,
+                shop_cipher TEXT NULL,
                 raw_response JSONB,
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW()
             )
         ");
+
+        $tiktokConfigValues = [
+            'app_key' => env('TIKTOK_APP_KEY', '6i1cagd9f0p83'),
+            'app_secret' => env('TIKTOK_APP_SECRET', '310f006ea5810ad4bf1591f31acd048fbee7977a'),
+            'auth_host' => env('TIKTOK_AUTH_HOST', 'https://auth.tiktok-shops.com'),
+            'api_host' => env('TIKTOK_API_HOST', 'https://open-api.tiktokglobalshop.com'),
+            'redirect_url' => env('TIKTOK_REDIRECT_URL', env('APP_URL', 'http://localhost:8000').'/api/tiktok/callback'),
+            'is_active' => DB::raw('true'),
+            'updated_at' => now(),
+        ];
+
+        $existingTiktokConfig = DB::table('tiktok_config')->where('id', 1)->exists();
+
+        if ($existingTiktokConfig) {
+            DB::table('tiktok_config')
+                ->where('id', 1)
+                ->update($tiktokConfigValues);
+        } else {
+            DB::table('tiktok_config')->insert([
+                'id' => 1,
+                ...$tiktokConfigValues,
+                'created_at' => now(),
+            ]);
+        }
 
         foreach ([
             'tiktok_callbacks' => [
@@ -1789,9 +2194,14 @@ class OmnichannelController extends Controller
                 'updated_at TIMESTAMP DEFAULT NOW()',
             ],
             'tiktok_shops' => [
+                'shop_id TEXT',
                 'raw_response JSONB',
+                'shop_cipher TEXT NULL',
                 'created_at TIMESTAMP DEFAULT NOW()',
                 'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
+            'tiktok_products' => [
+                'image_url TEXT',
             ],
         ] as $table => $columns) {
             foreach ($columns as $definition) {
@@ -2045,7 +2455,8 @@ final class SchemaCache
     public static function activeTiktokConfig(): ?object
     {
         try {
-            return DB::table('tiktok_config')->orderByDesc('id')->first();
+            return DB::table('tiktok_config')->whereRaw('is_active = true')->orderByDesc('id')->first()
+                ?: DB::table('tiktok_config')->orderByDesc('id')->first();
         } catch (\Throwable) {
             return null;
         }
