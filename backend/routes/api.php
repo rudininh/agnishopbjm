@@ -36,7 +36,7 @@ Route::get('shopee-docs/api', function (Request $request) {
 });
 
 Route::post('omnichannel/{action}', [OmnichannelController::class, 'tokenAction'])
-    ->where('action', 'auth-shopee(-agnishopbjm|-gitacollectionbjm)?|auth-tiktok(-agnishopbjm)?|get-token-shopee(-agnishopbjm|-gitacollectionbjm)?|get-token-tiktok(-agnishopbjm)?|refresh-token-shopee(-agnishopbjm|-gitacollectionbjm)?|refresh-token-tiktok(-agnishopbjm)?|get-auth-shop-tiktok(-agnishopbjm)?');
+    ->where('action', 'connect-shopee(-agnishopbjm|-gitacollectionbjm)?|connect-tiktok(-agnishopbjm)?|auth-shopee(-agnishopbjm|-gitacollectionbjm)?|auth-tiktok(-agnishopbjm)?|get-token-shopee(-agnishopbjm|-gitacollectionbjm)?|get-token-tiktok(-agnishopbjm)?|refresh-token-shopee(-agnishopbjm|-gitacollectionbjm)?|refresh-token-tiktok(-agnishopbjm)?|get-auth-shop-tiktok(-agnishopbjm)?');
 
 Route::get('omnichannel/dashboard', [OmnichannelController::class, 'dashboard']);
 Route::get('get-shopee-items', [OmnichannelController::class, 'shopeeItems']);

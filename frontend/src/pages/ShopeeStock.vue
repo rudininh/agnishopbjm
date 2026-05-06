@@ -38,7 +38,7 @@
           <span>Stores</span>
           <select v-model="filters.store">
             <option value="all">All</option>
-            <option value="Agni Shop Banjarmasin">Agni Shop Banjarmasin</option>
+            <option v-for="store in storeOptions" :key="store" :value="store">{{ store }}</option>
           </select>
         </label>
         <label>
@@ -91,12 +91,12 @@
 
     <div class="toolbar">
       <nav class="tabs">
-        <button :class="{ active: activeTab === 'live' }" @click="activeTab = 'live'">Live ({{ liveCount }})</button>
-        <button :class="{ active: activeTab === 'soldout' }" @click="activeTab = 'soldout'">Sold Out ({{ soldOutCount }})</button>
-        <button :class="{ active: activeTab === 'inactive' }" @click="activeTab = 'inactive'">Tidak Live ({{ inactiveCount }})</button>
-        <button :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">Semua ({{ items.length }})</button>
+        <button :class="{ active: activeTab === 'live' }" @click="setActiveTab('live')">Live ({{ liveCount }})</button>
+        <button :class="{ active: activeTab === 'soldout' }" @click="setActiveTab('soldout')">Sold Out ({{ soldOutCount }})</button>
+        <button :class="{ active: activeTab === 'inactive' }" @click="setActiveTab('inactive')">Tidak Live ({{ inactiveCount }})</button>
+        <button :class="{ active: activeTab === 'all' }" @click="setActiveTab('all')">Semua ({{ items.length }})</button>
       </nav>
-      <span class="result-count">{{ visibleItems.length }} produk tampil</span>
+      <span class="result-count">{{ filteredItems.length }} produk tampil</span>
     </div>
 
     <div class="panel">
@@ -116,7 +116,7 @@
             </tr>
           </thead>
           <tbody>
-            <template v-for="item in visibleItems" :key="item.item_id">
+            <template v-for="item in pagedItems" :key="item.item_id">
               <tr class="product-row">
                 <td class="check-col"><input type="checkbox" /></td>
                 <td>
@@ -173,11 +173,16 @@
                 </td>
               </tr>
             </template>
-            <tr v-if="!visibleItems.length">
+            <tr v-if="!filteredItems.length">
               <td colspan="9" class="empty">{{ loading ? 'Sedang memuat produk...' : 'Belum ada produk yang cocok dengan filter.' }}</td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <div v-if="filteredItems.length" class="pagination">
+        <button type="button" :disabled="currentPage === 1" @click="setPage(currentPage - 1)">Prev</button>
+        <span>Halaman {{ currentPage }} dari {{ totalPages }}</span>
+        <button type="button" :disabled="currentPage === totalPages" @click="setPage(currentPage + 1)">Next</button>
       </div>
     </div>
   </section>
@@ -191,6 +196,8 @@ const items = ref([])
 const expanded = ref({})
 const loading = ref(false)
 const activeTab = ref('live')
+const page = ref(1)
+const PAGE_SIZE = 20
 const brokenImages = ref({})
 const filters = reactive({
   store: 'all',
@@ -213,8 +220,9 @@ const inactiveCount = computed(() => items.value.filter((item) => !isLive(item))
 const variantCount = computed(() => items.value.reduce((sum, item) => sum + (item.models?.length || 0), 0))
 const grandStock = computed(() => visibleItems.value.reduce((sum, item) => sum + totalStock(item.models), 0))
 const grandValue = computed(() => visibleItems.value.reduce((sum, item) => sum + totalValue(item.models), 0))
+const storeOptions = computed(() => [...new Set(items.value.map((item) => item.shop_name || 'Agni Shop Banjarmasin'))].sort())
 
-const visibleItems = computed(() => {
+const filteredItems = computed(() => {
   const query = filters.search.toLowerCase()
 
   return items.value
@@ -247,6 +255,24 @@ const visibleItems = computed(() => {
       return new Date(b.updated_at || 0) - new Date(a.updated_at || 0)
     })
 })
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredItems.value.length / PAGE_SIZE)))
+const currentPage = computed(() => Math.min(page.value, totalPages.value))
+const visibleItems = filteredItems
+const pagedItems = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+
+  return filteredItems.value.slice(start, start + PAGE_SIZE)
+})
+
+const setPage = (nextPage) => {
+  page.value = Math.min(Math.max(Number(nextPage) || 1, 1), totalPages.value)
+}
+
+const setActiveTab = (tab) => {
+  activeTab.value = tab
+  page.value = 1
+}
 
 const toggle = (id) => {
   expanded.value[id] = !expanded.value[id]
@@ -292,6 +318,7 @@ const resetFilters = () => {
   filters.search = ''
   filters.sort = 'updated_desc'
   activeTab.value = 'live'
+  page.value = 1
 }
 
 const loadData = async () => {
@@ -299,6 +326,7 @@ const loadData = async () => {
   try {
     const response = await omnichannelService.shopeeItems()
     items.value = response.data.items || []
+    page.value = 1
   } finally {
     loading.value = false
   }
@@ -359,6 +387,10 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
 .variant-item { display: grid; grid-template-columns: 1.3fr 1fr .7fr .5fr; gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
+.pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
+.pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }
+.pagination button:disabled { cursor: not-allowed; opacity: .45; }
+.pagination span { color: #64748b; font-size: 13px; }
 @media (max-width: 1100px) {
   .summary-grid, .filter-row, .filter-row + .filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

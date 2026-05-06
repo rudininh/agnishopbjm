@@ -56,6 +56,7 @@ class OmnichannelController extends Controller
 
     public function shopeeItems(): JsonResponse
     {
+        $shopNames = $this->shopeeShopNames();
         $products = DB::table('shopee_product')
             ->select(
                 'item_id',
@@ -94,7 +95,7 @@ class OmnichannelController extends Controller
                 'no' => $index + 1,
                 'item_id' => (string) $item->item_id,
                 'shop_id' => $item->shop_id ? (string) $item->shop_id : null,
-                'shop_name' => 'Agni Shop Banjarmasin',
+                'shop_name' => $shopNames[(string) $item->shop_id] ?? 'Agni Shop Banjarmasin',
                 'image_url' => $images[$item->item_id] ?? null,
                 'nama' => $item->name,
                 'sku' => (string) $item->item_id,
@@ -130,6 +131,18 @@ class OmnichannelController extends Controller
     public function tokenAction(string $action): JsonResponse
     {
         $account = $this->resolveAccountFromAction($action);
+
+        if ($account && str_starts_with($action, 'connect-shopee')) {
+            $result = $this->connectShopee($account);
+
+            return response()->json($this->maskShopeeTokenPayload($result), ($result['status'] ?? '') === 'error' ? 422 : 200);
+        }
+
+        if ($account && str_starts_with($action, 'connect-tiktok')) {
+            $result = $this->connectTiktok($account);
+
+            return response()->json($this->maskTiktokTokenPayload($result), ($result['status'] ?? '') === 'error' ? 422 : 200);
+        }
 
         if ($account && str_starts_with($action, 'auth-shopee')) {
             return response()->json([
@@ -474,6 +487,27 @@ class OmnichannelController extends Controller
             ->all();
     }
 
+    private function shopeeShopNames(): array
+    {
+        if (! Schema::hasTable('shopee_tokens')) {
+            return [];
+        }
+
+        return DB::table('shopee_tokens')
+            ->whereNotNull('shop_id')
+            ->orderByDesc('created_at')
+            ->get(['shop_id', 'account_name'])
+            ->reduce(function (array $names, object $token) {
+                $key = (string) $token->shop_id;
+
+                if (! isset($names[$key])) {
+                    $names[$key] = $token->account_name ?: 'Shopee';
+                }
+
+                return $names;
+            }, []);
+    }
+
     private function latestTiktokTokens(): array
     {
         if (! Schema::hasTable('tiktok_tokens')) {
@@ -623,6 +657,38 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    private function connectShopee(array $account): array
+    {
+        $callback = DB::table('shopee_callbacks')
+            ->where('account_key', $account['key'])
+            ->whereNull('used_at')
+            ->latest('created_at')
+            ->first();
+
+        if ($callback) {
+            return $this->exchangeShopeeToken($callback);
+        }
+
+        $token = $this->latestActiveShopeeToken($account);
+
+        if ($token && $this->tokenDateIsFuture($token->expire_at ?? null)) {
+            $result = $this->refreshShopeeToken($account);
+
+            if (($result['status'] ?? '') === 'ok') {
+                return $result;
+            }
+        }
+
+        return [
+            'status' => 'redirect',
+            'action' => 'connect-'.$account['key'],
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'message' => 'Token '.$account['name'].' perlu authorization ulang.',
+            'redirect_url' => $this->buildShopeeAuthUrl($account),
+        ];
+    }
+
     private function exchangeShopeeToken(object $callback): array
     {
         $config = $this->shopeeConfig();
@@ -754,6 +820,20 @@ class OmnichannelController extends Controller
         ];
     }
 
+    private function latestActiveShopeeToken(array $account): ?object
+    {
+        if (! Schema::hasTable('shopee_tokens')) {
+            return null;
+        }
+
+        return DB::table('shopee_tokens')
+            ->where('account_key', $account['key'])
+            ->whereRaw('is_active = true')
+            ->whereNotNull('refresh_token')
+            ->latest('created_at')
+            ->first();
+    }
+
     private function storeShopeeToken(array $data, int $partnerId, object $callback): void
     {
         $shopIdList = $data['shop_id_list'] ?? [];
@@ -866,6 +946,38 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    private function connectTiktok(array $account): array
+    {
+        $callback = DB::table('tiktok_callbacks')
+            ->where('account_key', $account['key'])
+            ->whereNull('used_at')
+            ->latest('created_at')
+            ->first();
+
+        if ($callback) {
+            return $this->exchangeTiktokToken($account);
+        }
+
+        $token = $this->latestActiveTiktokToken($account);
+
+        if ($token && $this->tokenDateIsFuture($token->refresh_token_expire_at ?? null)) {
+            $result = $this->refreshTiktokToken($account);
+
+            if (($result['status'] ?? '') === 'ok') {
+                return $result;
+            }
+        }
+
+        return [
+            'status' => 'redirect',
+            'action' => 'connect-'.$account['key'],
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'message' => 'Token '.$account['name'].' perlu authorization ulang.',
+            'redirect_url' => $this->buildTiktokAuthUrl($account),
+        ];
+    }
+
     private function exchangeTiktokToken(array $account): array
     {
         $this->ensureTiktokAuthTables();
@@ -960,6 +1072,20 @@ class OmnichannelController extends Controller
         ];
     }
 
+    private function latestActiveTiktokToken(array $account): ?object
+    {
+        if (! Schema::hasTable('tiktok_tokens')) {
+            return null;
+        }
+
+        return DB::table('tiktok_tokens')
+            ->where('account_key', $account['key'])
+            ->whereRaw('is_active = true')
+            ->whereNotNull('refresh_token')
+            ->latest('created_at')
+            ->first();
+    }
+
     private function getTiktokAuthorizedShops(array $account): array
     {
         $this->ensureTiktokAuthTables();
@@ -1021,6 +1147,11 @@ class OmnichannelController extends Controller
 
         $expireIn = $expireAt ? (int) floor(now()->diffInSeconds($expireAt, false)) : null;
 
+        DB::table('tiktok_tokens')
+            ->where('account_key', $account['key'])
+            ->whereRaw('is_active = true')
+            ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
+
         DB::table('tiktok_tokens')->insert([
             'account_key' => $account['key'],
             'account_name' => $account['name'],
@@ -1075,6 +1206,19 @@ class OmnichannelController extends Controller
         return $seconds > time()
             ? Carbon::createFromTimestamp($seconds)
             : now()->addSeconds($seconds);
+    }
+
+    private function tokenDateIsFuture(mixed $value): bool
+    {
+        if (! $value) {
+            return false;
+        }
+
+        try {
+            return Carbon::parse($value)->isFuture();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function tiktokConfig(): array
@@ -1236,8 +1380,8 @@ class OmnichannelController extends Controller
         }
 
         return match ($action) {
-            'auth-shopee', 'get-token-shopee', 'refresh-token-shopee' => $this->resolveAccount('shopee-agnishopbjm', 'shopee'),
-            'auth-tiktok', 'get-token-tiktok', 'refresh-token-tiktok', 'get-auth-shop-tiktok' => $this->resolveAccount('tiktok-agnishopbjm', 'tiktok'),
+            'connect-shopee', 'auth-shopee', 'get-token-shopee', 'refresh-token-shopee' => $this->resolveAccount('shopee-agnishopbjm', 'shopee'),
+            'connect-tiktok', 'auth-tiktok', 'get-token-tiktok', 'refresh-token-tiktok', 'get-auth-shop-tiktok' => $this->resolveAccount('tiktok-agnishopbjm', 'tiktok'),
             default => null,
         };
     }
