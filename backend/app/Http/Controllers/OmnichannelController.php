@@ -929,7 +929,7 @@ class OmnichannelController extends Controller
             $pageSize = 100;
             $pageToken = null;
             $apiHost = rtrim((string) $config['api_host'], '/');
-            $searchUrl = $apiHost.'/product/202502/products/search';
+            $searchUrl = $apiHost.'/product/202309/products/search';
             $detailBaseUrl = $apiHost.'/product/202309/products/';
 
             do {
@@ -948,7 +948,7 @@ class OmnichannelController extends Controller
                 ];
                 $searchBodyString = json_encode($searchBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 $searchParams['sign'] = $this->generateTiktokSign(
-                    '/product/202502/products/search',
+                    '/product/202309/products/search',
                     $searchParams,
                     $config['app_secret'],
                     $searchBodyString
@@ -1356,6 +1356,8 @@ class OmnichannelController extends Controller
                 created_at TIMESTAMP DEFAULT NOW()
             )
         ");
+
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS sku_id TEXT NULL");
 
         DB::statement("
             CREATE TABLE IF NOT EXISTS tiktok_sync_logs (
