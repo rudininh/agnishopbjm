@@ -49,6 +49,20 @@ Route::get('assets/{path}', function (string $path) use ($frontendDist, $mimeTyp
     ]);
 })->where('path', '.*');
 
+Route::get('cached-images/{path}', function (string $path) {
+    $baseDir = storage_path('app/public');
+    $baseRoot = realpath($baseDir);
+    $filePath = realpath($baseDir.DIRECTORY_SEPARATOR.$path);
+
+    abort_if(! $baseRoot || ! $filePath || ! str_starts_with($filePath, $baseRoot), 404);
+    abort_if(! is_file($filePath), 404);
+
+    return response()->file($filePath, [
+        'Content-Type' => mime_content_type($filePath) ?: 'application/octet-stream',
+        'Cache-Control' => 'public, max-age=31536000, immutable',
+    ]);
+})->where('path', '.*');
+
 Route::fallback(function (Request $request) use ($frontendDist) {
     abort_if($request->is('api/*'), 404);
 

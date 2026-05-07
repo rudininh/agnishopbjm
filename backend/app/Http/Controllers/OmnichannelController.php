@@ -41,9 +41,11 @@ class OmnichannelController extends Controller
                 'shopee_products' => $this->tableCount('shopee_product'),
                 'shopee_variants' => $this->tableCount('shopee_product_model'),
                 'tiktok_products' => Schema::hasTable('tiktok_products')
-                    ? DB::table('tiktok_products')->distinct('product_id')->count('product_id')
+                    ? DB::table('tiktok_products')->whereRaw('COALESCE(is_active, true) = true')->distinct('product_id')->count('product_id')
                     : 0,
-                'tiktok_skus' => $this->tableCount('tiktok_products'),
+                'tiktok_skus' => Schema::hasTable('tiktok_products')
+                    ? DB::table('tiktok_products')->whereRaw('COALESCE(is_active, true) = true')->count()
+                    : 0,
                 'sku_mappings' => $this->tableCount('sku_mapping'),
                 'shopee_tokens' => $this->tableCount('shopee_tokens'),
                 'tiktok_tokens' => $this->tableCount('tiktok_tokens'),
@@ -463,6 +465,7 @@ class OmnichannelController extends Controller
             [
                 'shopee_product_id' => (string) $itemId,
                 'shopee_sku' => $modelId,
+                'shopee_seller_sku' => $modelSku !== '' ? $modelSku : null,
                 'product_name' => $itemName,
                 'variant_name' => $modelName,
                 'stock_qty' => $stock,
@@ -479,11 +482,13 @@ class OmnichannelController extends Controller
                 continue;
             }
 
-            if (! DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->where('image_url', $url)->exists()) {
+            $cachedUrl = $this->cacheMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'));
+
+            if (! DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->where('image_url', $cachedUrl)->exists()) {
                 DB::table('shopee_product_image')->insert([
                     'item_id' => $itemId,
                     'model_id' => $modelId,
-                    'image_url' => $url,
+                    'image_url' => $cachedUrl,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
@@ -845,6 +850,7 @@ class OmnichannelController extends Controller
         }
 
         $rows = DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true')
             ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'stock_qty', 'price', 'subtotal', 'updated_at')
             ->orderBy('product_name')
             ->orderBy('sku_name')
@@ -852,7 +858,7 @@ class OmnichannelController extends Controller
             ->groupBy('product_id');
 
         $lastSyncAt = Schema::hasTable('tiktok_products')
-            ? DB::table('tiktok_products')->max('updated_at')
+            ? DB::table('tiktok_products')->whereRaw('COALESCE(is_active, true) = true')->max('updated_at')
             : null;
 
         return response()->json([
@@ -1146,8 +1152,9 @@ class OmnichannelController extends Controller
         }
 
         $productName = (string) ($data['title'] ?? $data['product_name'] ?? 'TikTok Product');
-        $imageUrl = $this->extractTiktokImageUrl($data);
+        $imageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokImageUrl($data), 'tiktok', $productId, 'product');
         $skus = $this->normalizeTiktokSkuList($data);
+        $statusInfo = $this->tiktokPayloadStatusInfo($data);
 
         if (! is_array($skus) || $skus === []) {
             $skus = [[
@@ -1161,9 +1168,10 @@ class OmnichannelController extends Controller
         foreach ($skus as $sku) {
             $skuId = (string) ($sku['id'] ?? $sku['sku_id'] ?? $sku['sku_no'] ?? $sku['sku_code'] ?? '');
             $skuName = $this->deriveTiktokSkuName($sku);
+            $sellerSku = $this->extractTiktokSellerSku($sku);
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
-            $skuImageUrl = $this->extractTiktokSkuImageUrl($sku);
+            $skuImageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokSkuImageUrl($sku), 'tiktok', $productId, $skuId !== '' ? $skuId : $skuName);
 
             DB::table('tiktok_products')->updateOrInsert(
                 ['product_id' => $productId, 'sku_id' => $skuId !== '' ? $skuId : $skuName],
@@ -1172,9 +1180,13 @@ class OmnichannelController extends Controller
                     'sku_id' => $skuId !== '' ? $skuId : null,
                     'image_url' => $skuImageUrl,
                     'sku_name' => $skuName,
+                    'seller_sku' => $sellerSku,
                     'stock_qty' => $stock,
                     'price' => $price,
                     'subtotal' => $price * $stock,
+                    'product_status' => $statusInfo['product_status'],
+                    'audit_status' => $statusInfo['audit_status'],
+                    'is_active' => DB::raw($statusInfo['is_active'] ? 'true' : 'false'),
                     'updated_at' => now(),
                     'created_at' => now(),
                 ]
@@ -1203,6 +1215,72 @@ class OmnichannelController extends Controller
                 if ($skuImage) {
                     return $skuImage;
                 }
+            }
+        }
+
+        return null;
+    }
+
+    private function tiktokPayloadStatusInfo(array $data): array
+    {
+        $candidates = [
+            data_get($data, 'status'),
+            data_get($data, 'product_status'),
+            data_get($data, 'audit_status'),
+            data_get($data, 'display_status'),
+            data_get($data, 'status_text'),
+            data_get($data, 'listing_status'),
+        ];
+
+        $normalized = collect($candidates)
+            ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+            ->map(fn ($value) => strtoupper(trim((string) $value)))
+            ->first();
+
+        if ($normalized === null) {
+            $normalized = 'LIVE';
+        }
+
+        $inactiveNeedles = ['DELETE', 'DELETED', 'DEACTIVATED', 'INACTIVE', 'DRAFT', 'FREEZE', 'FROZEN', 'REJECT', 'REMOVED', 'PENDING', 'SELLER_DEACTIVATED', 'PLATFORM_DEACTIVATED'];
+        $activeNeedles = ['LIVE', 'ACTIVE', 'NORMAL', 'PUBLISHED', 'APPROVED'];
+
+        foreach ($inactiveNeedles as $needle) {
+            if (str_contains($normalized, $needle)) {
+                return [
+                    'product_status' => data_get($data, 'product_status', $normalized),
+                    'audit_status' => data_get($data, 'audit_status', null),
+                    'is_active' => false,
+                ];
+            }
+        }
+
+        foreach ($activeNeedles as $needle) {
+            if (str_contains($normalized, $needle)) {
+                return [
+                    'product_status' => data_get($data, 'product_status', $normalized),
+                    'audit_status' => data_get($data, 'audit_status', null),
+                    'is_active' => true,
+                ];
+            }
+        }
+
+        return [
+            'product_status' => data_get($data, 'product_status', $normalized),
+            'audit_status' => data_get($data, 'audit_status', null),
+            'is_active' => true,
+        ];
+    }
+
+    private function extractTiktokSellerSku(array $sku): ?string
+    {
+        foreach ([
+            data_get($sku, 'seller_sku'),
+            data_get($sku, 'sku_code'),
+            data_get($sku, 'sku_no'),
+            data_get($sku, 'sellerSku'),
+        ] as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return trim($candidate);
             }
         }
 
@@ -1247,6 +1325,89 @@ class OmnichannelController extends Controller
         }
 
         return null;
+    }
+
+    private function cacheMarketplaceImageUrl(?string $sourceUrl, string $channel, string $scope, string $variant = 'image'): ?string
+    {
+        if (! is_string($sourceUrl)) {
+            return null;
+        }
+
+        $sourceUrl = trim($sourceUrl);
+        if ($sourceUrl === '') {
+            return null;
+        }
+
+        if (! preg_match('#^https?://#i', $sourceUrl)) {
+            return $sourceUrl;
+        }
+
+        $cacheDir = storage_path('app/public/marketplace-images/'.$channel);
+        if (! is_dir($cacheDir)) {
+            @mkdir($cacheDir, 0775, true);
+        }
+
+        $hash = sha1($channel.'|'.$scope.'|'.$variant.'|'.$sourceUrl);
+        $extension = $this->guessImageExtensionFromUrl($sourceUrl);
+        $fileName = $hash.$extension;
+        $absolutePath = $cacheDir.DIRECTORY_SEPARATOR.$fileName;
+
+        if (! is_file($absolutePath)) {
+            try {
+                $response = Http::timeout(30)
+                    ->retry(2, 250)
+                    ->accept('image/*')
+                    ->get($sourceUrl);
+
+                if ($response->successful()) {
+                    $body = $response->body();
+                    if (is_string($body) && $body !== '') {
+                        $contentType = strtolower((string) $response->header('Content-Type', ''));
+                        if ($extension === '' || $extension === '.bin') {
+                            $extension = $this->guessImageExtensionFromContentType($contentType);
+                            $fileName = $hash.$extension;
+                            $absolutePath = $cacheDir.DIRECTORY_SEPARATOR.$fileName;
+                        }
+
+                        file_put_contents($absolutePath, $body);
+                    }
+                }
+            } catch (\Throwable) {
+                return $sourceUrl;
+            }
+        }
+
+        if (is_file($absolutePath)) {
+            return '/cached-images/marketplace-images/'.$channel.'/'.$fileName;
+        }
+
+        return $sourceUrl;
+    }
+
+    private function guessImageExtensionFromUrl(string $url): string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path)) {
+            return '.jpg';
+        }
+
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        return match ($extension) {
+            'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif' => '.'.$extension,
+            default => '.jpg',
+        };
+    }
+
+    private function guessImageExtensionFromContentType(string $contentType): string
+    {
+        return match (true) {
+            str_contains($contentType, 'png') => '.png',
+            str_contains($contentType, 'webp') => '.webp',
+            str_contains($contentType, 'gif') => '.gif',
+            str_contains($contentType, 'bmp') => '.bmp',
+            str_contains($contentType, 'avif') => '.avif',
+            default => '.jpg',
+        };
     }
 
     private function deriveTiktokSkuName(array $sku): string
@@ -1403,15 +1564,23 @@ class OmnichannelController extends Controller
                 product_name TEXT NULL,
                 image_url TEXT NULL,
                 sku_name TEXT NULL,
+                seller_sku TEXT NULL,
                 stock_qty INTEGER DEFAULT 0,
                 price BIGINT DEFAULT 0,
                 subtotal BIGINT DEFAULT 0,
+                product_status TEXT NULL,
+                audit_status TEXT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
                 updated_at TIMESTAMP DEFAULT NOW(),
                 created_at TIMESTAMP DEFAULT NOW()
             )
         ");
 
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS sku_id TEXT NULL");
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS seller_sku TEXT NULL");
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS product_status TEXT NULL");
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS audit_status TEXT NULL");
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE");
 
         DB::statement("
             CREATE TABLE IF NOT EXISTS tiktok_sync_logs (
@@ -1441,6 +1610,7 @@ class OmnichannelController extends Controller
                 tiktok_product_id TEXT NULL,
                 tiktok_sku_id TEXT NULL,
                 tiktok_sku_name TEXT NULL,
+                seller_sku TEXT NULL,
                 internal_image_url TEXT NULL,
                 shopee_image_url TEXT NULL,
                 tiktok_image_url TEXT NULL,
@@ -1453,8 +1623,11 @@ class OmnichannelController extends Controller
         DB::statement("CREATE INDEX IF NOT EXISTS sku_mappings_stock_master_id_idx ON sku_mappings (stock_master_id)");
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS shopee_product_id TEXT NULL");
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS shopee_sku TEXT NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS shopee_seller_sku TEXT NULL");
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS tiktok_product_id TEXT NULL");
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS tiktok_sku TEXT NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS tiktok_seller_sku TEXT NULL");
+        DB::statement("ALTER TABLE sku_mappings ADD COLUMN IF NOT EXISTS seller_sku TEXT NULL");
     }
 
     public function skuMapping(Request $request): JsonResponse
@@ -1480,111 +1653,234 @@ class OmnichannelController extends Controller
             ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
                 $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
             })
-            ->leftJoin('tiktok_products as tp', function ($join) {
-                $join->on('tp.product_id', '=', DB::raw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, ''))"))
-                    ->on('tp.sku_name', '=', DB::raw("COALESCE(NULLIF(map.tiktok_sku_name, ''), NULLIF(sm.variant_name, ''))"));
-            })
             ->select(
-                'sm.id',
-                'sm.internal_sku',
-                'sm.shopee_product_id as stock_shopee_item_id',
-                'sm.shopee_sku as stock_shopee_model_id',
-                'sm.product_name',
-                'sm.variant_name',
-                'sm.stock_qty',
-                'sm.tiktok_product_id as stock_tiktok_product_id',
-                'sm.tiktok_sku as stock_tiktok_sku_id',
-                'sm.updated_at',
-                'map.id as mapping_id',
-                'map.shopee_item_id',
-                'map.shopee_model_id',
-                'map.tiktok_product_id as mapped_tiktok_product_id',
-                'map.tiktok_sku_id',
-                'map.tiktok_sku_name',
-                'map.internal_image_url',
-                'map.shopee_image_url',
-                'map.tiktok_image_url',
-                'map.notes',
-                'sp.name as shopee_name',
-                'spm.name as shopee_variant_name',
-                'spm.stock as shopee_variant_stock',
-                'spmi.image_url as shopee_model_image_url',
-                'spi.image_url as shopee_product_image_url',
-                'tp.product_name as tiktok_product_name',
-                'tp.sku_name as tiktok_variant_name',
-                'tp.stock_qty as tiktok_stock_qty',
-                'tp.image_url as tiktok_cache_image_url'
+            'sm.id',
+            'sm.internal_sku',
+            'sm.shopee_product_id as stock_shopee_item_id',
+            'sm.shopee_sku as stock_shopee_model_id',
+            'sm.shopee_seller_sku as stock_shopee_seller_sku',
+            'sm.product_name',
+            'sm.variant_name',
+            'sm.stock_qty',
+            'sm.tiktok_product_id as stock_tiktok_product_id',
+            'sm.tiktok_sku as stock_tiktok_sku_id',
+            'sm.tiktok_seller_sku as stock_tiktok_seller_sku',
+            'sm.updated_at',
+            'map.id as mapping_id',
+            'map.shopee_item_id',
+            'map.shopee_model_id',
+            'map.tiktok_product_id as mapped_tiktok_product_id',
+            'map.tiktok_sku_id',
+            'map.tiktok_sku_name',
+            'map.seller_sku as mapped_seller_sku',
+            'map.internal_image_url',
+            'map.shopee_image_url',
+            'map.tiktok_image_url',
+            'map.notes',
+            'sp.name as shopee_name',
+            'spm.name as shopee_variant_name',
+            'spm.stock as shopee_variant_stock',
+            'spmi.image_url as shopee_model_image_url',
+            'spi.image_url as shopee_product_image_url'
+        );
+
+        $rows = $query->get();
+        $tiktokLookup = $this->tiktokSkuMappingLookup();
+        $tiktokProductGroups = $tiktokLookup['product_groups'];
+        $stockGroupTiktokMatches = $this->suggestTiktokProductsForStockGroups($rows, $tiktokProductGroups);
+        $matchedTiktokToStockGroup = [];
+        foreach ($stockGroupTiktokMatches as $stockGroupKey => $productId) {
+            if ($productId !== null && $productId !== '' && ! isset($matchedTiktokToStockGroup[$productId])) {
+                $matchedTiktokToStockGroup[$productId] = $stockGroupKey;
+            }
+        }
+        $matchedTiktokVariantKeys = [];
+        $items = [];
+
+        foreach ($rows as $row) {
+            $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
+            $shopeeModelId = $row->shopee_model_id ?: $row->stock_shopee_model_id;
+            $shopeeSellerSku = $row->mapped_seller_sku ?: $row->stock_shopee_seller_sku;
+            $statusShopee = $shopeeModelId ? 'mapped' : ($shopeeItemId ? 'partial' : 'unmapped');
+            $stockGroupKey = $this->stockMappingGroupKey($row);
+            $matchedProductId = $stockGroupTiktokMatches[$stockGroupKey] ?? null;
+            $canonicalGroupKey = $matchedProductId && isset($matchedTiktokToStockGroup[$matchedProductId])
+                ? $matchedTiktokToStockGroup[$matchedProductId]
+                : $stockGroupKey;
+
+            [$tiktokMatch, $tiktokMatchSource] = $this->resolveSkuMappingTiktokMatch(
+                $row,
+                $tiktokLookup,
+                $matchedProductId
             );
 
-        if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->where('sm.internal_sku', 'ilike', '%'.$search.'%')
-                    ->orWhere('sm.product_name', 'ilike', '%'.$search.'%')
-                    ->orWhere('sm.variant_name', 'ilike', '%'.$search.'%');
-            });
+            $tiktokProductId = $row->mapped_tiktok_product_id ?: $row->stock_tiktok_product_id;
+            $tiktokSkuId = $row->tiktok_sku_id ?: $row->stock_tiktok_sku_id;
+            $tiktokSkuName = $row->tiktok_sku_name ?: null;
+            $tiktokSellerSku = $row->mapped_seller_sku ?: $row->stock_tiktok_seller_sku ?: ($tiktokMatch->seller_sku ?? null);
+            $hasSavedTiktokMapping = $this->filledString($tiktokProductId)
+                || $this->filledString($tiktokSkuId)
+                || $this->filledString($tiktokSkuName)
+                || $this->filledString($tiktokSellerSku);
+            $statusTikTok = $hasSavedTiktokMapping
+                ? 'mapped'
+                : ($tiktokMatch ? 'suggested' : 'unmapped');
+
+            $shopeeImageUrl = $row->shopee_image_url
+                ?: $row->shopee_model_image_url
+                ?: $row->shopee_product_image_url;
+            $tiktokImageUrl = $row->tiktok_image_url
+                ?: ($tiktokMatch->image_url ?? null)
+                ?: ($tiktokMatch->product_image_url ?? null);
+
+            if ($tiktokMatch) {
+                $matchedTiktokVariantKeys[$this->tiktokVariantKey($tiktokMatch)] = true;
+            }
+
+            $items[] = [
+                'id' => $row->id,
+                'group_key' => $canonicalGroupKey,
+                'stock_master_id' => $row->id,
+                'internal_sku' => $row->internal_sku,
+                'product_name' => $row->product_name,
+                'variant_name' => $row->variant_name,
+                'stock_qty' => (int) ($row->stock_qty ?? 0),
+                'image_url' => $row->internal_image_url ?: $shopeeImageUrl ?: $tiktokImageUrl ?: $row->shopee_product_image_url,
+                'mapping_id' => $row->mapping_id,
+                'seller_sku' => $shopeeSellerSku ?: $tiktokSellerSku,
+                'shopee' => [
+                    'item_id' => $shopeeItemId,
+                    'model_id' => $shopeeModelId,
+                    'product_name' => $row->shopee_name ?: $row->product_name,
+                    'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
+                    'seller_sku' => $shopeeSellerSku,
+                    'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
+                    'image_url' => $shopeeImageUrl,
+                    'status' => $statusShopee,
+                ],
+                'tiktok' => [
+                    'product_id' => $tiktokProductId ?: ($tiktokMatch->product_id ?? null),
+                    'sku_id' => $tiktokSkuId ?: ($tiktokMatch->sku_id ?? null),
+                    'sku_name' => $tiktokSkuName ?: ($tiktokMatch->sku_name ?? null),
+                    'seller_sku' => $tiktokSellerSku ?: ($tiktokMatch->seller_sku ?? null),
+                    'product_name' => $tiktokMatch->product_name ?? null,
+                    'variant_name' => $tiktokMatch->sku_name ?? $tiktokSkuName,
+                    'stock_qty' => $tiktokMatch ? (int) ($tiktokMatch->stock_qty ?? 0) : null,
+                    'image_url' => $tiktokImageUrl,
+                    'status' => $statusTikTok,
+                    'source' => $tiktokMatchSource,
+                ],
+                'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
+                    ? 'fully_mapped'
+                    : ($statusShopee === 'unmapped' && $statusTikTok === 'unmapped' ? 'unmapped' : 'partially_mapped'),
+                'updated_at' => $row->updated_at,
+            ];
         }
 
-        if ($status === 'mapped') {
-            $query->whereNotNull('map.id');
-        } elseif ($status === 'unmapped') {
-            $query->whereNull('map.id');
-        }
-
-        $orderColumn = match ($sort) {
-            'name_asc' => 'sm.product_name',
-            'created_desc' => 'sm.created_at',
-            default => 'sm.updated_at',
-        };
-        $orderDirection = $sort === 'name_asc' ? 'asc' : 'desc';
-
-        $items = $query->orderBy($orderColumn, $orderDirection)
-            ->limit(300)
+        $tiktokRows = $tiktokLookup['rows_by_product_id'] ?? DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'price', 'subtotal', 'updated_at')
+            ->orderBy('product_name')
+            ->orderBy('sku_name')
             ->get()
-            ->map(function ($row) {
-                $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
-                $shopeeModelId = $row->shopee_model_id ?: $row->stock_shopee_model_id;
-                $statusShopee = $shopeeModelId ? 'mapped' : ($shopeeItemId ? 'partial' : 'unmapped');
-                $tiktokProductId = $row->mapped_tiktok_product_id ?: $row->stock_tiktok_product_id;
-                $tiktokSkuId = $row->tiktok_sku_id ?: $row->stock_tiktok_sku_id;
-                $statusTikTok = $tiktokProductId ? 'mapped' : 'unmapped';
-                $shopeeImageUrl = $row->shopee_image_url
-                    ?: $row->shopee_model_image_url
-                    ?: $row->shopee_product_image_url;
-                $tiktokImageUrl = $row->tiktok_image_url ?: $row->tiktok_cache_image_url;
+            ->groupBy('product_id');
 
-                return [
-                    'id' => $row->id,
-                    'internal_sku' => $row->internal_sku,
-                    'product_name' => $row->product_name,
-                    'variant_name' => $row->variant_name,
-                    'stock_qty' => (int) ($row->stock_qty ?? 0),
-                    'image_url' => $row->internal_image_url ?: $shopeeImageUrl ?: $tiktokImageUrl ?: $row->shopee_product_image_url,
-                    'mapping_id' => $row->mapping_id,
+        foreach ($tiktokRows as $productId => $group) {
+            $canonicalGroupKey = isset($matchedTiktokToStockGroup[$productId])
+                ? $matchedTiktokToStockGroup[$productId]
+                : 'tiktok:'.$productId;
+            $groupFirst = $group->first();
+            $productImageUrl = $group->firstWhere('image_url')?->image_url ?? null;
+
+            foreach ($group as $skuRow) {
+                $variantKey = $this->tiktokVariantKey($skuRow);
+                if (isset($matchedTiktokVariantKeys[$variantKey])) {
+                    continue;
+                }
+
+                $items[] = [
+                    'id' => 'tiktok-'.$skuRow->product_id.'-'.($skuRow->sku_id ?: $this->normalizeSkuMatchValue($skuRow->sku_name ?? '')),
+                    'group_key' => $canonicalGroupKey,
+                    'stock_master_id' => null,
+                    'internal_sku' => null,
+                    'product_name' => $groupFirst->product_name ?? null,
+                    'variant_name' => $skuRow->sku_name,
+                    'stock_qty' => (int) ($skuRow->stock_qty ?? 0),
+                    'image_url' => $skuRow->image_url ?: $productImageUrl,
+                    'mapping_id' => null,
                     'shopee' => [
-                        'item_id' => $shopeeItemId,
-                        'model_id' => $shopeeModelId,
-                        'product_name' => $row->shopee_name ?: $row->product_name,
-                        'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
-                        'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
-                        'image_url' => $shopeeImageUrl,
-                        'status' => $statusShopee,
+                        'item_id' => null,
+                        'model_id' => null,
+                        'product_name' => null,
+                        'variant_name' => null,
+                        'stock_qty' => null,
+                        'image_url' => null,
+                        'status' => 'unmapped',
                     ],
                     'tiktok' => [
-                        'product_id' => $tiktokProductId,
-                        'sku_id' => $tiktokSkuId,
-                        'sku_name' => $row->tiktok_sku_name ?: $row->tiktok_variant_name,
-                        'product_name' => $row->tiktok_product_name,
-                        'variant_name' => $row->tiktok_variant_name,
-                        'stock_qty' => (int) ($row->tiktok_stock_qty ?? 0),
-                        'image_url' => $tiktokImageUrl,
-                        'status' => $statusTikTok,
+                        'product_id' => $skuRow->product_id,
+                        'sku_id' => $skuRow->sku_id ?? null,
+                        'sku_name' => $skuRow->sku_name,
+                        'product_name' => $skuRow->product_name,
+                        'variant_name' => $skuRow->sku_name,
+                        'stock_qty' => (int) ($skuRow->stock_qty ?? 0),
+                        'image_url' => $skuRow->image_url ?: $productImageUrl,
+                        'status' => 'mapped',
+                        'source' => 'actual',
                     ],
-                    'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
-                        ? 'fully_mapped'
-                        : ($statusShopee === 'unmapped' && $statusTikTok === 'unmapped' ? 'unmapped' : 'partially_mapped'),
-                    'updated_at' => $row->updated_at,
+                    'status' => 'partially_mapped',
+                    'updated_at' => $skuRow->updated_at,
                 ];
-            });
+            }
+        }
+
+        $items = collect($items)
+            ->filter(function (array $item) use ($search, $status) {
+                $matchesStatus = match ($status) {
+                    'mapped' => $item['shopee']['status'] !== 'unmapped' || $item['tiktok']['status'] !== 'unmapped',
+                    'unmapped' => $item['shopee']['status'] === 'unmapped' && $item['tiktok']['status'] === 'unmapped',
+                    default => true,
+                };
+
+                if (! $matchesStatus) {
+                    return false;
+                }
+
+                if ($search === '') {
+                    return true;
+                }
+
+                $haystack = implode(' ', array_filter([
+                    $item['internal_sku'] ?? '',
+                    $item['product_name'] ?? '',
+                    $item['variant_name'] ?? '',
+                    $item['shopee']['item_id'] ?? '',
+                    $item['shopee']['model_id'] ?? '',
+                    $item['tiktok']['product_id'] ?? '',
+                    $item['tiktok']['sku_id'] ?? '',
+                    $item['tiktok']['sku_name'] ?? '',
+                    $item['tiktok']['product_name'] ?? '',
+                ], fn ($value) => trim((string) $value) !== ''));
+
+                return str_contains(strtolower($haystack), strtolower($search));
+            })
+            ->sort(function (array $a, array $b) use ($sort) {
+                return match ($sort) {
+                    'name_asc' => strcmp(
+                        strtolower((string) ($a['product_name'] ?? '')),
+                        strtolower((string) ($b['product_name'] ?? ''))
+                    ),
+                    'created_desc' => strcmp(
+                        (string) ($b['updated_at'] ?? ''),
+                        (string) ($a['updated_at'] ?? '')
+                    ),
+                    default => strcmp(
+                        (string) ($b['updated_at'] ?? ''),
+                        (string) ($a['updated_at'] ?? '')
+                    ),
+                };
+            })
+            ->values();
 
         return response()->json([
             'summary' => [
@@ -1595,6 +1891,383 @@ class OmnichannelController extends Controller
             ],
             'items' => $items,
         ]);
+    }
+
+    private function tiktokSkuMappingLookup(): array
+    {
+        $empty = [
+            'by_sku_id' => [],
+            'by_product_sku_id' => [],
+            'by_product_sku_name' => [],
+            'by_product_variant_name' => [],
+            'by_variant_name' => [],
+            'product_groups' => [],
+            'rows_by_product_id' => [],
+        ];
+
+        if (! Schema::hasTable('tiktok_products')) {
+            return $empty;
+        }
+
+        $rows = DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'updated_at')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return $empty;
+        }
+
+        $bySkuId = [];
+        $bySellerSku = [];
+        $byProductSellerSku = [];
+        $byProductSkuId = [];
+        $byProductSkuName = [];
+        $byProductVariantName = [];
+        $byVariantName = [];
+        $productGroups = [];
+        $rowsByProductId = $rows->groupBy('product_id');
+
+        foreach ($rowsByProductId as $productId => $group) {
+            $first = $group->first();
+            $productImageUrl = null;
+            $skuNames = [];
+            $sellerSkus = [];
+            $rowsBySkuName = [];
+            $rowsBySellerSku = [];
+
+            foreach ($group as $skuRow) {
+                if (! $this->filledString($productImageUrl) && $this->filledString($skuRow->image_url ?? null)) {
+                    $productImageUrl = $skuRow->image_url;
+                }
+            }
+
+            foreach ($group as $skuRow) {
+                $skuRow->product_image_url = $productImageUrl;
+                $skuNameKey = $this->normalizeSkuMatchValue($skuRow->sku_name ?? '');
+                $sellerSkuKey = $this->normalizeSkuMatchValue($skuRow->seller_sku ?? '');
+
+                if ($skuNameKey !== '') {
+                    $skuNames[$skuNameKey] = true;
+                    $rowsBySkuName[$skuNameKey] ??= $skuRow;
+                }
+
+                if ($sellerSkuKey !== '') {
+                    $sellerSkus[$sellerSkuKey] = true;
+                    $rowsBySellerSku[$sellerSkuKey] ??= $skuRow;
+                }
+            }
+
+            $productGroups[(string) $productId] = [
+                'product_id' => (string) $productId,
+                'product_name' => $first->product_name ?? '',
+                'product_name_key' => $this->normalizeSkuMatchValue($first->product_name ?? ''),
+                'tokens' => $this->skuMappingNameTokens($first->product_name ?? ''),
+                'sku_names' => array_keys($skuNames),
+                'seller_skus' => array_keys($sellerSkus),
+                'rows_by_sku_name' => $rowsBySkuName,
+                'rows_by_seller_sku' => $rowsBySellerSku,
+            ];
+        }
+
+        $setFirst = function (array &$index, string $key, object $row): void {
+            if ($key !== '' && ! isset($index[$key])) {
+                $index[$key] = $row;
+            }
+        };
+
+        foreach ($rows as $row) {
+            $productId = trim((string) ($row->product_id ?? ''));
+            $skuId = trim((string) ($row->sku_id ?? ''));
+            $skuNameKey = $this->normalizeSkuMatchValue($row->sku_name ?? '');
+            $sellerSkuKey = $this->normalizeSkuMatchValue($row->seller_sku ?? '');
+            $productNameKey = $this->normalizeSkuMatchValue($row->product_name ?? '');
+
+            if ($skuId !== '') {
+                $setFirst($bySkuId, $skuId, $row);
+            }
+
+            if ($sellerSkuKey !== '') {
+                $setFirst($bySellerSku, $sellerSkuKey, $row);
+            }
+
+            if ($productId !== '' && $skuId !== '') {
+                $setFirst($byProductSkuId, $productId.'|'.$skuId, $row);
+            }
+
+            if ($productId !== '' && $sellerSkuKey !== '') {
+                $setFirst($byProductSellerSku, $productId.'|'.$sellerSkuKey, $row);
+            }
+
+            if ($productId !== '' && $skuNameKey !== '') {
+                $setFirst($byProductSkuName, $productId.'|'.$skuNameKey, $row);
+            }
+
+            if ($productNameKey !== '' && $skuNameKey !== '') {
+                $setFirst($byProductVariantName, $productNameKey.'|'.$skuNameKey, $row);
+            }
+
+            if ($skuNameKey !== '') {
+                $byVariantName[$skuNameKey] ??= [];
+                $byVariantName[$skuNameKey][] = $row;
+            }
+        }
+
+        return [
+            'by_sku_id' => $bySkuId,
+            'by_seller_sku' => $bySellerSku,
+            'by_product_seller_sku' => $byProductSellerSku,
+            'by_product_sku_id' => $byProductSkuId,
+            'by_product_sku_name' => $byProductSkuName,
+            'by_product_variant_name' => $byProductVariantName,
+            'by_variant_name' => $byVariantName,
+            'product_groups' => $productGroups,
+            'rows_by_product_id' => $rowsByProductId,
+        ];
+    }
+
+    private function suggestTiktokProductsForStockGroups($rows, array $tiktokProductGroups): array
+    {
+        if ($rows->isEmpty() || $tiktokProductGroups === []) {
+            return [];
+        }
+
+        $stockGroups = [];
+
+        foreach ($rows as $row) {
+            $groupKey = $this->stockMappingGroupKey($row);
+
+            if (! isset($stockGroups[$groupKey])) {
+                $stockGroups[$groupKey] = [
+                    'product_name_key' => $this->normalizeSkuMatchValue($row->product_name ?? ''),
+                    'tokens' => $this->skuMappingNameTokens($row->product_name ?? ''),
+                    'variant_names' => [],
+                ];
+            }
+
+            $variantKey = $this->normalizeSkuMatchValue($row->variant_name ?? '');
+            if ($variantKey !== '') {
+                $stockGroups[$groupKey]['variant_names'][$variantKey] = true;
+            }
+        }
+
+        $matches = [];
+
+        foreach ($stockGroups as $groupKey => $stockGroup) {
+            $variantNames = array_keys($stockGroup['variant_names']);
+            if ($variantNames === []) {
+                continue;
+            }
+
+            $bestProductId = null;
+            $bestScore = 0;
+
+            foreach ($tiktokProductGroups as $productId => $tiktokGroup) {
+                $variantOverlap = count(array_intersect($variantNames, $tiktokGroup['sku_names']));
+
+                if ($variantOverlap === 0) {
+                    continue;
+                }
+
+                $tokenOverlap = count(array_intersect($stockGroup['tokens'], $tiktokGroup['tokens']));
+                $nameContains = $stockGroup['product_name_key'] !== ''
+                    && $tiktokGroup['product_name_key'] !== ''
+                    && (
+                        str_contains($stockGroup['product_name_key'], $tiktokGroup['product_name_key'])
+                        || str_contains($tiktokGroup['product_name_key'], $stockGroup['product_name_key'])
+                    );
+
+                if ($variantOverlap < 2 && $tokenOverlap < 2 && ! $nameContains) {
+                    continue;
+                }
+
+                $score = ($variantOverlap * 1000) + ($tokenOverlap * 50) + ($nameContains ? 25 : 0);
+
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $bestProductId = (string) $productId;
+                }
+            }
+
+            if ($bestProductId !== null) {
+                $matches[$groupKey] = $bestProductId;
+            }
+        }
+
+        return $matches;
+    }
+
+    private function resolveSkuMappingTiktokMatch(object $row, array $lookup, ?string $suggestedProductId): array
+    {
+        $productId = trim((string) (($row->mapped_tiktok_product_id ?: $row->stock_tiktok_product_id) ?? ''));
+        $skuId = trim((string) (($row->tiktok_sku_id ?: $row->stock_tiktok_sku_id) ?? ''));
+        $sellerSku = '';
+        foreach ([
+            $row->mapped_seller_sku ?? null,
+            $row->stock_tiktok_seller_sku ?? null,
+            $row->stock_shopee_seller_sku ?? null,
+        ] as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                $sellerSku = trim($candidate);
+                break;
+            }
+        }
+        $sellerSkuKey = $this->normalizeSkuMatchValue($sellerSku);
+        $savedSkuNameKey = $this->normalizeSkuMatchValue($row->tiktok_sku_name ?? '');
+        $variantKey = $this->normalizeSkuMatchValue($row->variant_name ?? '');
+        $productNameKey = $this->normalizeSkuMatchValue($row->product_name ?? '');
+        $lookupSkuNameKey = $savedSkuNameKey !== '' ? $savedSkuNameKey : $variantKey;
+        $hasSavedMapping = $this->filledString($productId) || $this->filledString($skuId) || $savedSkuNameKey !== '' || $sellerSku !== '';
+
+        foreach ([
+            $productId !== '' && $sellerSkuKey !== '' ? ['by_product_seller_sku', $productId.'|'.$sellerSkuKey] : null,
+            $sellerSkuKey !== '' ? ['by_seller_sku', $sellerSkuKey] : null,
+            $productId !== '' && $skuId !== '' ? ['by_product_sku_id', $productId.'|'.$skuId] : null,
+            $skuId !== '' ? ['by_sku_id', $skuId] : null,
+            $productId !== '' && $lookupSkuNameKey !== '' ? ['by_product_sku_name', $productId.'|'.$lookupSkuNameKey] : null,
+        ] as $candidate) {
+            if ($candidate && isset($lookup[$candidate[0]][$candidate[1]])) {
+                return [$lookup[$candidate[0]][$candidate[1]], 'saved'];
+            }
+        }
+
+        if ($productId !== '' && $variantKey !== '') {
+            $match = $lookup['product_groups'][$productId]['rows_by_sku_name'][$variantKey] ?? null;
+            if ($match) {
+                return [$match, 'saved'];
+            }
+        }
+
+        if ($productId !== '' && $sellerSkuKey !== '') {
+            $match = $lookup['product_groups'][$productId]['rows_by_seller_sku'][$sellerSkuKey] ?? null;
+            if ($match) {
+                return [$match, 'saved'];
+            }
+        }
+
+        if ($productNameKey !== '' && $variantKey !== '') {
+            $match = $lookup['by_product_variant_name'][$productNameKey.'|'.$variantKey] ?? null;
+            if ($match) {
+                return [$match, $hasSavedMapping ? 'saved' : 'suggested'];
+            }
+        }
+
+        if ($suggestedProductId && $variantKey !== '') {
+            $match = $lookup['product_groups'][$suggestedProductId]['rows_by_sku_name'][$variantKey] ?? null;
+            if ($match) {
+                return [$match, $hasSavedMapping ? 'saved' : 'suggested'];
+            }
+        }
+
+        if ($variantKey !== '') {
+            $match = $this->bestTiktokVariantCandidateForStockRow(
+                $row,
+                $lookup['by_variant_name'][$variantKey] ?? [],
+                $lookup['product_groups']
+            );
+
+            if ($match) {
+                return [$match, $hasSavedMapping ? 'saved' : 'suggested'];
+            }
+        }
+
+        return [null, $hasSavedMapping ? 'saved' : null];
+    }
+
+    private function bestTiktokVariantCandidateForStockRow(object $row, array $candidates, array $tiktokProductGroups): ?object
+    {
+        if ($candidates === []) {
+            return null;
+        }
+
+        $stockTokens = $this->skuMappingNameTokens($row->product_name ?? '');
+        $stockProductNameKey = $this->normalizeSkuMatchValue($row->product_name ?? '');
+        $bestMatch = null;
+        $bestScore = 0;
+
+        foreach ($candidates as $candidate) {
+            $productId = (string) ($candidate->product_id ?? '');
+            $tiktokGroup = $tiktokProductGroups[$productId] ?? null;
+
+            if (! $tiktokGroup) {
+                continue;
+            }
+
+            $tokenOverlap = count(array_intersect($stockTokens, $tiktokGroup['tokens']));
+            $nameContains = $stockProductNameKey !== ''
+                && $tiktokGroup['product_name_key'] !== ''
+                && (
+                    str_contains($stockProductNameKey, $tiktokGroup['product_name_key'])
+                    || str_contains($tiktokGroup['product_name_key'], $stockProductNameKey)
+                );
+
+            if ($tokenOverlap < 2 && ! $nameContains) {
+                continue;
+            }
+
+            $score = ($tokenOverlap * 100) + ($nameContains ? 25 : 0);
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestMatch = $candidate;
+            }
+        }
+
+        return $bestMatch;
+    }
+
+    private function stockMappingGroupKey(object $row): string
+    {
+        $shopeeItemId = $row->shopee_item_id ?: ($row->stock_shopee_item_id ?? '');
+
+        if ($this->filledString($shopeeItemId)) {
+            return 'shopee:'.trim((string) $shopeeItemId);
+        }
+
+        $productNameKey = $this->normalizeSkuMatchValue($row->product_name ?? '');
+
+        return $productNameKey !== '' ? 'product:'.$productNameKey : 'stock:'.$row->id;
+    }
+
+    private function normalizeSkuMatchValue(mixed $value): string
+    {
+        $value = strtolower(trim((string) ($value ?? '')));
+        $value = preg_replace('/[^a-z0-9]+/i', ' ', $value) ?? '';
+
+        return trim(preg_replace('/\s+/', ' ', $value) ?? '');
+    }
+
+    private function tiktokVariantKey(object $row): string
+    {
+        $productId = trim((string) ($row->product_id ?? ''));
+        $skuId = trim((string) ($row->sku_id ?? ''));
+        $skuNameKey = $this->normalizeSkuMatchValue($row->sku_name ?? '');
+
+        if ($productId === '') {
+            return $skuId !== '' ? 'sku:'.$skuId : 'name:'.$skuNameKey;
+        }
+
+        if ($skuId !== '') {
+            return $productId.'|sku:'.$skuId;
+        }
+
+        return $productId.'|name:'.$skuNameKey;
+    }
+
+    private function skuMappingNameTokens(mixed $value): array
+    {
+        $tokens = preg_split('/\s+/', $this->normalizeSkuMatchValue($value), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $ignored = ['agni', 'and', 'bjm', 'by', 'dan', 'for', 'kw', 'ori', 'shop', 'the', 'yang'];
+
+        return array_values(array_unique(array_filter(
+            $tokens,
+            fn ($token) => strlen($token) >= 3 && ! in_array($token, $ignored, true)
+        )));
+    }
+
+    private function filledString(mixed $value): bool
+    {
+        return trim((string) ($value ?? '')) !== '';
     }
 
     public function saveSkuMapping(Request $request): JsonResponse
@@ -1608,6 +2281,7 @@ class OmnichannelController extends Controller
             'tiktok_product_id' => ['nullable', 'string'],
             'tiktok_sku_id' => ['nullable', 'string'],
             'tiktok_sku_name' => ['nullable', 'string'],
+            'seller_sku' => ['nullable', 'string'],
             'internal_image_url' => ['nullable', 'string'],
             'shopee_image_url' => ['nullable', 'string'],
             'tiktok_image_url' => ['nullable', 'string'],
@@ -1622,6 +2296,7 @@ class OmnichannelController extends Controller
                 'tiktok_product_id' => $data['tiktok_product_id'] ?? null,
                 'tiktok_sku_id' => $data['tiktok_sku_id'] ?? null,
                 'tiktok_sku_name' => $data['tiktok_sku_name'] ?? null,
+                'seller_sku' => $data['seller_sku'] ?? null,
                 'internal_image_url' => $data['internal_image_url'] ?? null,
                 'shopee_image_url' => $data['shopee_image_url'] ?? null,
                 'tiktok_image_url' => $data['tiktok_image_url'] ?? null,
@@ -1634,8 +2309,10 @@ class OmnichannelController extends Controller
         DB::table('stock_master')->where('id', $data['stock_master_id'])->update([
             'shopee_product_id' => $data['shopee_item_id'] ?? null,
             'shopee_sku' => $data['shopee_model_id'] ?? null,
+            'shopee_seller_sku' => $data['seller_sku'] ?? null,
             'tiktok_product_id' => $data['tiktok_product_id'] ?? null,
             'tiktok_sku' => $data['tiktok_sku_id'] ?? null,
+            'tiktok_seller_sku' => $data['seller_sku'] ?? null,
             'updated_at' => now(),
         ]);
 
@@ -1651,23 +2328,27 @@ class OmnichannelController extends Controller
                         SELECT 1 FROM tiktok_products tp
                         WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
                           AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+                          AND COALESCE(tp.is_active, true) = true
                     )
                 ) AS total_match,
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM tiktok_products tp
                         WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+                          AND COALESCE(tp.is_active, true) = true
                     )
                     AND NOT EXISTS (
                         SELECT 1 FROM tiktok_products tp
                         WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
                           AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+                          AND COALESCE(tp.is_active, true) = true
                     )
                 ) AS total_variant_missing,
                 COUNT(*) FILTER (
                     WHERE NOT EXISTS (
                         SELECT 1 FROM tiktok_products tp
                         WHERE LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
+                          AND COALESCE(tp.is_active, true) = true
                     )
                 ) AS total_product_missing,
                 COUNT(*) AS total_all
@@ -1703,6 +2384,7 @@ class OmnichannelController extends Controller
             LEFT JOIN tiktok_products tp
               ON LOWER(TRIM(tp.product_name)) = LOWER(TRIM(sm.product_name))
              AND LOWER(TRIM(tp.sku_name)) = LOWER(TRIM(sm.variant_name))
+             AND COALESCE(tp.is_active, true) = true
             ORDER BY status_order, sm.product_name, sm.variant_name
         ");
 
@@ -1717,7 +2399,8 @@ class OmnichannelController extends Controller
         $rows = DB::table('stock_master as sm')
             ->leftJoin('tiktok_products as tp', function ($join) {
                 $join->on('tp.product_id', '=', 'sm.tiktok_product_id')
-                    ->on('tp.sku_name', '=', 'sm.variant_name');
+                    ->on('tp.sku_name', '=', 'sm.variant_name')
+                    ->whereRaw('COALESCE(tp.is_active, true) = true');
             })
             ->whereNotNull('sm.tiktok_product_id')
             ->where('sm.tiktok_product_id', '<>', '')
@@ -3179,11 +3862,13 @@ class OmnichannelController extends Controller
                 internal_sku TEXT UNIQUE NOT NULL,
                 shopee_product_id TEXT NULL,
                 shopee_sku TEXT NULL,
+                shopee_seller_sku TEXT NULL,
                 product_name TEXT NULL,
                 variant_name TEXT NULL,
                 stock_qty INTEGER DEFAULT 0,
                 tiktok_product_id TEXT NULL,
                 tiktok_sku TEXT NULL,
+                tiktok_seller_sku TEXT NULL,
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW()
             )
@@ -3206,7 +3891,7 @@ class OmnichannelController extends Controller
             'shopee_product' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()'],
             'shopee_product_model' => ['created_at TIMESTAMP DEFAULT NOW()'],
             'shopee_product_image' => ['updated_at TIMESTAMP DEFAULT NOW()'],
-            'stock_master' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'tiktok_product_id TEXT NULL', 'tiktok_sku TEXT NULL'],
+            'stock_master' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'shopee_seller_sku TEXT NULL', 'tiktok_product_id TEXT NULL', 'tiktok_sku TEXT NULL', 'tiktok_seller_sku TEXT NULL'],
         ] as $table => $columns) {
             foreach ($columns as $definition) {
                 DB::statement('ALTER TABLE '.$table.' ADD COLUMN IF NOT EXISTS '.$definition);
