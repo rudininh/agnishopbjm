@@ -934,10 +934,25 @@ class OmnichannelController extends Controller
 
             do {
                 $timestamp = time();
+                $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
+                if ($shopCipher === '') {
+                    return [
+                        'status' => 'error',
+                        'message' => 'Shop cipher TikTok belum tersimpan. Jalankan GET AUTH SHOP dulu.',
+                        'products' => 0,
+                        'variants' => 0,
+                        'debug' => [
+                            'shop' => $shop,
+                            'shop_cipher' => $shopCipher,
+                            'access_token_present' => $accessToken !== '',
+                            'app_key' => $config['app_key'] ?? null,
+                        ],
+                    ];
+                }
                 $searchParams = [
                     'app_key' => $config['app_key'],
                     'timestamp' => $timestamp,
-                    'shop_cipher' => $shop->cipher,
+                    'shop_cipher' => $shopCipher,
                     'page_size' => $pageSize,
                 ];
                 if ($pageToken) {
