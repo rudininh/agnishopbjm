@@ -101,11 +101,25 @@ class OmnichannelController extends Controller
             ->get()
             ->groupBy('item_id');
 
-        $images = DB::table('shopee_product_image')
-            ->select('item_id', DB::raw('MIN(image_url) as image_url'))
+        $productImages = DB::table('shopee_product_image')
+            ->select('item_id', 'image_url', 'created_at', 'id')
             ->whereNotNull('image_url')
+            ->whereNull('model_id')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get()
             ->groupBy('item_id')
-            ->pluck('image_url', 'item_id');
+            ->map(fn ($rows) => $rows->first()->image_url);
+
+        $modelImages = DB::table('shopee_product_image')
+            ->select('item_id', 'model_id', 'image_url', 'created_at', 'id')
+            ->whereNotNull('image_url')
+            ->whereNotNull('model_id')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('item_id')
+            ->map(fn ($rows) => $rows->groupBy('model_id')->map(fn ($modelRows) => $modelRows->first()->image_url));
 
         $lastSyncAt = DB::table('shopee_sync_logs')->latest('synced_at')->value('synced_at')
             ?: DB::table('shopee_product')->max('updated_at');
@@ -126,7 +140,7 @@ class OmnichannelController extends Controller
                 'item_id' => (string) $item->item_id,
                 'shop_id' => $item->shop_id ? (string) $item->shop_id : null,
                 'shop_name' => $shopNames[(string) $item->shop_id] ?? 'Shopee',
-                'image_url' => $images[$item->item_id] ?? null,
+                'image_url' => $productImages[$item->item_id] ?? null,
                 'nama' => $item->name,
                 'sku' => (string) $item->item_id,
                 'stok' => (int) ($item->stock ?? 0),
@@ -145,6 +159,8 @@ class OmnichannelController extends Controller
                     'name' => $model->name,
                     'price' => (int) ($model->price ?? 0),
                     'stock' => (int) ($model->stock ?? 0),
+                    'image_url' => $modelImages[$item->item_id][$model->model_id] ?? null,
+                    'fallback_image_url' => $productImages[$item->item_id] ?? null,
                     'updated_at' => $model->updated_at,
                 ])->values(),
             ])->values(),
@@ -193,9 +209,11 @@ class OmnichannelController extends Controller
                 }
 
                 foreach ($baseItems as $baseItem) {
-                    $models = $this->fetchShopeeModelList($config, $shopId, $accessToken, (int) ($baseItem['item_id'] ?? 0));
+                    $modelPayload = $this->fetchShopeeModelList($config, $shopId, $accessToken, (int) ($baseItem['item_id'] ?? 0));
+                    $models = data_get($modelPayload, 'model', []);
+                    $tierVariations = data_get($modelPayload, 'tier_variation', []);
                     $variantCount += max(1, count($models));
-                    $this->storeShopeeProductPayload($baseItem, $models, $shopId);
+                    $this->storeShopeeProductPayload($baseItem, $models, $tierVariations, $shopId);
                 }
 
                 $productCount += count($baseItems);
@@ -332,7 +350,7 @@ class OmnichannelController extends Controller
             'item_id' => $itemId,
         ]);
 
-        return data_get($response, 'response.model', []);
+        return data_get($response, 'response', []);
     }
 
     private function shopeeSignedGet(array $config, string $path, int $shopId, string $accessToken, array $params = []): array
@@ -361,7 +379,7 @@ class OmnichannelController extends Controller
         return $data;
     }
 
-    private function storeShopeeProductPayload(array $item, array $models, int $shopId): void
+    private function storeShopeeProductPayload(array $item, array $models, array $tierVariations, int $shopId): void
     {
         $itemId = (int) ($item['item_id'] ?? 0);
 
@@ -413,6 +431,7 @@ class OmnichannelController extends Controller
 
         foreach ($models as $model) {
             $this->storeShopeeModelPayload($itemId, (string) ($item['item_name'] ?? ''), $model);
+            $this->storeShopeeImages($itemId, (string) ($model['model_id'] ?? '0'), $this->shopeeModelImageUrls($model, $tierVariations));
         }
     }
 
@@ -470,6 +489,175 @@ class OmnichannelController extends Controller
                 ]);
             }
         }
+    }
+
+    private function shopeeModelImageUrls(array $model, array $tierVariations): array
+    {
+        return $this->imageUrlsFromCandidates([
+            data_get($model, 'image'),
+            data_get($model, 'image_id'),
+            data_get($model, 'image_url'),
+            data_get($model, 'image_info.image_id'),
+            data_get($model, 'image_info.image_url'),
+            data_get($model, 'image_info.image_url_list'),
+            data_get($model, 'image_info.image.url'),
+            data_get($model, 'image_info.image.urls'),
+            data_get($model, 'image.image_id'),
+            data_get($model, 'image.image_url'),
+            data_get($model, 'image.image_url_list'),
+            ...$this->shopeeTierVariationImageCandidates($model, $tierVariations),
+        ]);
+    }
+
+    private function shopeeTierVariationImageCandidates(array $model, array $tierVariations): array
+    {
+        $tierIndexes = $this->normalizeShopeeIndexList(data_get($model, 'tier_index', []));
+
+        if (! is_array($tierIndexes) || ! is_array($tierVariations)) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($tierIndexes as $tierPosition => $optionIndex) {
+            if (! is_numeric($optionIndex)) {
+                continue;
+            }
+
+            $option = data_get($tierVariations, $tierPosition.'.option_list.'.((int) $optionIndex), []);
+
+            if (! is_array($option)) {
+                continue;
+            }
+
+            $candidates[] = data_get($option, 'image');
+            $candidates[] = data_get($option, 'image.image_id');
+            $candidates[] = data_get($option, 'image.image_url');
+            $candidates[] = data_get($option, 'image.image_url_list');
+            $candidates[] = data_get($option, 'image.url');
+            $candidates[] = data_get($option, 'image.urls');
+            $candidates[] = data_get($option, 'image_id');
+            $candidates[] = data_get($option, 'image_url');
+            $candidates[] = data_get($option, 'image_url_list');
+        }
+
+        return $candidates;
+    }
+
+    private function normalizeShopeeIndexList(mixed $value): array
+    {
+        if (is_array($value)) {
+            return array_values(array_filter($value, fn ($item) => $item !== null && $item !== ''));
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value, "[] \t\n\r\0\x0B");
+
+            if ($trimmed === '') {
+                return [];
+            }
+
+            return preg_split('/[\s,]+/', $trimmed, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        }
+
+        if (is_numeric($value)) {
+            return [(string) $value];
+        }
+
+        return [];
+    }
+
+    private function imageUrlsFromCandidates(array $candidates): array
+    {
+        $urls = [];
+
+        $collect = function (mixed $value) use (&$collect, &$urls): void {
+            if (is_string($value)) {
+                $trimmed = trim($value);
+
+                if ($trimmed !== '' && $this->isImageUrl($trimmed)) {
+                    $urls[] = $trimmed;
+                }
+
+                return;
+            }
+
+            if (! is_array($value)) {
+                return;
+            }
+
+            foreach ($value as $key => $child) {
+                if (is_string($key) && in_array($key, ['url', 'uri', 'image_url', 'thumb_url'], true) && is_string($child)) {
+                    $trimmed = trim($child);
+
+                    if ($trimmed !== '' && $this->isImageUrl($trimmed)) {
+                        $urls[] = $trimmed;
+                    }
+                }
+
+                if (is_string($key) && in_array($key, ['image_id', 'image_id_list'], true)) {
+                    foreach ($this->imageIdCandidates($child) as $imageId) {
+                        $resolved = $this->resolveShopeeImageId($imageId);
+
+                        if ($resolved) {
+                            $urls[] = $resolved;
+                        }
+                    }
+                }
+
+                $collect($child);
+            }
+        };
+
+        foreach ($candidates as $candidate) {
+            $collect($candidate);
+        }
+
+        return array_values(array_unique($urls));
+    }
+
+    private function imageIdCandidates(mixed $value): array
+    {
+        if (is_string($value)) {
+            $trimmed = trim($value);
+
+            return $trimmed !== '' ? [$trimmed] : [];
+        }
+
+        if (is_array($value)) {
+            $values = [];
+
+            foreach ($value as $item) {
+                if (is_string($item) && trim($item) !== '') {
+                    $values[] = trim($item);
+                }
+            }
+
+            return $values;
+        }
+
+        return [];
+    }
+
+    private function resolveShopeeImageId(string $imageId): ?string
+    {
+        if ($imageId === '' || $this->isImageUrl($imageId)) {
+            return $this->isImageUrl($imageId) ? $imageId : null;
+        }
+
+        $normalized = ltrim($imageId, '/');
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        return 'https://down-id.img.susercontent.com/file/'.$normalized;
+    }
+
+    private function isImageUrl(string $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_URL) !== false
+            || str_starts_with($value, '//');
     }
 
     private function isLiveShopeeStatus(?string $status): bool
@@ -691,6 +879,7 @@ class OmnichannelController extends Controller
                         'stock_qty' => (int) ($sku->stock_qty ?? 0),
                         'price' => (int) ($sku->price ?? 0),
                         'subtotal' => (int) ($sku->subtotal ?? 0),
+                        'image_url' => $sku->image_url ?? null,
                     ])->values(),
                 ];
             })->values(),
@@ -960,12 +1149,13 @@ class OmnichannelController extends Controller
             $skuName = (string) ($sku['sku_name'] ?? $sku['name'] ?? 'Default');
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
+            $skuImageUrl = $this->extractTiktokSkuImageUrl($sku);
 
             DB::table('tiktok_products')->updateOrInsert(
                 ['product_id' => $productId, 'sku_name' => $skuName],
                 [
                     'product_name' => $productName,
-                    'image_url' => $imageUrl,
+                    'image_url' => $skuImageUrl,
                     'stock_qty' => $stock,
                     'price' => $price,
                     'subtotal' => $price * $stock,
@@ -1008,6 +1198,63 @@ class OmnichannelController extends Controller
                 if (is_array($thumbUrls) && ! empty($thumbUrls[0])) {
                     return (string) $thumbUrls[0];
                 }
+            }
+        }
+
+        return null;
+    }
+
+    private function extractTiktokSkuImageUrl(array $sku): ?string
+    {
+        $candidates = [
+            data_get($sku, 'sku_img'),
+            data_get($sku, 'image'),
+            data_get($sku, 'images.0'),
+            data_get($sku, 'sales_attributes.0.sku_img'),
+            data_get($sku, 'sales_attributes.0.image'),
+            data_get($sku, 'sales_attributes.1.sku_img'),
+            data_get($sku, 'sales_attributes.1.image'),
+        ];
+
+        $salesAttributes = data_get($sku, 'sales_attributes', []);
+        if (is_array($salesAttributes)) {
+            foreach ($salesAttributes as $attribute) {
+                $candidates[] = data_get($attribute, 'sku_img');
+                $candidates[] = data_get($attribute, 'image');
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $url = $this->extractTiktokImageNodeUrl($candidate);
+            if ($url) {
+                return $url;
+            }
+        }
+
+        return null;
+    }
+
+    private function extractTiktokImageNodeUrl(mixed $image): ?string
+    {
+        if (is_string($image) && trim($image) !== '') {
+            return trim($image);
+        }
+
+        if (! is_array($image)) {
+            return null;
+        }
+
+        foreach (['urls', 'thumb_urls', 'url_list', 'image_url_list'] as $key) {
+            $urls = data_get($image, $key, []);
+            if (is_array($urls) && ! empty($urls[0])) {
+                return (string) $urls[0];
+            }
+        }
+
+        foreach (['url', 'uri', 'image_url', 'thumb_url'] as $key) {
+            $url = data_get($image, $key);
+            if (is_string($url) && trim($url) !== '') {
+                return trim($url);
             }
         }
 
@@ -1111,18 +1358,33 @@ class OmnichannelController extends Controller
 
         $query = DB::table('stock_master as sm')
             ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
-            ->leftJoin('shopee_product_model as spm', 'spm.model_id', '=', 'map.shopee_model_id')
-            ->leftJoin('shopee_product as sp', 'sp.item_id', '=', 'map.shopee_item_id')
+            ->leftJoin('shopee_product_model as spm', function ($join) {
+                $join->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin('shopee_product as sp', function ($join) {
+                $join->on('sp.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join) {
+                $join->on('spmi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->on('spmi.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
+                $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
             ->leftJoin('tiktok_products as tp', function ($join) {
-                $join->on('tp.product_id', '=', 'map.tiktok_product_id')
-                    ->on('tp.sku_name', '=', 'map.tiktok_sku_name');
+                $join->on('tp.product_id', '=', DB::raw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, ''))"))
+                    ->on('tp.sku_name', '=', DB::raw("COALESCE(NULLIF(map.tiktok_sku_name, ''), NULLIF(sm.variant_name, ''))"));
             })
             ->select(
                 'sm.id',
                 'sm.internal_sku',
+                'sm.shopee_product_id as stock_shopee_item_id',
+                'sm.shopee_sku as stock_shopee_model_id',
                 'sm.product_name',
                 'sm.variant_name',
                 'sm.stock_qty',
+                'sm.tiktok_product_id as stock_tiktok_product_id',
+                'sm.tiktok_sku as stock_tiktok_sku_id',
                 'sm.updated_at',
                 'map.id as mapping_id',
                 'map.shopee_item_id',
@@ -1136,8 +1398,12 @@ class OmnichannelController extends Controller
                 'map.notes',
                 'sp.name as shopee_name',
                 'spm.name as shopee_variant_name',
+                'spm.stock as shopee_variant_stock',
+                'spmi.image_url as shopee_model_image_url',
+                'spi.image_url as shopee_product_image_url',
                 'tp.product_name as tiktok_product_name',
                 'tp.sku_name as tiktok_variant_name',
+                'tp.stock_qty as tiktok_stock_qty',
                 'tp.image_url as tiktok_cache_image_url'
             );
 
@@ -1166,8 +1432,16 @@ class OmnichannelController extends Controller
             ->limit(300)
             ->get()
             ->map(function ($row) {
-                $statusShopee = $row->shopee_model_id ? 'mapped' : ($row->shopee_item_id ? 'partial' : 'unmapped');
-                $statusTikTok = ($row->mapped_tiktok_product_id || $row->tiktok_product_id) ? 'mapped' : 'unmapped';
+                $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
+                $shopeeModelId = $row->shopee_model_id ?: $row->stock_shopee_model_id;
+                $statusShopee = $shopeeModelId ? 'mapped' : ($shopeeItemId ? 'partial' : 'unmapped');
+                $tiktokProductId = $row->mapped_tiktok_product_id ?: $row->stock_tiktok_product_id;
+                $tiktokSkuId = $row->tiktok_sku_id ?: $row->stock_tiktok_sku_id;
+                $statusTikTok = $tiktokProductId ? 'mapped' : 'unmapped';
+                $shopeeImageUrl = $row->shopee_image_url
+                    ?: $row->shopee_model_image_url
+                    ?: $row->shopee_product_image_url;
+                $tiktokImageUrl = $row->tiktok_image_url ?: $row->tiktok_cache_image_url;
 
                 return [
                     'id' => $row->id,
@@ -1175,22 +1449,25 @@ class OmnichannelController extends Controller
                     'product_name' => $row->product_name,
                     'variant_name' => $row->variant_name,
                     'stock_qty' => (int) ($row->stock_qty ?? 0),
-                    'image_url' => $row->internal_image_url ?: $row->tiktok_cache_image_url,
+                    'image_url' => $row->internal_image_url ?: $shopeeImageUrl ?: $tiktokImageUrl ?: $row->shopee_product_image_url,
                     'mapping_id' => $row->mapping_id,
                     'shopee' => [
-                        'item_id' => $row->shopee_item_id,
-                        'model_id' => $row->shopee_model_id,
-                        'product_name' => $row->shopee_name,
-                        'variant_name' => $row->shopee_variant_name,
+                        'item_id' => $shopeeItemId,
+                        'model_id' => $shopeeModelId,
+                        'product_name' => $row->shopee_name ?: $row->product_name,
+                        'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
+                        'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
+                        'image_url' => $shopeeImageUrl,
                         'status' => $statusShopee,
                     ],
                     'tiktok' => [
-                        'product_id' => $row->mapped_tiktok_product_id ?: $row->tiktok_product_id,
-                        'sku_id' => $row->tiktok_sku_id,
+                        'product_id' => $tiktokProductId,
+                        'sku_id' => $tiktokSkuId,
                         'sku_name' => $row->tiktok_sku_name ?: $row->tiktok_variant_name,
                         'product_name' => $row->tiktok_product_name,
                         'variant_name' => $row->tiktok_variant_name,
-                        'image_url' => $row->tiktok_image_url ?: $row->tiktok_cache_image_url,
+                        'stock_qty' => (int) ($row->tiktok_stock_qty ?? 0),
+                        'image_url' => $tiktokImageUrl,
                         'status' => $statusTikTok,
                     ],
                     'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
