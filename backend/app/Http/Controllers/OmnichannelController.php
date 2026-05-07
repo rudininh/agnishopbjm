@@ -929,7 +929,7 @@ class OmnichannelController extends Controller
             $pageSize = 100;
             $pageToken = null;
             $apiHost = rtrim((string) $config['api_host'], '/');
-            $searchUrl = $apiHost.'/product/202309/products/search';
+            $searchUrl = $apiHost.'/product/202502/products/search';
             $detailBaseUrl = $apiHost.'/product/202309/products/';
 
             do {
@@ -963,7 +963,7 @@ class OmnichannelController extends Controller
                 ];
                 $searchBodyString = json_encode($searchBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 $searchParams['sign'] = $this->generateTiktokSign(
-                    '/product/202309/products/search',
+                    '/product/202502/products/search',
                     $searchParams,
                     $config['app_secret'],
                     $searchBodyString
@@ -1086,14 +1086,10 @@ class OmnichannelController extends Controller
         $shopId = (string) ($shop->shop_id ?? $shop->id ?? '');
         $timestamp = time();
         $params = [
-            'access_token' => $accessToken,
-            'timestamp' => $timestamp,
             'app_key' => $config['app_key'],
             'shop_cipher' => $shopCipher,
             'shop_id' => $shopId,
-            'return_under_review_version' => 'false',
-            'return_draft_version' => 'false',
-            'locale' => 'en',
+            'timestamp' => $timestamp,
             'version' => '202309',
         ];
         $params['sign'] = $this->generateTiktokSign('/product/202309/products/'.$productId, $params, $config['app_secret']);
