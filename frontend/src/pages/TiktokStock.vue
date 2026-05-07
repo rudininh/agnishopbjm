@@ -151,13 +151,13 @@
                 <td></td>
                 <td colspan="8">
                   <div class="variant-list">
-                    <div v-for="sku in item.skus" :key="`${item.product_id}-${sku.sku_name}`" class="variant-item">
+                    <div v-for="(sku, index) in item.skus" :key="`${item.product_id}-${sku.sku_id || sku.sku_name || index}`" class="variant-item">
                       <span class="variant-name">
                         <img v-if="sku.image_url" :src="sku.image_url" :alt="sku.sku_name || 'Varian TikTok'" />
                         <span v-else class="variant-thumb-fallback">{{ initials(sku.sku_name) }}</span>
                         <span>{{ sku.sku_name || '-' }}</span>
                       </span>
-                      <span>SKU ID: {{ sku.tiktok_sku || '-' }}</span>
+                      <span>SKU ID: {{ sku.sku_id || sku.tiktok_sku || '-' }}</span>
                       <strong>{{ formatCurrency(sku.price || 0) }}</strong>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
                     </div>
