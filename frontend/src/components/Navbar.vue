@@ -13,6 +13,7 @@
       <RouterLink to="/stok-shopee">Stok Shopee</RouterLink>
       <RouterLink to="/stok-tiktok">Stok TikTok</RouterLink>
       <RouterLink to="/stock-master">Stock Master</RouterLink>
+      <RouterLink to="/sku-mapping">SKU Mapping</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
       <RouterLink to="/dokumentasi-tiktok">Dokumentasi TikTok</RouterLink>

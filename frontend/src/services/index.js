@@ -107,6 +107,14 @@ export const omnichannelService = {
     return api.get('/get-stock-master')
   },
 
+  skuMapping(params = {}) {
+    return api.get('/sku-mapping', { params })
+  },
+
+  saveSkuMapping(data) {
+    return api.post('/sku-mapping', data)
+  },
+
   syncShopeeToTiktok() {
     return api.post('/sync-shopee-to-tiktok')
   },

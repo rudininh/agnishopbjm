@@ -52,6 +52,8 @@ return new class extends Migration
                 $table->text('refresh_token')->nullable();
                 $table->integer('expire_in')->nullable();
                 $table->timestamp('expire_at')->nullable();
+                $table->timestamp('access_token_expire_at')->nullable();
+                $table->timestamp('refresh_token_expire_at')->nullable();
                 $table->string('request_id')->nullable();
                 $table->string('error')->nullable();
                 $table->text('message')->nullable();
@@ -99,6 +101,8 @@ return new class extends Migration
                 'supplier_id_list' => fn () => $table->json('supplier_id_list')->nullable(),
                 'user_id_list' => fn () => $table->json('user_id_list')->nullable(),
                 'expire_at' => fn () => $table->timestamp('expire_at')->nullable(),
+                'access_token_expire_at' => fn () => $table->timestamp('access_token_expire_at')->nullable(),
+                'refresh_token_expire_at' => fn () => $table->timestamp('refresh_token_expire_at')->nullable(),
                 'error' => fn () => $table->string('error')->nullable(),
                 'message' => fn () => $table->text('message')->nullable(),
                 'raw_response' => fn () => $table->json('raw_response')->nullable(),
