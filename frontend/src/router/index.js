@@ -4,6 +4,7 @@ import Dashboard from '@/pages/Dashboard.vue'
 import ShopeeStock from '@/pages/ShopeeStock.vue'
 import TiktokStock from '@/pages/TiktokStock.vue'
 import StockMaster from '@/pages/StockMaster.vue'
+import SkuMapping from '@/pages/SkuMapping.vue'
 import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
 import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
@@ -37,6 +38,11 @@ const routes = [
     path: '/stock-master',
     name: 'stock-master',
     component: StockMaster
+  },
+  {
+    path: '/sku-mapping',
+    name: 'sku-mapping',
+    component: SkuMapping
   },
   {
     path: '/sync-shopee-to-tiktok',

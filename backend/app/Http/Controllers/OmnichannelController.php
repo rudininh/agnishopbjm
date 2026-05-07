@@ -26,9 +26,13 @@ class OmnichannelController extends Controller
             'name' => 'TikTok AgniShopBJM',
         ],
     ];
+    private const SHOPEE_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES = 15;
+    private const TIKTOK_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES = 15;
+    private const SHOPEE_REFRESH_TOKEN_VALID_DAYS = 365;
 
     public function dashboard(): JsonResponse
     {
+        $this->ensureShopeeAuthColumns();
         $this->normalizeActiveMarketplaceTokens();
 
         return response()->json([
@@ -149,6 +153,7 @@ class OmnichannelController extends Controller
 
     private function syncShopeeProductsToDatabase(): array
     {
+        $this->ensureShopeeAuthColumns();
         $this->normalizeActiveMarketplaceTokens();
 
         if (! Schema::hasTable('shopee_tokens')) {
@@ -159,12 +164,7 @@ class OmnichannelController extends Controller
             ];
         }
 
-        $tokens = DB::table('shopee_tokens')
-            ->whereRaw('is_active = true')
-            ->whereNotNull('shop_id')
-            ->whereNotNull('access_token')
-            ->orderBy('account_name')
-            ->get();
+        $tokens = $this->activeShopeeTokensForSync();
 
         if ($tokens->isEmpty()) {
             return [
@@ -245,6 +245,34 @@ class OmnichannelController extends Controller
             'accounts' => $accounts,
             'last_sync_at' => now()->toDateTimeString(),
         ];
+    }
+
+    private function activeShopeeTokensForSync()
+    {
+        $tokens = DB::table('shopee_tokens')
+            ->whereRaw('is_active = true')
+            ->whereNotNull('shop_id')
+            ->whereNotNull('access_token')
+            ->orderBy('account_name')
+            ->get();
+
+        foreach ($tokens as $token) {
+            if (! $this->shopeeAccessTokenNeedsRefresh($token)) {
+                continue;
+            }
+
+            $account = $this->resolveAccount((string) ($token->account_key ?: 'shopee-agnishopbjm'), 'shopee');
+            $this->refreshShopeeToken($account);
+        }
+
+        return DB::table('shopee_tokens')
+            ->whereRaw('is_active = true')
+            ->whereNotNull('shop_id')
+            ->whereNotNull('access_token')
+            ->orderBy('account_name')
+            ->get()
+            ->reject(fn ($token) => $this->shopeeAccessTokenIsExpired($token))
+            ->values();
     }
 
     private function fetchShopeeItemIds(array $config, int $shopId, string $accessToken): array
@@ -453,6 +481,7 @@ class OmnichannelController extends Controller
 
     public function tokenAction(string $action): JsonResponse
     {
+        $this->ensureShopeeAuthColumns();
         $this->normalizeActiveMarketplaceTokens();
 
         $account = $this->resolveAccountFromAction($action);
@@ -546,6 +575,8 @@ class OmnichannelController extends Controller
 
     public function shopeeCallback(Request $request): Response
     {
+        $this->ensureShopeeAuthColumns();
+
         $code = $request->query('code');
         $account = $this->resolveAccount((string) $request->query('account', 'shopee-agnishopbjm'), 'shopee');
 
@@ -673,7 +704,7 @@ class OmnichannelController extends Controller
         try {
             $config = $this->tiktokConfig();
             $shop = $this->latestTiktokShop();
-            $accessToken = $this->latestTiktokAccessToken();
+            $accessToken = $this->activeTiktokAccessTokenForSync();
 
             if (! $shop) {
                 return [
@@ -988,6 +1019,27 @@ class OmnichannelController extends Controller
         return (string) (DB::table('tiktok_tokens')->whereRaw('is_active = true')->orderByDesc('created_at')->value('access_token') ?? DB::table('tiktok_tokens')->orderByDesc('created_at')->value('access_token') ?? '');
     }
 
+    private function activeTiktokAccessTokenForSync(): string
+    {
+        $account = $this->resolveAccount('tiktok-agnishopbjm', 'tiktok');
+        $token = $this->latestActiveTiktokToken($account);
+
+        if (! $token) {
+            return $this->latestTiktokAccessToken();
+        }
+
+        if ($this->tiktokAccessTokenNeedsRefresh($token) && $this->tiktokRefreshTokenIsUsable($token)) {
+            $this->refreshTiktokToken($account);
+            $token = $this->latestActiveTiktokToken($account);
+        }
+
+        if (! $token || $this->tiktokAccessTokenIsExpired($token)) {
+            return '';
+        }
+
+        return (string) ($token->access_token ?? '');
+    }
+
     private function ensureTiktokProductTables(): void
     {
         DB::statement("
@@ -1017,6 +1069,191 @@ class OmnichannelController extends Controller
                 updated_at TIMESTAMP DEFAULT NOW()
             )
         ");
+    }
+
+    private function ensureSkuMappingTables(): void
+    {
+        $this->ensureShopeeProductTables();
+        $this->ensureTiktokProductTables();
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS sku_mappings (
+                id BIGSERIAL PRIMARY KEY,
+                stock_master_id BIGINT NOT NULL UNIQUE,
+                shopee_item_id TEXT NULL,
+                shopee_model_id TEXT NULL,
+                tiktok_product_id TEXT NULL,
+                tiktok_sku_id TEXT NULL,
+                tiktok_sku_name TEXT NULL,
+                internal_image_url TEXT NULL,
+                shopee_image_url TEXT NULL,
+                tiktok_image_url TEXT NULL,
+                notes TEXT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("CREATE INDEX IF NOT EXISTS sku_mappings_stock_master_id_idx ON sku_mappings (stock_master_id)");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS shopee_product_id TEXT NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS shopee_sku TEXT NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS tiktok_product_id TEXT NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS tiktok_sku TEXT NULL");
+    }
+
+    public function skuMapping(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $search = trim((string) $request->query('search', ''));
+        $status = (string) $request->query('status', 'all');
+        $sort = (string) $request->query('sort', 'updated_desc');
+
+        $query = DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->leftJoin('shopee_product_model as spm', 'spm.model_id', '=', 'map.shopee_model_id')
+            ->leftJoin('shopee_product as sp', 'sp.item_id', '=', 'map.shopee_item_id')
+            ->leftJoin('tiktok_products as tp', function ($join) {
+                $join->on('tp.product_id', '=', 'map.tiktok_product_id')
+                    ->on('tp.sku_name', '=', 'map.tiktok_sku_name');
+            })
+            ->select(
+                'sm.id',
+                'sm.internal_sku',
+                'sm.product_name',
+                'sm.variant_name',
+                'sm.stock_qty',
+                'sm.updated_at',
+                'map.id as mapping_id',
+                'map.shopee_item_id',
+                'map.shopee_model_id',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id',
+                'map.tiktok_sku_name',
+                'map.internal_image_url',
+                'map.shopee_image_url',
+                'map.tiktok_image_url',
+                'map.notes',
+                'sp.name as shopee_name',
+                'spm.name as shopee_variant_name',
+                'tp.product_name as tiktok_product_name',
+                'tp.sku_name as tiktok_variant_name',
+                'tp.image_url as tiktok_cache_image_url'
+            );
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('sm.internal_sku', 'ilike', '%'.$search.'%')
+                    ->orWhere('sm.product_name', 'ilike', '%'.$search.'%')
+                    ->orWhere('sm.variant_name', 'ilike', '%'.$search.'%');
+            });
+        }
+
+        if ($status === 'mapped') {
+            $query->whereNotNull('map.id');
+        } elseif ($status === 'unmapped') {
+            $query->whereNull('map.id');
+        }
+
+        $orderColumn = match ($sort) {
+            'name_asc' => 'sm.product_name',
+            'created_desc' => 'sm.created_at',
+            default => 'sm.updated_at',
+        };
+        $orderDirection = $sort === 'name_asc' ? 'asc' : 'desc';
+
+        $items = $query->orderBy($orderColumn, $orderDirection)
+            ->limit(300)
+            ->get()
+            ->map(function ($row) {
+                $statusShopee = $row->shopee_model_id ? 'mapped' : ($row->shopee_item_id ? 'partial' : 'unmapped');
+                $statusTikTok = ($row->mapped_tiktok_product_id || $row->tiktok_product_id) ? 'mapped' : 'unmapped';
+
+                return [
+                    'id' => $row->id,
+                    'internal_sku' => $row->internal_sku,
+                    'product_name' => $row->product_name,
+                    'variant_name' => $row->variant_name,
+                    'stock_qty' => (int) ($row->stock_qty ?? 0),
+                    'image_url' => $row->internal_image_url ?: $row->tiktok_cache_image_url,
+                    'mapping_id' => $row->mapping_id,
+                    'shopee' => [
+                        'item_id' => $row->shopee_item_id,
+                        'model_id' => $row->shopee_model_id,
+                        'product_name' => $row->shopee_name,
+                        'variant_name' => $row->shopee_variant_name,
+                        'status' => $statusShopee,
+                    ],
+                    'tiktok' => [
+                        'product_id' => $row->mapped_tiktok_product_id ?: $row->tiktok_product_id,
+                        'sku_id' => $row->tiktok_sku_id,
+                        'sku_name' => $row->tiktok_sku_name ?: $row->tiktok_variant_name,
+                        'product_name' => $row->tiktok_product_name,
+                        'variant_name' => $row->tiktok_variant_name,
+                        'image_url' => $row->tiktok_image_url ?: $row->tiktok_cache_image_url,
+                        'status' => $statusTikTok,
+                    ],
+                    'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
+                        ? 'fully_mapped'
+                        : ($statusShopee === 'unmapped' && $statusTikTok === 'unmapped' ? 'unmapped' : 'partially_mapped'),
+                    'updated_at' => $row->updated_at,
+                ];
+            });
+
+        return response()->json([
+            'summary' => [
+                'total' => DB::table('stock_master')->count(),
+                'mapped' => DB::table('sku_mappings')->count(),
+                'last_shopee_sync_at' => DB::table('shopee_sync_logs')->max('synced_at'),
+                'last_tiktok_sync_at' => DB::table('tiktok_sync_logs')->max('synced_at'),
+            ],
+            'items' => $items,
+        ]);
+    }
+
+    public function saveSkuMapping(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'stock_master_id' => ['required', 'integer'],
+            'shopee_item_id' => ['nullable', 'string'],
+            'shopee_model_id' => ['nullable', 'string'],
+            'tiktok_product_id' => ['nullable', 'string'],
+            'tiktok_sku_id' => ['nullable', 'string'],
+            'tiktok_sku_name' => ['nullable', 'string'],
+            'internal_image_url' => ['nullable', 'string'],
+            'shopee_image_url' => ['nullable', 'string'],
+            'tiktok_image_url' => ['nullable', 'string'],
+            'notes' => ['nullable', 'string'],
+        ]);
+
+        DB::table('sku_mappings')->updateOrInsert(
+            ['stock_master_id' => $data['stock_master_id']],
+            [
+                'shopee_item_id' => $data['shopee_item_id'] ?? null,
+                'shopee_model_id' => $data['shopee_model_id'] ?? null,
+                'tiktok_product_id' => $data['tiktok_product_id'] ?? null,
+                'tiktok_sku_id' => $data['tiktok_sku_id'] ?? null,
+                'tiktok_sku_name' => $data['tiktok_sku_name'] ?? null,
+                'internal_image_url' => $data['internal_image_url'] ?? null,
+                'shopee_image_url' => $data['shopee_image_url'] ?? null,
+                'tiktok_image_url' => $data['tiktok_image_url'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+
+        DB::table('stock_master')->where('id', $data['stock_master_id'])->update([
+            'shopee_product_id' => $data['shopee_item_id'] ?? null,
+            'shopee_sku' => $data['shopee_model_id'] ?? null,
+            'tiktok_product_id' => $data['tiktok_product_id'] ?? null,
+            'tiktok_sku' => $data['tiktok_sku_id'] ?? null,
+            'updated_at' => now(),
+        ]);
+
+        return response()->json(['status' => 'ok', 'message' => 'Mapping SKU berhasil disimpan.']);
     }
 
     public function stockMaster(): JsonResponse
@@ -1156,6 +1393,8 @@ class OmnichannelController extends Controller
                 'refresh_token',
                 'expire_in',
                 'expire_at',
+                'access_token_expire_at',
+                'refresh_token_expire_at',
                 'request_id',
                 'error',
                 'message',
@@ -1178,6 +1417,8 @@ class OmnichannelController extends Controller
                 'refresh_token' => $this->maskToken($token->refresh_token),
                 'expire_in' => $token->expire_in,
                 'expire_at' => $token->expire_at,
+                'access_token_expire_at' => $token->access_token_expire_at,
+                'refresh_token_expire_at' => $token->refresh_token_expire_at,
                 'request_id' => $token->request_id,
                 'error' => $token->error,
                 'message' => $token->message,
@@ -1376,10 +1617,30 @@ class OmnichannelController extends Controller
     {
         $token = $this->latestActiveShopeeToken($account);
 
-        if ($token && $this->tokenDateIsFuture($token->expire_at ?? null)) {
+        if ($token && ! $this->shopeeAccessTokenNeedsRefresh($token)) {
+            return [
+                'status' => 'ok',
+                'action' => 'connect-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Token '.$account['name'].' masih aktif. AUTH ulang tidak diperlukan.',
+                'access_token' => $token->access_token,
+                'refresh_token' => $token->refresh_token,
+                'expire_in' => $token->expire_in,
+                'expire_at' => $token->expire_at,
+                'access_token_expire_at' => $token->access_token_expire_at ?? $token->expire_at,
+                'refresh_token_expire_at' => $this->shopeeRefreshTokenExpireAt($token)?->toDateTimeString(),
+            ];
+        }
+
+        if ($token && $this->shopeeRefreshTokenIsUsable($token)) {
             $result = $this->refreshShopeeToken($account);
 
             if (($result['status'] ?? '') === 'ok') {
+                return $result;
+            }
+
+            if (! $this->shopeeRefreshFailureNeedsAuth($result)) {
                 return $result;
             }
         }
@@ -1452,6 +1713,8 @@ class OmnichannelController extends Controller
             'action' => 'get-token-'.$callback->account_key,
             'account_key' => $callback->account_key,
             'account_name' => $callback->account_name,
+            'access_token_expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null)?->toDateTimeString(),
+            'refresh_token_expire_at' => (($data['error'] ?? '') === '' ? now()->addDays(self::SHOPEE_REFRESH_TOKEN_VALID_DAYS)->toDateTimeString() : null),
             ...$data,
         ];
     }
@@ -1472,6 +1735,18 @@ class OmnichannelController extends Controller
                 'account_key' => $account['key'],
                 'account_name' => $account['name'],
                 'message' => 'Belum ada token aktif '.$account['name'].' yang bisa di-refresh. Jalankan AUTH dan GET TOKEN dulu.',
+            ];
+        }
+
+        if (! $this->shopeeRefreshTokenIsUsable($token)) {
+            return [
+                'status' => 'error',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'error' => 'refresh_token_expired',
+                'message' => 'Refresh token '.$account['name'].' sudah kedaluwarsa. Jalankan AUTH Shopee ulang.',
+                'refresh_token_expire_at' => $this->shopeeRefreshTokenExpireAt($token)?->toDateTimeString(),
             ];
         }
 
@@ -1523,6 +1798,8 @@ class OmnichannelController extends Controller
                 'account_key' => $account['key'],
                 'account_name' => $account['name'],
                 'message' => 'Refresh token '.$account['name'].' berhasil. Token baru sudah disimpan.',
+                'access_token_expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null)?->toDateTimeString(),
+                'refresh_token_expire_at' => now()->addDays(self::SHOPEE_REFRESH_TOKEN_VALID_DAYS)->toDateTimeString(),
             ];
         }
 
@@ -1580,6 +1857,8 @@ class OmnichannelController extends Controller
             'refresh_token' => $data['refresh_token'] ?? null,
             'expire_in' => $data['expire_in'] ?? null,
             'expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null),
+            'access_token_expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null),
+            'refresh_token_expire_at' => now()->addDays(self::SHOPEE_REFRESH_TOKEN_VALID_DAYS),
             'request_id' => $data['request_id'] ?? null,
             'error' => $data['error'] ?? null,
             'message' => $data['message'] ?? null,
@@ -1618,6 +1897,8 @@ class OmnichannelController extends Controller
             'refresh_token' => $data['refresh_token'] ?? null,
             'expire_in' => $data['expire_in'] ?? null,
             'expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null),
+            'access_token_expire_at' => $this->resolveShopeeExpireAt($data['expire_in'] ?? null),
+            'refresh_token_expire_at' => now()->addDays(self::SHOPEE_REFRESH_TOKEN_VALID_DAYS),
             'request_id' => $data['request_id'] ?? null,
             'error' => $data['error'] ?? null,
             'message' => $data['message'] ?? null,
@@ -1637,6 +1918,83 @@ class OmnichannelController extends Controller
         }
 
         return null;
+    }
+
+    private function shopeeAccessTokenNeedsRefresh(object $token): bool
+    {
+        $expireAt = $this->shopeeAccessTokenExpireAt($token);
+
+        if (! $expireAt) {
+            return true;
+        }
+
+        return $expireAt->lessThanOrEqualTo(now()->addMinutes(self::SHOPEE_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES));
+    }
+
+    private function shopeeAccessTokenIsExpired(object $token): bool
+    {
+        $expireAt = $this->shopeeAccessTokenExpireAt($token);
+
+        return ! $expireAt || $expireAt->isPast();
+    }
+
+    private function shopeeAccessTokenExpireAt(object $token): ?Carbon
+    {
+        $value = $token->access_token_expire_at ?? $token->expire_at ?? null;
+
+        if (! $value) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function shopeeRefreshTokenIsUsable(object $token): bool
+    {
+        $expireAt = $this->shopeeRefreshTokenExpireAt($token);
+
+        return $expireAt && $expireAt->isFuture();
+    }
+
+    private function shopeeRefreshTokenExpireAt(object $token): ?Carbon
+    {
+        $value = $token->refresh_token_expire_at ?? null;
+
+        if ($value) {
+            try {
+                return Carbon::parse($value);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        if (! empty($token->created_at)) {
+            try {
+                return Carbon::parse($token->created_at)->addDays(self::SHOPEE_REFRESH_TOKEN_VALID_DAYS);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private function shopeeRefreshFailureNeedsAuth(array $result): bool
+    {
+        $error = strtolower((string) ($result['error'] ?? ''));
+        $message = strtolower((string) ($result['message'] ?? ''));
+
+        foreach (['refresh_token_expired', 'access_expired', 'no_linked', 'invalid refresh_token'] as $needle) {
+            if (str_contains($error, $needle) || str_contains($message, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function resolveShopeeExpireAt(?int $expireIn): ?Carbon
@@ -1669,10 +2027,30 @@ class OmnichannelController extends Controller
     {
         $token = $this->latestActiveTiktokToken($account);
 
-        if ($token && $this->tokenDateIsFuture($token->refresh_token_expire_at ?? null)) {
+        if ($token && ! $this->tiktokAccessTokenNeedsRefresh($token)) {
+            return [
+                'status' => 'ok',
+                'action' => 'connect-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Token '.$account['name'].' masih aktif. AUTH ulang tidak diperlukan.',
+                'access_token' => $token->access_token,
+                'refresh_token' => $token->refresh_token,
+                'expire_in' => $token->expire_in,
+                'expire_at' => $token->expire_at,
+                'access_token_expire_at' => $token->access_token_expire_at ?? $token->expire_at,
+                'refresh_token_expire_at' => $this->tiktokRefreshTokenExpireAt($token)?->toDateTimeString(),
+            ];
+        }
+
+        if ($token && $this->tiktokRefreshTokenIsUsable($token)) {
             $result = $this->refreshTiktokToken($account);
 
             if (($result['status'] ?? '') === 'ok') {
+                return $result;
+            }
+
+            if (! $this->tiktokRefreshFailureNeedsAuth($result)) {
                 return $result;
             }
         }
@@ -1770,6 +2148,7 @@ class OmnichannelController extends Controller
 
         $token = DB::table('tiktok_tokens')
             ->where('account_key', $account['key'])
+            ->whereRaw('is_active = true')
             ->whereNotNull('refresh_token')
             ->latest('created_at')
             ->first();
@@ -1781,6 +2160,18 @@ class OmnichannelController extends Controller
                 'account_key' => $account['key'],
                 'account_name' => $account['name'],
                 'message' => 'Belum ada token TikTok yang bisa di-refresh. Jalankan AUTH dan GET TOKEN dulu.',
+            ];
+        }
+
+        if (! $this->tiktokRefreshTokenIsUsable($token)) {
+            return [
+                'status' => 'error',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'code' => 'refresh_token_expired',
+                'message' => 'Refresh token '.$account['name'].' sudah kedaluwarsa. Jalankan AUTH TikTok ulang.',
+                'refresh_token_expire_at' => $this->tiktokRefreshTokenExpireAt($token)?->toDateTimeString(),
             ];
         }
 
@@ -1800,12 +2191,14 @@ class OmnichannelController extends Controller
         }
 
         return [
+            ...$data,
             'status' => $ok ? 'ok' : 'error',
             'action' => 'refresh-token-'.$account['key'],
             'account_key' => $account['key'],
             'account_name' => $account['name'],
             'message' => $ok ? 'Refresh token TikTok berhasil. Token baru sudah disimpan.' : ($data['message'] ?? 'TikTok mengembalikan error.'),
-            ...$data,
+            'access_token_expire_at' => $ok ? $this->resolveTiktokExpireAt($data['data']['access_token_expire_in'] ?? null)?->toDateTimeString() : null,
+            'refresh_token_expire_at' => $ok ? $this->resolveTiktokExpireAt($data['data']['refresh_token_expire_in'] ?? null)?->toDateTimeString() : null,
         ];
     }
 
@@ -1823,15 +2216,60 @@ class OmnichannelController extends Controller
             ->first();
     }
 
+    private function tiktokAccessTokenNeedsRefresh(object $token): bool
+    {
+        $expireAt = $this->tiktokAccessTokenExpireAt($token);
+
+        if (! $expireAt) {
+            return true;
+        }
+
+        return $expireAt->lessThanOrEqualTo(now()->addMinutes(self::TIKTOK_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES));
+    }
+
+    private function tiktokAccessTokenIsExpired(object $token): bool
+    {
+        $expireAt = $this->tiktokAccessTokenExpireAt($token);
+
+        return ! $expireAt || $expireAt->isPast();
+    }
+
+    private function tiktokAccessTokenExpireAt(object $token): ?Carbon
+    {
+        return $this->parseTokenDate($token->access_token_expire_at ?? $token->expire_at ?? null);
+    }
+
+    private function tiktokRefreshTokenIsUsable(object $token): bool
+    {
+        $expireAt = $this->tiktokRefreshTokenExpireAt($token);
+
+        return $expireAt && $expireAt->isFuture();
+    }
+
+    private function tiktokRefreshTokenExpireAt(object $token): ?Carbon
+    {
+        return $this->parseTokenDate($token->refresh_token_expire_at ?? null);
+    }
+
+    private function tiktokRefreshFailureNeedsAuth(array $result): bool
+    {
+        $code = strtolower((string) ($result['code'] ?? ''));
+        $message = strtolower((string) ($result['message'] ?? ''));
+
+        foreach (['refresh_token_expired', 'invalid refresh_token', 'invalid refresh token', 'refresh token expired'] as $needle) {
+            if (str_contains($code, $needle) || str_contains($message, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function getTiktokAuthorizedShops(array $account): array
     {
         $this->ensureTiktokAuthTables();
 
-        $token = DB::table('tiktok_tokens')
-            ->where('account_key', $account['key'])
-            ->whereNotNull('access_token')
-            ->latest('created_at')
-            ->first();
+        $token = $this->latestActiveTiktokToken($account);
 
         if (! $token) {
             return [
@@ -1841,6 +2279,23 @@ class OmnichannelController extends Controller
                 'account_name' => $account['name'],
                 'message' => 'Belum ada access token TikTok. Jalankan AUTH dan GET TOKEN dulu.',
             ];
+        }
+
+        if ($this->tiktokAccessTokenNeedsRefresh($token)) {
+            $refreshResult = $this->refreshTiktokToken($account);
+
+            if (($refreshResult['status'] ?? '') !== 'ok') {
+                return [
+                    ...$refreshResult,
+                    'status' => 'error',
+                    'action' => 'get-auth-shop-'.$account['key'],
+                    'account_key' => $account['key'],
+                    'account_name' => $account['name'],
+                    'message' => $refreshResult['message'] ?? 'Access token TikTok perlu refresh, tetapi refresh gagal.',
+                ];
+            }
+
+            $token = $this->latestActiveTiktokToken($account);
         }
 
         $config = $this->tiktokConfig();
@@ -1972,10 +2427,19 @@ class OmnichannelController extends Controller
             return false;
         }
 
+        return (bool) $this->parseTokenDate($value)?->isFuture();
+    }
+
+    private function parseTokenDate(mixed $value): ?Carbon
+    {
+        if (! $value) {
+            return null;
+        }
+
         try {
-            return Carbon::parse($value)->isFuture();
+            return Carbon::parse($value);
         } catch (\Throwable) {
-            return false;
+            return null;
         }
     }
 
@@ -2056,6 +2520,38 @@ class OmnichannelController extends Controller
             'api_host' => rtrim($apiHost, '/'),
             'redirect_url' => $redirectUrl,
         ];
+    }
+
+    private function ensureShopeeAuthColumns(): void
+    {
+        if (! Schema::hasTable('shopee_tokens')) {
+            return;
+        }
+
+        foreach ([
+            'access_token_expire_at TIMESTAMP NULL',
+            'refresh_token_expire_at TIMESTAMP NULL',
+        ] as $definition) {
+            DB::statement('ALTER TABLE shopee_tokens ADD COLUMN IF NOT EXISTS '.$definition);
+        }
+
+        DB::table('shopee_tokens')
+            ->whereNotNull('expire_at')
+            ->whereNull('access_token_expire_at')
+            ->update(['access_token_expire_at' => DB::raw('expire_at')]);
+
+        DB::table('shopee_tokens')
+            ->whereNotNull('refresh_token')
+            ->whereNull('refresh_token_expire_at')
+            ->whereNotNull('created_at')
+            ->update(['refresh_token_expire_at' => DB::raw("created_at + INTERVAL '".self::SHOPEE_REFRESH_TOKEN_VALID_DAYS." days'")]);
+
+        DB::table('shopee_tokens')
+            ->whereNotNull('refresh_token')
+            ->whereNotNull('refresh_token_expire_at')
+            ->whereNotNull('created_at')
+            ->whereRaw("refresh_token_expire_at < created_at + INTERVAL '".self::SHOPEE_REFRESH_TOKEN_VALID_DAYS." days'")
+            ->update(['refresh_token_expire_at' => DB::raw("created_at + INTERVAL '".self::SHOPEE_REFRESH_TOKEN_VALID_DAYS." days'")]);
     }
 
     private function generateTiktokSign(string $path, array $params, string $secret, ?string $body = null): string
