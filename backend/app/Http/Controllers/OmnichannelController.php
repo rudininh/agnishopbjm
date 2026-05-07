@@ -1160,7 +1160,7 @@ class OmnichannelController extends Controller
 
         foreach ($skus as $sku) {
             $skuId = (string) ($sku['id'] ?? $sku['sku_id'] ?? $sku['sku_no'] ?? $sku['sku_code'] ?? '');
-            $skuName = (string) ($sku['sku_name'] ?? $sku['name'] ?? $sku['sku_title'] ?? 'Default');
+            $skuName = $this->deriveTiktokSkuName($sku);
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
             $skuImageUrl = $this->extractTiktokSkuImageUrl($sku);
@@ -1247,6 +1247,48 @@ class OmnichannelController extends Controller
         }
 
         return null;
+    }
+
+    private function deriveTiktokSkuName(array $sku): string
+    {
+        foreach ([
+            data_get($sku, 'sku_name'),
+            data_get($sku, 'name'),
+            data_get($sku, 'sku_title'),
+            data_get($sku, 'seller_sku'),
+        ] as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                $trimmed = trim($candidate);
+                if (strtolower($trimmed) !== 'default') {
+                    return $trimmed;
+                }
+            }
+        }
+
+        $salesAttributes = data_get($sku, 'sales_attributes', []);
+        if (is_array($salesAttributes) && $salesAttributes !== []) {
+            $parts = [];
+
+            foreach ($salesAttributes as $attribute) {
+                foreach ([
+                    data_get($attribute, 'value_name'),
+                    data_get($attribute, 'original_value_name'),
+                    data_get($attribute, 'name'),
+                ] as $candidate) {
+                    if (is_string($candidate) && trim($candidate) !== '') {
+                        $parts[] = trim($candidate);
+                        break;
+                    }
+                }
+            }
+
+            $parts = array_values(array_filter(array_unique($parts), fn ($value) => $value !== ''));
+            if ($parts !== []) {
+                return implode(' / ', $parts);
+            }
+        }
+
+        return 'Default';
     }
 
     private function normalizeTiktokSkuList(array $data): array
@@ -2847,14 +2889,19 @@ class OmnichannelController extends Controller
         $this->ensureTiktokAuthTables();
 
         $row = SchemaCache::activeTiktokConfig();
-        $appKey = trim((string) ($row->app_key ?? config('tiktok.app_key')));
-        $appSecret = trim((string) ($row->app_secret ?? config('tiktok.app_secret')));
+        $envAppKey = trim((string) config('tiktok.app_key'));
+        $envAppSecret = trim((string) config('tiktok.app_secret'));
+        $dbAppKey = trim((string) ($row->app_key ?? ''));
+        $dbAppSecret = trim((string) ($row->app_secret ?? ''));
+
+        $appKey = $envAppKey !== '' ? $envAppKey : $dbAppKey;
+        $appSecret = $envAppSecret !== '' ? $envAppSecret : $dbAppSecret;
         $redirectUrl = trim((string) ($row->redirect_url ?? config('tiktok.redirect_url')));
         $authHost = trim((string) config('tiktok.auth_host'));
         $apiHost = trim((string) config('tiktok.api_host'));
 
         if ($appKey === '' || $appSecret === '') {
-            abort(422, 'Konfigurasi TikTok belum lengkap. Isi `tiktok_config` atau `TIKTOK_APP_KEY` / `TIKTOK_APP_SECRET`.');
+            abort(422, 'Konfigurasi TikTok belum valid. Isi `TIKTOK_APP_KEY` / `TIKTOK_APP_SECRET` dengan kredensial asli dari TikTok Shop Partner.');
         }
 
         return [
@@ -2987,28 +3034,25 @@ class OmnichannelController extends Controller
             )
         ");
 
-        $tiktokConfigValues = [
-            'app_key' => env('TIKTOK_APP_KEY', '6i1cagd9f0p83'),
-            'app_secret' => env('TIKTOK_APP_SECRET', '310f006ea5810ad4bf1591f31acd048fbee7977a'),
-            'auth_host' => env('TIKTOK_AUTH_HOST', 'https://auth.tiktok-shops.com'),
-            'api_host' => env('TIKTOK_API_HOST', 'https://open-api.tiktokglobalshop.com'),
-            'redirect_url' => env('TIKTOK_REDIRECT_URL', env('APP_URL', 'http://localhost:8000').'/api/tiktok/callback'),
-            'is_active' => DB::raw('true'),
-            'updated_at' => now(),
-        ];
-
         $existingTiktokConfig = DB::table('tiktok_config')->where('id', 1)->exists();
 
-        if ($existingTiktokConfig) {
-            DB::table('tiktok_config')
-                ->where('id', 1)
-                ->update($tiktokConfigValues);
-        } else {
-            DB::table('tiktok_config')->insert([
-                'id' => 1,
-                ...$tiktokConfigValues,
-                'created_at' => now(),
-            ]);
+        if (! $existingTiktokConfig) {
+            $appKey = trim((string) config('tiktok.app_key'));
+            $appSecret = trim((string) config('tiktok.app_secret'));
+
+            if ($appKey !== '' && $appSecret !== '') {
+                DB::table('tiktok_config')->insert([
+                    'id' => 1,
+                    'app_key' => $appKey,
+                    'app_secret' => $appSecret,
+                    'auth_host' => rtrim((string) config('tiktok.auth_host'), '/'),
+                    'api_host' => rtrim((string) config('tiktok.api_host'), '/'),
+                    'redirect_url' => trim((string) config('tiktok.redirect_url')),
+                    'is_active' => DB::raw('true'),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         }
 
         foreach ([
