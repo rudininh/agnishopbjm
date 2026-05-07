@@ -165,7 +165,11 @@
                 <td colspan="8">
                   <div class="variant-list">
                     <div v-for="model in item.models" :key="model.model_id" class="variant-item">
-                      <span>{{ model.name || 'Tanpa Varian' }}</span>
+                      <span class="variant-name">
+                        <img v-if="model.image_url" :src="model.image_url" :alt="model.name || 'Varian Shopee'" />
+                        <span v-else class="variant-thumb-fallback">{{ initials(model.name) }}</span>
+                        <span>{{ model.name || 'Tanpa Varian' }}</span>
+                      </span>
                       <span>SKU ID: {{ model.model_id || '-' }}</span>
                       <strong>{{ formatCurrency(model.price || 0) }}</strong>
                       <strong>Stock {{ model.stock || 0 }}</strong>
@@ -410,6 +414,9 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
 .variant-item { display: grid; grid-template-columns: 1.3fr 1fr .7fr .5fr; gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
+.variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
+.variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
 .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
 .pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }
