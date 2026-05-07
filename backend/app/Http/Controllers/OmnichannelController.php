@@ -955,9 +955,10 @@ class OmnichannelController extends Controller
                 );
 
                 $searchResponse = Http::timeout(45)
+                    ->asJson()
                     ->withHeaders(['x-tts-access-token' => $accessToken])
-                    ->withBody($searchBodyString, 'application/json')
-                    ->post($searchUrl.'?'.http_build_query($searchParams, '', '&', PHP_QUERY_RFC3986));
+                    ->withOptions(['query' => $searchParams])
+                    ->post($searchUrl, $searchBody);
 
                 $payload = $searchResponse->json();
 
