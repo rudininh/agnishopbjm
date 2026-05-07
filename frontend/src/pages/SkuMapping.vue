@@ -7,7 +7,7 @@
       </div>
       <div class="header-actions">
         <button class="ghost" @click="loadData" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
-        <button class="primary" @click="save" :disabled="!selectedItem || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
+        <button class="primary" @click="save" :disabled="!selectedItem || !form.stock_master_id || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
       </div>
     </header>
 
@@ -27,8 +27,8 @@
           <input v-model.trim="filters.search" type="search" placeholder="Cari produk / varian / SKU" @keyup.enter="loadData" />
           <select v-model="filters.status" @change="loadData">
             <option value="all">Semua</option>
-            <option value="mapped">Mapped</option>
-            <option value="unmapped">Unmapped</option>
+            <option value="mapped">Ada di satu sisi</option>
+            <option value="unmapped">Belum ada di dua sisi</option>
           </select>
           <select v-model="filters.sort" @change="loadData">
             <option value="updated_desc">Update Time</option>
@@ -38,7 +38,13 @@
         </div>
 
         <div class="table-wrap">
-          <table>
+          <table class="mapping-table">
+            <colgroup>
+              <col class="col-product" />
+              <col class="col-channel" />
+              <col class="col-channel" />
+              <col class="col-status" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Etalase / Produk</th>
@@ -55,16 +61,20 @@
                   <div v-else class="thumb small fallback">{{ initials(group.name) }}</div>
                   <div>
                     <strong>{{ group.name }}</strong>
-                    <small>{{ group.variants.length }} varian, stok {{ group.total_stock }}</small>
+                    <small>Shopee: {{ group.shopee.present }} varian, stok {{ group.shopee.total_stock }}</small>
+                    <small>TikTok: {{ group.tiktok.present }} varian, stok {{ group.tiktok.total_stock }}</small>
                   </div>
                 </td>
                 <td>
-                  <strong>{{ group.shopee.mapped }} / {{ group.variants.length }}</strong>
+                  <strong>{{ group.shopee.present }} / {{ group.variants.length }}</strong>
                   <small>{{ group.shopee.product_name || 'Belum terhubung' }}</small>
+                  <small>{{ group.shopee.missing }} varian belum ada di Shopee</small>
                 </td>
                 <td>
-                  <strong>{{ group.tiktok.mapped }} / {{ group.variants.length }}</strong>
+                  <strong>{{ group.tiktok.present }} / {{ group.variants.length }}</strong>
                   <small>{{ group.tiktok.product_name || 'Belum terhubung' }}</small>
+                  <small>{{ group.tiktok.missing }} varian belum ada di TikTok</small>
+                  <small v-if="group.tiktok.suggested">{{ group.tiktok.suggested }} kandidat TikTok</small>
                 </td>
                 <td>
                   <span :class="['badge', group.status]">{{ labelStatus(group.status) }}</span>
@@ -81,7 +91,7 @@
                 <td>
                   <div class="variant-title">
                     <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
-                    <small>{{ item.internal_sku }}</small>
+                    <small>SKU internal: {{ item.internal_sku }}</small>
                     <small>Stock Master: {{ item.stock_qty }}</small>
                   </div>
                 </td>
@@ -91,21 +101,35 @@
                     <div v-else class="thumb fallback">SP</div>
                     <div>
                       <strong>{{ item.shopee?.variant_name || item.shopee?.product_name || '-' }}</strong>
-                      <small>Item: {{ item.shopee?.item_id || '-' }}</small>
-                      <small>SKU/Model: {{ item.shopee?.model_id || '-' }}</small>
-                      <small>Stok: {{ item.shopee?.stock_qty ?? '-' }}</small>
+                      <small>{{ shopeePresenceLabel(item) }}</small>
+                      <small>Item ID: {{ item.shopee?.item_id || '-' }}</small>
+                      <small>Model ID: {{ item.shopee?.model_id || '-' }}</small>
+                      <small>Kode Variasi: {{ item.shopee?.seller_sku || item.seller_sku || '-' }}</small>
+                      <small>Stok: {{ displayStock(item.shopee?.stock_qty) }}</small>
                     </div>
                   </div>
                 </td>
                 <td>
-                  <div class="channel-cell">
+                  <div :class="['channel-cell', { muted: !hasTiktok(item) }]">
                     <img v-if="item.tiktok?.image_url" :src="item.tiktok.image_url" class="thumb" :alt="item.tiktok.variant_name" />
                     <div v-else class="thumb fallback">TT</div>
                     <div>
-                      <strong>{{ item.tiktok?.variant_name || item.tiktok?.sku_name || '-' }}</strong>
-                      <small>Product: {{ item.tiktok?.product_id || '-' }}</small>
-                      <small>SKU: {{ item.tiktok?.sku_id || item.tiktok?.sku_name || '-' }}</small>
-                      <small>Stok: {{ item.tiktok?.stock_qty ?? '-' }}</small>
+                      <div class="channel-title-row">
+                        <strong>{{ item.tiktok?.variant_name || item.tiktok?.sku_name || '-' }}</strong>
+                        <span
+                          v-if="item.tiktok?.status && item.tiktok.status !== 'unmapped'"
+                          :class="['channel-badge', item.tiktok.status]"
+                        >
+                          {{ channelStatusLabel(item.tiktok.status) }}
+                        </span>
+                      </div>
+                      <small>{{ tiktokPresenceLabel(item) }}</small>
+                      <small>{{ item.tiktok?.product_name || '-' }}</small>
+                      <small>Product ID: {{ item.tiktok?.product_id || '-' }}</small>
+                      <small>SKU ID: {{ item.tiktok?.sku_id || '-' }}</small>
+                      <small>Kode Variasi: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }}</small>
+                      <small>SKU Name: {{ item.tiktok?.sku_name || '-' }}</small>
+                      <small>Stok: {{ displayStock(item.tiktok?.stock_qty) }}</small>
                     </div>
                   </div>
                 </td>
@@ -140,8 +164,12 @@
           <input v-model="form.shopee_item_id" />
         </label>
         <label>
-          <span>Shopee SKU / Model ID</span>
+          <span>Shopee Model ID</span>
           <input v-model="form.shopee_model_id" />
+        </label>
+        <label>
+          <span>Kode Variasi</span>
+          <input v-model="form.seller_sku" />
         </label>
         <label>
           <span>TikTok Product ID</span>
@@ -162,8 +190,9 @@
 
         <div class="actions">
           <button class="ghost" @click="fillFromSelected">Reset</button>
-          <button class="primary" @click="save" :disabled="saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
+          <button class="primary" @click="save" :disabled="saving || !form.stock_master_id">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
         </div>
+        <p v-if="!form.stock_master_id" class="notice">Baris ini hanya ada di TikTok. Save Mapping aktif setelah dipasangkan ke varian Shopee.</p>
       </aside>
     </div>
   </section>
@@ -185,6 +214,7 @@ const form = reactive({
   stock_master_id: null,
   shopee_item_id: '',
   shopee_model_id: '',
+  seller_sku: '',
   tiktok_product_id: '',
   tiktok_sku_id: '',
   tiktok_sku_name: '',
@@ -196,13 +226,23 @@ const form = reactive({
 
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-const labelStatus = (status) => status === 'fully_mapped' ? 'Fully Mapped' : status === 'partially_mapped' ? 'Partial' : 'Unmapped'
+const labelStatus = (status) => status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
+const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat cocok otomatis' : 'Belum'
+const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
+const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
+const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
+const hasShopeeActual = (item) => Boolean(item?.shopee?.item_id || item?.shopee?.model_id || item?.shopee?.image_url || item?.shopee?.stock_qty !== null && item?.shopee?.stock_qty !== undefined)
+const hasShopeeCandidate = (item) => Boolean(item?.shopee?.seller_sku || item?.seller_sku)
+const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
+const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
+const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kandidat Shopee' : 'Belum ada di Shopee'
+const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kandidat TikTok' : 'Belum ada di TikTok'
 
 const productGroups = computed(() => {
   const groups = new Map()
 
   items.value.forEach((item) => {
-    const key = item.shopee?.item_id || item.tiktok?.product_id || item.product_name || item.internal_sku
+    const key = item.group_key || item.shopee?.item_id || item.tiktok?.product_id || item.product_name || item.internal_sku
 
     if (!groups.has(key)) {
       groups.set(key, {
@@ -211,8 +251,8 @@ const productGroups = computed(() => {
         image_url: item.image_url || item.shopee?.image_url || item.tiktok?.image_url || '',
         variants: [],
         total_stock: 0,
-        shopee: { mapped: 0, product_name: item.shopee?.product_name || '' },
-        tiktok: { mapped: 0, product_name: item.tiktok?.product_name || '' },
+        shopee: { present: 0, missing: 0, total_stock: 0, product_name: item.shopee?.product_name || '' },
+        tiktok: { present: 0, missing: 0, total_stock: 0, suggested: 0, product_name: item.tiktok?.product_name || '' },
         status: 'unmapped'
       })
     }
@@ -221,25 +261,38 @@ const productGroups = computed(() => {
     group.variants.push(item)
     group.total_stock += Number(item.stock_qty || 0)
 
-    if (item.shopee?.status === 'mapped') group.shopee.mapped += 1
-    if (item.tiktok?.status === 'mapped') group.tiktok.mapped += 1
+    if (hasShopeeActual(item)) {
+      group.shopee.present += 1
+      group.shopee.total_stock += Number(item.shopee?.stock_qty || 0)
+    } else {
+      group.shopee.missing += 1
+    }
+
+    if (hasTiktokActual(item)) {
+      group.tiktok.present += 1
+      group.tiktok.total_stock += Number(item.tiktok?.stock_qty || 0)
+    } else {
+      group.tiktok.missing += 1
+    }
+
+    if (item.tiktok?.status === 'suggested') group.tiktok.suggested += 1
     if (!group.image_url) group.image_url = item.image_url || item.shopee?.image_url || item.tiktok?.image_url || ''
     if (!group.shopee.product_name && item.shopee?.product_name) group.shopee.product_name = item.shopee.product_name
     if (!group.tiktok.product_name && item.tiktok?.product_name) group.tiktok.product_name = item.tiktok.product_name
   })
 
   return Array.from(groups.values()).map((group) => {
-    const fullyMapped = group.variants.every((item) => item.status === 'fully_mapped')
-    const unmapped = group.variants.every((item) => item.status === 'unmapped')
+    const hasShopeeSide = group.shopee.present > 0
+    const hasTiktokSide = group.tiktok.present > 0
 
     return {
       ...group,
-      status: fullyMapped ? 'fully_mapped' : (unmapped ? 'unmapped' : 'partially_mapped')
+      status: hasShopeeSide && hasTiktokSide ? 'both' : (hasShopeeSide ? 'shopee_only' : 'tiktok_only')
     }
   })
 })
 
-const isExpanded = (key) => expandedGroups.value[key] !== false
+const isExpanded = (key) => expandedGroups.value[key] === true
 
 const toggleGroup = (key) => {
   expandedGroups.value = {
@@ -268,9 +321,10 @@ const loadData = async () => {
 
 const selectItem = (item) => {
   selectedItem.value = item
-  form.stock_master_id = item.id
+  form.stock_master_id = item.stock_master_id || (typeof item.id === 'number' ? item.id : null)
   form.shopee_item_id = item.shopee?.item_id || ''
   form.shopee_model_id = item.shopee?.model_id || ''
+  form.seller_sku = item.seller_sku || item.shopee?.seller_sku || item.tiktok?.seller_sku || ''
   form.tiktok_product_id = item.tiktok?.product_id || ''
   form.tiktok_sku_id = item.tiktok?.sku_id || ''
   form.tiktok_sku_name = item.tiktok?.sku_name || item.tiktok?.variant_name || ''
@@ -321,7 +375,10 @@ onMounted(loadData)
 .filter-row { display:grid; grid-template-columns:1.5fr .8fr .8fr; gap:10px; margin-bottom:12px; }
 input,select,textarea { width:100%; border:1px solid #d7dde8; border-radius:6px; padding:10px; font-size:13px; }
 .table-wrap { max-height:72vh; overflow:auto; border:1px solid #e5e7eb; border-radius:8px; }
-table { width:100%; border-collapse:collapse; font-size:13px; min-width:980px; }
+.mapping-table { width:100%; border-collapse:collapse; font-size:13px; min-width:1240px; table-layout:fixed; }
+.col-product { width:28%; }
+.col-channel { width:31%; }
+.col-status { width:10%; }
 th,td { border-bottom:1px solid #e5e7eb; padding:10px; vertical-align:top; text-align:left; }
 thead th { position:sticky; top:0; background:#1f2937; color:#fff; z-index:1; }
 tbody:last-child tr:last-child td { border-bottom:0; }
@@ -332,15 +389,26 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .variant-row { cursor:pointer; }
 .variant-row:hover,.variant-row.active { background:#eff6ff; }
 .variant-title strong { display:block; margin-bottom:4px; }
-.channel-cell { display:grid; grid-template-columns:54px minmax(0,1fr); gap:10px; align-items:start; }
+.channel-cell { display:grid; grid-template-columns:58px minmax(0,1fr); gap:10px; align-items:start; min-width:0; }
 .channel-cell strong { display:block; line-height:1.25; margin-bottom:4px; }
-.thumb { width:54px; height:54px; border-radius:6px; object-fit:cover; background:#eef2f7; border:1px solid #e2e8f0; }
+.channel-cell small,.variant-title small { overflow-wrap:anywhere; }
+.channel-cell.muted { color:#64748b; }
+.channel-title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; min-width:0; }
+.channel-title-row strong { min-width:0; overflow-wrap:anywhere; }
+.channel-badge { flex:0 0 auto; border-radius:999px; padding:3px 7px; font-size:11px; font-weight:800; line-height:1.2; }
+.channel-badge.mapped { color:#047857; background:#d1fae5; }
+.channel-badge.suggested { color:#b45309; background:#fef3c7; }
+.thumb { width:58px; height:58px; border-radius:6px; object-fit:cover; background:#eef2f7; border:1px solid #e2e8f0; }
 .thumb.small { width:42px; height:42px; flex:0 0 auto; }
 .thumb.large { width:82px; height:82px; }
 .fallback { display:grid; place-items:center; color:#64748b; font-weight:800; font-size:12px; }
 .expand { width:28px; height:28px; background:#e2e8f0; color:#0f172a; font-weight:800; flex:0 0 auto; }
 .mini { display:block; margin-top:8px; padding:6px 9px; background:#e2e8f0; color:#334155; font-size:12px; }
 .badge { display:inline-block; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; }
+.badge.both { background:#d1fae5; color:#047857; }
+.badge.shopee_only { background:#e0f2fe; color:#0369a1; }
+.badge.tiktok_only { background:#fae8ff; color:#a21caf; }
+.badge.info { background:#eff6ff; color:#1d4ed8; }
 .badge.fully_mapped { background:#d1fae5; color:#047857; }
 .badge.partially_mapped { background:#fef3c7; color:#b45309; }
 .badge.unmapped { background:#eef2f7; color:#64748b; }
