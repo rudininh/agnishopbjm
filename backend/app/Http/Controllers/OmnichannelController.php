@@ -845,7 +845,7 @@ class OmnichannelController extends Controller
         }
 
         $rows = DB::table('tiktok_products')
-            ->select('product_id', 'product_name', 'image_url', 'sku_name', 'stock_qty', 'price', 'subtotal', 'updated_at')
+            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'stock_qty', 'price', 'subtotal', 'updated_at')
             ->orderBy('product_name')
             ->orderBy('sku_name')
             ->get()
@@ -875,6 +875,7 @@ class OmnichannelController extends Controller
                 'image_url' => $first->image_url ?? null,
                 'updated_at' => $first->updated_at,
                 'skus' => $group->map(fn ($sku) => [
+                        'sku_id' => $sku->sku_id ?? null,
                         'sku_name' => $sku->sku_name,
                         'stock_qty' => (int) ($sku->stock_qty ?? 0),
                         'price' => (int) ($sku->price ?? 0),
@@ -1134,7 +1135,7 @@ class OmnichannelController extends Controller
 
         $productName = (string) ($data['title'] ?? $data['product_name'] ?? 'TikTok Product');
         $imageUrl = $this->extractTiktokImageUrl($data);
-        $skus = data_get($data, 'skus', []);
+        $skus = $this->normalizeTiktokSkuList($data);
 
         if (! is_array($skus) || $skus === []) {
             $skus = [[
@@ -1146,16 +1147,19 @@ class OmnichannelController extends Controller
         }
 
         foreach ($skus as $sku) {
-            $skuName = (string) ($sku['sku_name'] ?? $sku['name'] ?? 'Default');
+            $skuId = (string) ($sku['id'] ?? $sku['sku_id'] ?? $sku['sku_no'] ?? $sku['sku_code'] ?? '');
+            $skuName = (string) ($sku['sku_name'] ?? $sku['name'] ?? $sku['sku_title'] ?? 'Default');
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
             $skuImageUrl = $this->extractTiktokSkuImageUrl($sku);
 
             DB::table('tiktok_products')->updateOrInsert(
-                ['product_id' => $productId, 'sku_name' => $skuName],
+                ['product_id' => $productId, 'sku_id' => $skuId !== '' ? $skuId : $skuName],
                 [
                     'product_name' => $productName,
+                    'sku_id' => $skuId !== '' ? $skuId : null,
                     'image_url' => $skuImageUrl,
+                    'sku_name' => $skuName,
                     'stock_qty' => $stock,
                     'price' => $price,
                     'subtotal' => $price * $stock,
@@ -1168,35 +1172,24 @@ class OmnichannelController extends Controller
 
     private function extractTiktokImageUrl(array $data): ?string
     {
-        $mainImages = data_get($data, 'main_images', []);
+        $mainImages = $this->normalizeTiktokImageCandidates(data_get($data, 'main_images', []));
 
         if (is_array($mainImages)) {
             foreach ($mainImages as $image) {
-                $urls = data_get($image, 'urls', []);
-                if (is_array($urls) && ! empty($urls[0])) {
-                    return (string) $urls[0];
-                }
-
-                $thumbUrls = data_get($image, 'thumb_urls', []);
-                if (is_array($thumbUrls) && ! empty($thumbUrls[0])) {
-                    return (string) $thumbUrls[0];
+                $url = $this->extractTiktokImageNodeUrl($image);
+                if ($url) {
+                    return $url;
                 }
             }
         }
 
-        $skus = data_get($data, 'skus', []);
+        $skus = $this->normalizeTiktokSkuList($data);
 
         if (is_array($skus)) {
             foreach ($skus as $sku) {
-                $skuImage = data_get($sku, 'sales_attributes.0.sku_img', []);
-                $urls = data_get($skuImage, 'urls', []);
-                if (is_array($urls) && ! empty($urls[0])) {
-                    return (string) $urls[0];
-                }
-
-                $thumbUrls = data_get($skuImage, 'thumb_urls', []);
-                if (is_array($thumbUrls) && ! empty($thumbUrls[0])) {
-                    return (string) $thumbUrls[0];
+                $skuImage = $this->extractTiktokSkuImageUrl($sku);
+                if ($skuImage) {
+                    return $skuImage;
                 }
             }
         }
@@ -1208,12 +1201,22 @@ class OmnichannelController extends Controller
     {
         $candidates = [
             data_get($sku, 'sku_img'),
+            data_get($sku, 'sku_image'),
+            data_get($sku, 'sku_image_url'),
             data_get($sku, 'image'),
+            data_get($sku, 'image_url'),
+            data_get($sku, 'image_urls'),
             data_get($sku, 'images.0'),
+            data_get($sku, 'image_list.0'),
+            data_get($sku, 'image_list'),
             data_get($sku, 'sales_attributes.0.sku_img'),
             data_get($sku, 'sales_attributes.0.image'),
             data_get($sku, 'sales_attributes.1.sku_img'),
             data_get($sku, 'sales_attributes.1.image'),
+            data_get($sku, 'sales_attributes.0.image_url'),
+            data_get($sku, 'sales_attributes.1.image_url'),
+            data_get($sku, 'sku_img_list'),
+            data_get($sku, 'sku_image_list'),
         ];
 
         $salesAttributes = data_get($sku, 'sales_attributes', []);
@@ -1234,6 +1237,41 @@ class OmnichannelController extends Controller
         return null;
     }
 
+    private function normalizeTiktokSkuList(array $data): array
+    {
+        $candidates = [
+            data_get($data, 'skus', []),
+            data_get($data, 'sku_list', []),
+            data_get($data, 'sku_info_list', []),
+            data_get($data, 'sku_infos', []),
+            data_get($data, 'skus_info', []),
+            data_get($data, 'variants', []),
+            data_get($data, 'model_list', []),
+            data_get($data, 'product_skus', []),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_array($candidate) && $candidate !== []) {
+                return $candidate;
+            }
+        }
+
+        return [];
+    }
+
+    private function normalizeTiktokImageCandidates(mixed $value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            return [trim($value)];
+        }
+
+        return [];
+    }
+
     private function extractTiktokImageNodeUrl(mixed $image): ?string
     {
         if (is_string($image) && trim($image) !== '') {
@@ -1244,21 +1282,36 @@ class OmnichannelController extends Controller
             return null;
         }
 
-        foreach (['urls', 'thumb_urls', 'url_list', 'image_url_list'] as $key) {
+        foreach (['urls', 'thumb_urls', 'url_list', 'image_url_list', 'image_urls'] as $key) {
             $urls = data_get($image, $key, []);
             if (is_array($urls) && ! empty($urls[0])) {
                 return (string) $urls[0];
             }
         }
 
-        foreach (['url', 'uri', 'image_url', 'thumb_url'] as $key) {
+        foreach (['url', 'uri', 'image_url', 'thumb_url', 'image_id'] as $key) {
             $url = data_get($image, $key);
             if (is_string($url) && trim($url) !== '') {
-                return trim($url);
+                $trimmed = trim($url);
+
+                if ($key === 'image_id' && ! $this->isImageUrl($trimmed)) {
+                    return $this->resolveTiktokImageId($trimmed);
+                }
+
+                return $trimmed;
             }
         }
 
         return null;
+    }
+
+    private function resolveTiktokImageId(string $imageId): ?string
+    {
+        if ($imageId === '' || $this->isImageUrl($imageId)) {
+            return $this->isImageUrl($imageId) ? $imageId : null;
+        }
+
+        return 'https://p16-tiktokcdn-com.akamaized.net/obj/'.$imageId;
     }
 
     private function latestTiktokAccessToken(): string
@@ -2975,6 +3028,7 @@ class OmnichannelController extends Controller
             ],
             'tiktok_products' => [
                 'image_url TEXT',
+                'sku_id TEXT NULL',
             ],
         ] as $table => $columns) {
             foreach ($columns as $definition) {
