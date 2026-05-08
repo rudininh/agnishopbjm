@@ -229,7 +229,7 @@ const form = reactive({
 
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-const labelStatus = (status) => status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
+const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap disinkronkan' : status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
 const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat kode variasi' : 'Belum'
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
 const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
@@ -422,6 +422,7 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .badge.shopee_only { background:#e0f2fe; color:#0369a1; }
 .badge.tiktok_only { background:#fae8ff; color:#a21caf; }
 .badge.info { background:#eff6ff; color:#1d4ed8; }
+.badge.ready_to_sync { background:#d1fae5; color:#047857; }
 .badge.fully_mapped { background:#d1fae5; color:#047857; }
 .badge.partially_mapped { background:#fef3c7; color:#b45309; }
 .badge.unmapped { background:#eef2f7; color:#64748b; }

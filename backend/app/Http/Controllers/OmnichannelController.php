@@ -1771,7 +1771,7 @@ class OmnichannelController extends Controller
                     'source' => $tiktokMatchSource,
                 ],
                 'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
-                    ? 'fully_mapped'
+                    ? 'ready_to_sync'
                     : ($statusShopee === 'unmapped' && $statusTikTok === 'unmapped' ? 'unmapped' : 'partially_mapped'),
                 'updated_at' => $row->updated_at,
             ];
