@@ -138,6 +138,14 @@
                 <td>
                   <span :class="['badge', item.status]">{{ labelStatus(item.status) }}</span>
                   <button class="mini" @click.stop="selectItem(item)">Edit</button>
+                  <button
+                    v-if="canPrepareMissingVariant(item)"
+                    class="mini"
+                    :disabled="preparing"
+                    @click.stop="prepareMissingVariant(item)"
+                  >
+                    {{ preparing ? 'Menyiapkan...' : variantActionLabel(item) }}
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -207,6 +215,7 @@ import { omnichannelService } from '@/services'
 
 const loading = ref(false)
 const saving = ref(false)
+const preparing = ref(false)
 const loadError = ref('')
 const summary = ref(null)
 const items = ref([])
@@ -229,7 +238,7 @@ const form = reactive({
 
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap disinkronkan' : status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
+const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap disinkronkan' : status === 'ready_to_create' ? 'Siap dibuat' : status === 'needs_creation' ? 'Perlu dibuat' : status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
 const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat kode variasi' : 'Belum'
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
 const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
@@ -240,6 +249,13 @@ const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
 const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
 const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
 const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
+const missingTargetChannel = (item) => {
+  if (hasShopeeActual(item) && !hasTiktokActual(item)) return 'tiktok'
+  if (hasTiktokActual(item) && !hasShopeeActual(item)) return 'shopee'
+  return null
+}
+const canPrepareMissingVariant = (item) => Boolean(missingTargetChannel(item))
+const variantActionLabel = (item) => item?.status === 'ready_to_create' ? 'Siap dibuat' : 'Buat Varian Hilang'
 const tiktokDetailHint = (item) => hasTiktokActual(item)
   ? 'Data TikTok aktif sudah tersedia.'
   : hasTiktokCandidate(item)
@@ -361,6 +377,29 @@ const save = async () => {
     loadError.value = error.response?.data?.message || 'Mapping gagal disimpan.'
   } finally {
     saving.value = false
+  }
+}
+
+const prepareMissingVariant = async (item) => {
+  const targetChannel = missingTargetChannel(item)
+  if (!targetChannel) return
+
+  preparing.value = true
+  loadError.value = ''
+  try {
+    await omnichannelService.prepareMissingVariant({
+      stock_master_id: item.stock_master_id || item.id,
+      target_channel: targetChannel
+    })
+    await loadData()
+    const refreshed = items.value.find((candidate) => candidate.stock_master_id === item.stock_master_id)
+    if (refreshed) {
+      selectItem(refreshed)
+    }
+  } catch (error) {
+    loadError.value = error.response?.data?.message || 'Draft varian gagal disiapkan.'
+  } finally {
+    preparing.value = false
   }
 }
 

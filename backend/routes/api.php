@@ -44,6 +44,7 @@ Route::get('get-tiktok-items', [OmnichannelController::class, 'tiktokItems']);
 Route::get('get-stock-master', [OmnichannelController::class, 'stockMaster']);
 Route::get('sku-mapping', [OmnichannelController::class, 'skuMapping']);
 Route::post('sku-mapping', [OmnichannelController::class, 'saveSkuMapping']);
+Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
 Route::match(['get', 'post'], 'sync-shopee-to-tiktok', [OmnichannelController::class, 'syncShopeeToTiktok']);
 
 Route::prefix('auth')->group(function () {
