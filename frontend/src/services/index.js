@@ -123,6 +123,16 @@ export const omnichannelService = {
     return api.post('/tiktok-variant/action', data)
   },
 
+  tiktokGetProduct(data) {
+    return api.post('/tiktok/get-product', data, {
+      responseType: 'text'
+    })
+  },
+
+  tiktokGetProductContext() {
+    return api.get('/tiktok/get-product-context')
+  },
+
   syncShopeeToTiktok() {
     return api.post('/sync-shopee-to-tiktok')
   },

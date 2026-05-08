@@ -7,13 +7,13 @@
         <small class="subtitle">Halaman uji untuk satu etalase: create / update / mapping varian.</small>
       </div>
       <div class="header-actions">
-        <button class="ghost" @click="loadData" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
+        <button class="ghost" @click="loadData(true)" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
         <button class="primary" @click="save" :disabled="!selectedItem || !form.stock_master_id || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
         <button class="ghost" @click.stop="selectedItem && selectItem(selectedItem)" :disabled="!selectedItem">Edit</button>
         <button
           v-if="selectedItem && canPrepareMissingVariant(selectedItem)"
           class="primary"
-          :disabled="preparing || selectedItem.status === 'submitted'"
+          :disabled="preparing"
           @click="prepareMissingVariant(selectedItem)"
         >
           {{ preparing ? 'Menyiapkan...' : `Buat Varian Hilang di ${missingTargetChannel(selectedItem) === 'tiktok' ? 'TikTok' : 'Shopee'}` }}
@@ -27,36 +27,27 @@
     <div class="control-band">
       <label>
         <span>Nama etalase uji</span>
-        <input v-model.trim="filters.search" type="search" placeholder="Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo" @keyup.enter="loadData" />
+        <input v-model.trim="filters.search" type="search" placeholder="Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo" @keyup.enter="loadData(true)" />
       </label>
-      <button class="ghost" @click="loadData" :disabled="loading">Muat etalase ini</button>
+      <button class="ghost" @click="loadData(true)" :disabled="loading">Muat etalase ini</button>
     </div>
 
-    <div class="summary-grid" v-if="activeGroup">
+    <div class="summary-grid" v-if="summaryItem">
       <article class="metric">
-        <span>Etalase</span>
-        <strong>{{ activeGroup.name }}</strong>
+        <span>Item id dan Model id Shopee</span>
+        <strong>{{ summaryItem.shopee?.item_id || '-' }}</strong>
+        <small>Model ID: {{ summaryItem.shopee?.model_id || '-' }}</small>
       </article>
       <article class="metric">
-        <span>Shopee</span>
-        <strong>{{ activeGroup.shopee.present }} / {{ activeGroup.variants.length }}</strong>
-        <small>{{ activeGroup.shopee.total_stock }} stok aktif</small>
-      </article>
-      <article class="metric">
-        <span>TikTok</span>
-        <strong>{{ activeGroup.tiktok.present }} / {{ activeGroup.variants.length }}</strong>
-        <small>{{ activeGroup.tiktok.total_stock }} stok aktif</small>
-      </article>
-      <article class="metric">
-        <span>Status</span>
-        <strong>{{ labelStatus(activeGroup.status) }}</strong>
-        <small>{{ activeGroup.tiktok.missing }} varian belum ada di TikTok</small>
+        <span>Product ID TikTok</span>
+        <strong>{{ summaryItem.tiktok?.product_id || '-' }}</strong>
+        <small>{{ summaryItem.tiktok?.variant_name || summaryItem.variant_name || '-' }}</small>
       </article>
     </div>
 
-    <div class="layout" v-if="activeGroup">
+    <div class="layout">
       <div class="panel list-panel">
-        <div class="group-head">
+        <div class="group-head" v-if="activeGroup">
           <div class="group-title">
             <img v-if="activeGroup.image_url" :src="activeGroup.image_url" class="thumb large" :alt="activeGroup.name" />
             <div v-else class="thumb large fallback">{{ initials(activeGroup.name) }}</div>
@@ -67,6 +58,21 @@
             </div>
           </div>
           <span :class="['badge', activeGroup.status]">{{ labelStatus(activeGroup.status) }}</span>
+        </div>
+        <div v-else class="group-empty">
+          Tidak ada data untuk filter yang dipilih.
+        </div>
+
+        <div class="table-filters">
+          <label>
+            <span>Status</span>
+            <select v-model="filters.status" @change="loadData(true)">
+              <option value="all">Semua</option>
+              <option value="ready_to_sync">Siap Disinkronkan</option>
+              <option value="belum_ada_variant">Belum Ada Variant</option>
+            </select>
+          </label>
+          <div class="filter-hint">Filter ini berlaku untuk data tabel dan pagination di bawahnya.</div>
         </div>
 
         <div class="table-wrap">
@@ -86,8 +92,11 @@
               </tr>
             </thead>
             <tbody>
+              <tr v-if="!displayVariants.length">
+                <td colspan="4" class="empty-row">Tidak ada baris untuk filter ini.</td>
+              </tr>
               <tr
-                v-for="item in activeGroup.variants"
+                v-for="item in displayVariants"
                 :key="item.id"
                 :class="['variant-row', { active: selectedItem?.id === item.id }]"
                 @click="selectItem(item)"
@@ -145,6 +154,129 @@
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <div class="pagination" v-if="pagination.last_page > 1">
+          <button class="ghost" @click="changePage(pagination.page - 1)" :disabled="loading || pagination.page <= 1">Prev</button>
+          <span>Halaman {{ pagination.page }} / {{ pagination.last_page }} | {{ pagination.total }} data</span>
+          <button class="ghost" @click="changePage(pagination.page + 1)" :disabled="loading || pagination.page >= pagination.last_page">Next</button>
+        </div>
+
+        <div class="api-panel">
+          <div class="api-panel-head">
+            <div>
+              <strong>API Testing Tool</strong>
+              <small>Quickly obtain real request parameters and response parameters through this tool. <a href="#" @click.prevent>View guide.</a></small>
+            </div>
+          </div>
+          <div class="api-testing-tool">
+            <div class="api-left">
+              <div class="api-apirow">
+                <div class="api-label">API name</div>
+                <div class="api-apiname">
+                  <div>
+                    <strong>Get Product</strong>
+                    <small>/product/{version}/products/{product_id}</small>
+                  </div>
+                  <span class="api-chip">GET</span>
+                </div>
+              </div>
+
+              <div class="api-version-row">
+                <label class="api-inline">
+                  <span>Version</span>
+                  <select v-model="getProductTool.version">
+                    <option value="202309">202309</option>
+                  </select>
+                </label>
+                <a href="#" class="api-doc-link" @click.prevent>View API doc</a>
+              </div>
+
+              <div class="api-section-title">Authorized shop info</div>
+              <div class="api-shop-auth">
+                <a href="#" class="api-shop-link" @click.prevent>Get shop authorization</a>
+                <label>
+                  <span>shop_id (string) (Optional)</span>
+                  <input v-model.trim="getProductTool.shop_id" placeholder="7495811028690242494" />
+                </label>
+                <label>
+                  <span>shop_cipher (string) (Optional)</span>
+                  <input v-model.trim="getProductTool.shop_cipher" placeholder="ROW_AfAcCgAAAA..." />
+                </label>
+                <label>
+                  <span>access_token (string)</span>
+                  <input v-model.trim="getProductTool.access_token" placeholder="ROW_2ZAVYAAAA..." />
+                </label>
+                <label>
+                  <span>Version (string)</span>
+                  <input :value="getProductTool.version" disabled />
+                </label>
+              </div>
+
+              <div class="api-section-title">Path parameters</div>
+              <div class="api-path-params">
+                <label>
+                  <span>product_id (string)</span>
+                  <input v-model.trim="getProductTool.product_id" placeholder="1732272903733872574" />
+                </label>
+              </div>
+
+              <div class="api-section-title">Query request parameters</div>
+              <div class="api-query-params">
+                <div class="api-bool-row">
+                  <span>return_under_review_version (boolean) (Optional)</span>
+                  <div class="api-radio-group">
+                    <label><input type="radio" value="true" v-model="getProductTool.return_under_review_version" /> true</label>
+                    <label><input type="radio" value="false" v-model="getProductTool.return_under_review_version" /> false</label>
+                  </div>
+                </div>
+                <div class="api-bool-row">
+                  <span>return_draft_version (boolean) (Optional)</span>
+                  <div class="api-radio-group">
+                    <label><input type="radio" value="true" v-model="getProductTool.return_draft_version" /> true</label>
+                    <label><input type="radio" value="false" v-model="getProductTool.return_draft_version" /> false</label>
+                  </div>
+                </div>
+                <label>
+                  <span>locale (string) (Optional)</span>
+                  <input v-model.trim="getProductTool.locale" />
+                </label>
+              </div>
+
+              <div class="api-submit-row">
+                <button class="primary" @click="submitGetProductDemo" :disabled="getProductRequestBusy">
+                  {{ getProductRequestBusy ? 'Submitting...' : 'Submit Request' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="api-right">
+              <div class="api-right-block">
+                <div class="api-right-head">
+                  <strong>Request demo (cURL)</strong>
+                  <button class="ghost mini" type="button" @click="copyGetProductCurl">Copy</button>
+                </div>
+                <pre>{{ apiGetProductCurl }}</pre>
+              </div>
+              <div class="api-right-block">
+                <div class="api-right-head">
+                  <strong>Response</strong>
+                  <button class="ghost mini" type="button" @click="copyGetProductResponse">Copy</button>
+                </div>
+                <div class="api-status-line">
+                  <span>Status:</span>
+                  <span class="status-dot">{{ getProductResponseStatus }}</span>
+                </div>
+                <p v-if="apiGetProductResponseHint" class="api-response-hint">{{ apiGetProductResponseHint }}</p>
+                <div class="api-response-viewer">
+                  <div class="api-response-lines">
+                    <span v-for="line in apiGetProductResponseLines" :key="line.no">{{ line.no }}</span>
+                  </div>
+                  <pre>{{ getProductResponseText || ' ' }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -212,7 +344,6 @@
       </aside>
     </div>
 
-    <p v-else class="notice">Tidak ada data etalase yang cocok dengan nama uji ini.</p>
   </section>
 </template>
 
@@ -229,10 +360,21 @@ const actionBusy = ref(false)
 const loadError = ref('')
 const actionLog = ref('')
 const items = ref([])
-const selectedItem = ref(null)
-const filters = reactive({
-  search: DEFAULT_PRODUCT_NAME
+const pagination = reactive({
+  page: 1,
+  per_page: 5,
+  total: 0,
+  last_page: 1
 })
+const selectedItem = ref(null)
+const getProductRequestBusy = ref(false)
+const getProductResponseText = ref('')
+const getProductResponseStatus = ref('0')
+const filters = reactive({
+  search: DEFAULT_PRODUCT_NAME,
+  status: 'all'
+})
+const pageCache = new Map()
 const form = reactive({
   stock_master_id: null,
   shopee_item_id: '',
@@ -246,10 +388,23 @@ const form = reactive({
   notes: ''
 })
 
+const resetForm = () => {
+  form.stock_master_id = null
+  form.shopee_item_id = ''
+  form.shopee_model_id = ''
+  form.seller_sku = ''
+  form.tiktok_product_id = ''
+  form.tiktok_sku_id = ''
+  form.tiktok_sku_name = ''
+  form.warehouse_id = ''
+  form.inventory_qty = 0
+  form.notes = ''
+}
+
 const normalizeText = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap disinkronkan' : status === 'submitted' ? 'Dikirim ke TikTok' : status === 'failed' ? 'Gagal kirim' : status === 'ready_to_create' ? 'Siap dibuat' : status === 'needs_creation' ? 'Perlu dibuat' : status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
+const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap Disinkronkan' : 'Belum Ada Variant'
 const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat kode variasi' : 'Belum'
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
 const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
@@ -267,14 +422,7 @@ const missingTargetChannel = (item) => {
 }
 const canPrepareMissingVariant = (item) => Boolean(missingTargetChannel(item))
 const variantSortRank = (item) => {
-  const tiktokCandidateOnly = hasTiktokCandidate(item) && !hasTiktokActual(item)
-
-  if (tiktokCandidateOnly) return 0
-  if (item?.status === 'ready_to_sync') return 1
-  if (item?.status === 'submitted') return 2
-  if (item?.status === 'ready_to_create') return 3
-  if (item?.status === 'failed') return 4
-  return 5
+  return item?.status === 'ready_to_sync' ? 0 : 1
 }
 const tiktokDetailHint = (item) => hasTiktokActual(item)
   ? 'Data TikTok aktif sudah tersedia.'
@@ -330,11 +478,11 @@ const groupedItems = computed(() => {
   })
 
   return Array.from(groups.values()).map((group) => {
-    const hasShopeeSide = group.shopee.present > 0
-    const hasTiktokSide = group.tiktok.present > 0
     return {
       ...group,
-      status: hasShopeeSide && hasTiktokSide ? 'both' : (hasShopeeSide ? 'shopee_only' : 'tiktok_only')
+      status: group.variants.every((variant) => variant.status === 'ready_to_sync')
+        ? 'ready_to_sync'
+        : 'belum_ada_variant'
     }
   })
 })
@@ -357,24 +505,233 @@ const activeGroup = computed(() => {
   }
 })
 
-const loadData = async () => {
+const displayVariants = computed(() => activeGroup.value?.variants || [])
+const summaryItem = computed(() => selectedItem.value || activeGroup.value?.variants?.[0] || null)
+
+const getProductTool = reactive({
+  version: '202309',
+  shop_id: '',
+  shop_cipher: '',
+  access_token: '',
+  product_id: '',
+  return_under_review_version: 'false',
+  return_draft_version: 'false',
+  locale: ''
+})
+
+const buildGetProductQuery = () => {
+  const params = new URLSearchParams()
+  const pushIfValue = (key, value) => {
+    const text = String(value ?? '').trim()
+    if (text || text === 'false') params.set(key, text)
+  }
+
+  pushIfValue('access_token', getProductTool.access_token)
+  pushIfValue('app_key', '6i1cagd9f0p83')
+  pushIfValue('shop_cipher', getProductTool.shop_cipher)
+  pushIfValue('shop_id', getProductTool.shop_id)
+  pushIfValue('sign', '4a76ac82d74afd02afd9cc3c41fe131a167592f0d374237ad301dba5bd3a6089')
+  pushIfValue('timestamp', '1778278324')
+  pushIfValue('version', getProductTool.version || '202309')
+  pushIfValue('return_under_review_version', getProductTool.return_under_review_version)
+  pushIfValue('return_draft_version', getProductTool.return_draft_version)
+  pushIfValue('locale', getProductTool.locale)
+  return params.toString()
+}
+
+const apiGetProductCurl = computed(() => {
+  const productId = String(getProductTool.product_id || selectedItem.value?.tiktok?.product_id || '').trim()
+  const url = `https://open-api.tiktokglobalshop.com/product/${getProductTool.version || '202309'}/products/${productId}`
+  const query = buildGetProductQuery()
+  const querySuffix = query ? `?${query}` : ''
+  const accessToken = String(getProductTool.access_token || '').trim()
+  return [
+    "curl -k -X 'GET' \\",
+    `  -H 'x-tts-access-token: ${accessToken}' \\`,
+    `  '${url}${querySuffix}'`
+  ].join('\n')
+})
+
+const apiGetProductResponseLines = computed(() => {
+  return String(getProductResponseText.value || '')
+    .split('\n')
+    .map((line, index) => ({
+      no: index + 1,
+      text: line
+    }))
+})
+
+const apiGetProductResponsePayload = computed(() => {
+  if (!getProductResponseText.value) return null
+
+  try {
+    return JSON.parse(getProductResponseText.value)
+  } catch {
+    return null
+  }
+})
+
+const apiGetProductResponseHint = computed(() => {
+  const payload = apiGetProductResponsePayload.value
+  if (!payload) return ''
+
+  const code = String(payload.code ?? '')
+  const message = String(payload.message ?? '').toLowerCase()
+
+  if (code === '105001' || message.includes('access token is invalid')) {
+    return 'Token TikTok aktif di database tidak valid. Jalankan GET TOKEN / REFRESH TOKEN dulu, lalu coba Submit Request lagi.'
+  }
+
+  if (code === '0') {
+    return 'Response berhasil diambil langsung dari TikTok Shop.'
+  }
+
+  return ''
+})
+
+const copyGetProductCurl = async () => {
+  await navigator.clipboard.writeText(apiGetProductCurl.value)
+}
+
+const copyGetProductResponse = async () => {
+  await navigator.clipboard.writeText(getProductResponseText.value)
+}
+
+const loadGetProductContext = async () => {
+  try {
+    const response = await omnichannelService.tiktokGetProductContext()
+    const data = response.data?.data || {}
+
+    if (data.shop_id) getProductTool.shop_id = data.shop_id
+    if (data.shop_cipher) getProductTool.shop_cipher = data.shop_cipher
+    if (data.access_token) getProductTool.access_token = data.access_token
+    if (data.version) getProductTool.version = data.version
+  } catch {
+    // Kalau context belum tersedia, user tetap bisa lanjut pakai nilai yang ada.
+  }
+}
+
+const extractResponseText = async (response) => {
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    try {
+      const data = await response.json()
+      return JSON.stringify(data, null, 2)
+    } catch {
+      return await response.text()
+    }
+  }
+
+  return await response.text()
+}
+
+const submitGetProductDemo = async () => {
+  getProductRequestBusy.value = true
+  loadError.value = ''
+  getProductResponseText.value = ''
+  getProductResponseStatus.value = '0'
+
+  try {
+    if (selectedItem.value?.tiktok?.product_id && !String(getProductTool.product_id || '').trim()) {
+      getProductTool.product_id = selectedItem.value.tiktok.product_id
+    }
+
+    const response = await fetch('/api/tiktok/get-product', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({
+      product_id: getProductTool.product_id || selectedItem.value?.tiktok?.product_id || '',
+      version: getProductTool.version,
+      shop_id: getProductTool.shop_id,
+      shop_cipher: getProductTool.shop_cipher,
+      access_token: getProductTool.access_token,
+      return_under_review_version: getProductTool.return_under_review_version,
+      return_draft_version: getProductTool.return_draft_version,
+      locale: getProductTool.locale
+      })
+    })
+
+    const responseText = await extractResponseText(response)
+    getProductResponseText.value = responseText
+    try {
+      const parsed = responseText ? JSON.parse(responseText) : null
+      getProductResponseStatus.value = String(parsed?.code ?? response.status ?? 0)
+    } catch {
+      getProductResponseStatus.value = String(response.status ?? 0)
+    }
+  } catch (error) {
+    getProductResponseText.value = error?.message ? String(error.message) : ''
+    getProductResponseStatus.value = '0'
+    loadError.value = error.message || 'Request TikTok gagal diproses.'
+  } finally {
+    getProductRequestBusy.value = false
+  }
+}
+
+const loadData = async (resetPage = false) => {
   loading.value = true
   loadError.value = ''
+  if (resetPage) pagination.page = 1
+  const cacheKey = JSON.stringify({
+    search: filters.search,
+    status: filters.status,
+    sort: 'updated_desc',
+    page: pagination.page,
+    per_page: pagination.per_page
+  })
   try {
+    if (pageCache.has(cacheKey)) {
+      const cached = pageCache.get(cacheKey)
+      items.value = cached.items
+      Object.assign(pagination, cached.pagination)
+      const firstCached = activeGroup.value?.variants?.[0] || null
+      if (firstCached) {
+        selectItem(firstCached)
+      } else {
+        selectedItem.value = null
+        resetForm()
+      }
+      return
+    }
+
     const response = await omnichannelService.skuMapping({
       search: filters.search,
-      status: 'all',
-      sort: 'updated_desc'
+      status: filters.status,
+      sort: 'updated_desc',
+      page: pagination.page,
+      per_page: pagination.per_page
     })
     items.value = response.data.items || []
+    Object.assign(pagination, response.data.pagination || {})
+    pageCache.set(cacheKey, {
+      items: items.value,
+      pagination: { ...pagination }
+    })
     const first = activeGroup.value?.variants?.[0] || null
-    if (first) selectItem(first)
+    if (first) {
+      selectItem(first)
+    } else {
+      selectedItem.value = null
+      resetForm()
+    }
   } catch (error) {
     loadError.value = error.response?.data?.message || 'Data tambah varian gagal dimuat.'
     items.value = []
+    selectedItem.value = null
+    resetForm()
   } finally {
     loading.value = false
   }
+}
+
+const changePage = async (nextPage) => {
+  const targetPage = Math.max(1, Number(nextPage) || 1)
+  if (targetPage === pagination.page) return
+  pagination.page = targetPage
+  await loadData()
 }
 
 const selectItem = (item) => {
@@ -389,6 +746,9 @@ const selectItem = (item) => {
   form.warehouse_id = item.tiktok?.warehouse_id || form.warehouse_id || ''
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
+  getProductTool.product_id = item.tiktok?.product_id || ''
+  getProductResponseText.value = ''
+  getProductResponseStatus.value = '0'
 }
 
 const fillFromSelected = () => {
@@ -463,7 +823,12 @@ const runTiktokAction = async (action) => {
   }
 }
 
-onMounted(loadData)
+onMounted(async () => {
+  await Promise.all([
+    loadData(true),
+    loadGetProductContext()
+  ])
+})
 </script>
 
 <style scoped>
@@ -482,8 +847,9 @@ onMounted(loadData)
 .control-band { display:flex; gap:12px; align-items:end; margin-bottom:12px; padding:12px; background:#fff; border:1px solid #d9e2ec; border-radius:8px; }
 .control-band label { flex:1; }
 .control-band span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
-.control-band input { width:100%; border:1px solid #d7dde8; border-radius:6px; padding:10px; font-size:13px; }
-.summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+.control-band input,
+.control-band select { width:100%; border:1px solid #d7dde8; border-radius:6px; padding:10px; font-size:13px; background:#fff; }
+.summary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
 .metric { background:#fff; border:1px solid #d9e2ec; border-radius:8px; padding:14px; }
 .metric span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
 .metric strong { display:block; font-size:18px; color:#111827; line-height:1.2; }
@@ -495,6 +861,60 @@ onMounted(loadData)
 .group-title strong { display:block; color:#111827; font-size:18px; line-height:1.25; margin-bottom:4px; }
 .group-title small { color:#64748b; display:block; margin-top:3px; }
 .table-wrap { max-height:72vh; overflow:auto; border:1px solid #e5e7eb; border-radius:8px; }
+.group-empty { margin-bottom:12px; padding:12px; border:1px dashed #cbd5e1; border-radius:8px; color:#64748b; background:#f8fafc; }
+.empty-row { text-align:center; color:#64748b; padding:20px !important; }
+.table-filters { display:flex; align-items:end; gap:12px; margin: 0 0 12px; padding: 12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:8px; }
+.table-filters label { min-width: 260px; }
+.table-filters span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
+.table-filters select { width:100%; border:1px solid #d7dde8; border-radius:6px; padding:10px; font-size:13px; background:#fff; }
+.filter-hint { color:#64748b; font-size:12px; }
+.api-panel { margin-top:14px; padding:0; border:0; background:transparent; }
+.api-panel-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:12px; }
+.api-panel-head strong { display:block; color:#111827; font-size:18px; line-height:1.2; }
+.api-panel-head small { color:#64748b; display:block; margin-top:4px; }
+.api-panel-head a { color:#0f766e; text-decoration:none; font-weight:600; }
+.api-testing-tool { display:grid; grid-template-columns:minmax(0,1fr) minmax(360px, 0.95fr); gap:0; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
+.api-left, .api-right { min-width:0; padding:18px; }
+.api-left { border-right:1px solid #e5e7eb; }
+.api-apirow { display:grid; grid-template-columns:72px minmax(0,1fr); gap:12px; padding:12px; border:1px solid #e5e7eb; background:#fff; align-items:center; }
+.api-label { color:#6b7280; font-size:12px; line-height:1.2; }
+.api-apiname { display:flex; justify-content:space-between; align-items:center; gap:12px; min-width:0; }
+.api-apiname strong { display:block; color:#111827; font-size:13px; line-height:1.25; }
+.api-apiname small { display:block; color:#6b7280; font-size:12px; margin-top:2px; }
+.api-chip { flex:0 0 auto; border-radius:4px; background:#e5e7eb; color:#444; font-size:12px; font-weight:700; padding:5px 9px; }
+.api-version-row { display:flex; justify-content:space-between; align-items:flex-end; gap:12px; margin:14px 0 10px; }
+.api-inline { display:grid; gap:6px; width:170px; }
+.api-inline span { color:#6b7280; font-size:12px; }
+.api-inline select, .api-shop-auth input, .api-path-params input, .api-query-params input { width:100%; border:1px solid #d1d5db; border-radius:4px; padding:8px 10px; font-size:13px; background:#fff; }
+.api-inline select:disabled, .api-shop-auth input:disabled { background:#f3f4f6; color:#9ca3af; }
+.api-doc-link, .api-shop-link { color:#0ea5a1; font-size:12px; font-weight:700; text-decoration:none; }
+.api-section-title { font-size:14px; font-weight:600; color:#111827; margin:18px 0 10px; }
+.api-shop-auth, .api-path-params, .api-query-params { position:relative; }
+.api-shop-auth { padding-top:18px; border-top:1px solid #f1f5f9; }
+.api-shop-link { position:absolute; right:0; top:-8px; }
+.api-shop-auth label, .api-path-params label, .api-query-params label { display:block; margin-bottom:12px; }
+.api-shop-auth span, .api-path-params span, .api-query-params span { display:block; color:#6b7280; font-size:12px; margin-bottom:6px; }
+.api-shop-auth em, .api-path-params em, .api-query-params em { font-style:normal; color:#9ca3af; }
+.api-bool-row { margin-bottom:12px; }
+.api-bool-row > span { display:block; color:#6b7280; font-size:12px; margin-bottom:6px; }
+.api-radio-group { display:flex; align-items:center; gap:18px; color:#111827; font-size:13px; }
+.api-radio-group label { display:flex; align-items:center; gap:6px; margin:0; }
+.api-submit-row { display:flex; justify-content:flex-end; margin-top:14px; }
+.api-submit-row .primary { padding:9px 16px; }
+.api-right { background:#fff; }
+.api-right-block { margin-bottom:16px; }
+.api-right-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; }
+.api-right-head strong { color:#111827; font-size:13px; }
+.api-status-line { display:flex; align-items:center; gap:8px; color:#6b7280; font-size:12px; margin-bottom:8px; }
+.status-dot { display:inline-flex; align-items:center; justify-content:center; gap:6px; color:#111827; font-weight:700; }
+.status-dot::before { content:''; width:10px; height:10px; border-radius:999px; background:#16a34a; box-shadow:0 0 0 2px rgba(22,163,74,.15); display:inline-block; }
+.api-right-block pre { margin:0; padding:12px; border:1px solid #e5e7eb; background:#fff; font-size:12px; line-height:1.55; color:#111827; overflow:auto; white-space:pre-wrap; word-break:break-word; max-height:460px; }
+.api-right-block:first-of-type pre { max-height:150px; }
+.api-response-hint { margin:8px 0 10px; color:#b45309; font-size:12px; line-height:1.45; background:#fffbeb; border:1px solid #fcd34d; border-radius:4px; padding:8px 10px; }
+.api-response-viewer { display:grid; grid-template-columns:44px minmax(0,1fr); border:1px solid #e5e7eb; background:#fff; max-height:460px; overflow:auto; }
+.api-response-lines { background:#f8fafc; border-right:1px solid #e5e7eb; color:#94a3b8; font-size:12px; line-height:1.55; text-align:right; padding:12px 8px 12px 0; user-select:none; }
+.api-response-lines span { display:block; min-height:1.55em; }
+.api-response-viewer pre { margin:0; padding:12px; border:0; max-height:none; }
 .mapping-table { width:100%; border-collapse:collapse; font-size:13px; min-width:1240px; table-layout:fixed; }
 .col-product { width:28%; }
 .col-channel { width:31%; }
@@ -520,14 +940,8 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .fallback { display:grid; place-items:center; color:#64748b; font-weight:800; font-size:12px; }
 .mini { display:block; margin-top:8px; padding:6px 9px; background:#e2e8f0; color:#334155; font-size:12px; }
 .badge { display:inline-block; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; }
-.badge.both { background:#d1fae5; color:#047857; }
-.badge.shopee_only { background:#e0f2fe; color:#0369a1; }
-.badge.tiktok_only { background:#fae8ff; color:#a21caf; }
-.badge.submitted { background:#dbeafe; color:#1d4ed8; }
-.badge.failed { background:#fee2e2; color:#b91c1c; }
 .badge.ready_to_sync { background:#d1fae5; color:#047857; }
-.badge.ready_to_create { background:#fef3c7; color:#b45309; }
-.badge.needs_creation { background:#eef2f7; color:#475569; }
+.badge.belum_ada_variant { background:#eef2f7; color:#475569; }
 .detail-panel label { display:block; margin-bottom:10px; }
 .detail-panel span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
 .detail-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
@@ -535,6 +949,7 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .actions { display:flex; gap:10px; margin-top:12px; }
 .actions.stacked { margin-top: 10px; }
 .action-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
-@media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } }
-@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } }
+@media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } .api-testing-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
+@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } }
 </style>
+
