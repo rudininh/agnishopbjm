@@ -1123,13 +1123,12 @@ class OmnichannelController extends Controller
         return is_array($payload) ? data_get($payload, 'data') : null;
     }
 
-    private function submitTiktokVariantMutation(object $stock, array $draftPayload, object $shop, string $accessToken, ?array $existingProduct = null): array
+    private function submitTiktokVariantMutation(object $stock, array $draftPayload, object $shop, string $accessToken, ?array $existingProduct = null, array $options = []): array
     {
         $config = $this->tiktokConfig();
         $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
-        $shopId = (string) ($shop->shop_id ?? $shop->id ?? '');
 
-        if ($shopCipher === '' || $shopId === '') {
+        if ($shopCipher === '') {
             return [
                 'ok' => false,
                 'message' => 'Shop TikTok belum lengkap untuk mengirim request.',
@@ -1153,6 +1152,11 @@ class OmnichannelController extends Controller
             if (is_string($imageUrl) && trim($imageUrl) !== '') {
                 $mainImages[] = $imageUrl;
             }
+        }
+
+        $uploadedImageUri = trim((string) ($options['uploaded_image_uri'] ?? ''));
+        if ($uploadedImageUri !== '') {
+            $mainImages[] = $uploadedImageUri;
         }
 
         foreach ([
@@ -1184,7 +1188,9 @@ class OmnichannelController extends Controller
             'seller_sku' => (string) ($draftPayload['target']['seller_sku'] ?? $stock->internal_sku ?? ''),
             'price' => (int) data_get($draftPayload, 'source.price', 0),
             'stock' => (int) data_get($draftPayload, 'target.stock_qty', 0),
-            'sku_img' => $draftPayload['target']['image_url'] ?? $draftPayload['source']['image_url'] ?? null,
+            'sku_img' => $uploadedImageUri !== ''
+                ? $uploadedImageUri
+                : ($draftPayload['target']['image_url'] ?? $draftPayload['source']['image_url'] ?? null),
         ], fn ($value) => $value !== null && $value !== '');
 
         $body = array_filter([
@@ -1201,13 +1207,11 @@ class OmnichannelController extends Controller
         $query = [
             'app_key' => $config['app_key'],
             'shop_cipher' => $shopCipher,
-            'shop_id' => $shopId,
             'timestamp' => time(),
-            'version' => '202309',
         ];
 
         $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $bodyString);
+        $query['sign'] = $this->generateTiktokWriteSign($path, $query, $config['app_secret']);
 
         $response = Http::timeout(45)
             ->asJson()
@@ -1264,6 +1268,176 @@ class OmnichannelController extends Controller
             'response' => $payload,
             'request' => [
                 'method' => $method,
+                'path' => $path,
+                'query' => $query,
+                'body' => $body,
+            ],
+        ];
+    }
+
+    private function uploadTiktokProductImage(object $shop, string $accessToken, string $sourceImageUrl, string $useCase = 'MAIN_IMAGE'): array
+    {
+        $config = $this->tiktokConfig();
+        $path = '/product/202309/images/upload';
+        $query = [
+            'app_key' => $config['app_key'],
+            'timestamp' => time(),
+        ];
+        $query['sign'] = $this->generateTiktokWriteSign($path, $query, $config['app_secret']);
+
+        $absolutePath = $this->resolveUploadImagePath($sourceImageUrl);
+        if ($absolutePath === null) {
+            return [
+                'ok' => false,
+                'message' => 'Gambar sumber belum bisa dibaca untuk diupload ke TikTok.',
+            ];
+        }
+
+        $response = Http::timeout(45)
+            ->withHeaders([
+                'x-tts-access-token' => $accessToken,
+            ])
+            ->attach('data', file_get_contents($absolutePath), basename($absolutePath))
+            ->post($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), [
+                'use_case' => $useCase,
+            ]);
+
+        $payload = $response->json();
+        if (! is_array($payload)) {
+            return [
+                'ok' => false,
+                'message' => 'TikTok tidak mengembalikan JSON valid saat upload gambar.',
+                'http_status' => $response->status(),
+                'response_body' => $response->body(),
+                'request' => [
+                    'method' => 'POST',
+                    'path' => $path,
+                    'query' => $query,
+                    'use_case' => $useCase,
+                    'source_image' => $sourceImageUrl,
+                ],
+            ];
+        }
+
+        if ((int) ($payload['code'] ?? -1) !== 0) {
+            return [
+                'ok' => false,
+                'message' => $payload['message'] ?? 'Gagal upload gambar ke TikTok.',
+                'response' => $payload,
+                'request' => [
+                    'method' => 'POST',
+                    'path' => $path,
+                    'query' => $query,
+                    'use_case' => $useCase,
+                    'source_image' => $sourceImageUrl,
+                ],
+            ];
+        }
+
+        $data = data_get($payload, 'data', []);
+        $uri = (string) (
+            data_get($data, 'uri')
+            ?? data_get($data, 'image_uri')
+            ?? data_get($data, 'image.0.uri')
+            ?? data_get($data, 'images.0.uri')
+            ?? data_get($data, 'file.uri')
+            ?? ''
+        );
+
+        return [
+            'ok' => true,
+            'message' => 'Gambar berhasil diupload ke TikTok.',
+            'uri' => $uri !== '' ? $uri : null,
+            'response' => $payload,
+            'request' => [
+                'method' => 'POST',
+                'path' => $path,
+                'query' => $query,
+                'use_case' => $useCase,
+                'source_image' => $sourceImageUrl,
+            ],
+        ];
+    }
+
+    private function updateTiktokInventory(object $shop, string $accessToken, string $productId, string $skuId, string $warehouseId, int $quantity): array
+    {
+        $config = $this->tiktokConfig();
+        $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
+
+        if ($shopCipher === '') {
+            return [
+                'ok' => false,
+                'message' => 'Shop TikTok belum lengkap untuk update inventory.',
+            ];
+        }
+
+        $path = '/product/202309/products/'.$productId.'/inventory/update';
+        $query = [
+            'app_key' => $config['app_key'],
+            'shop_cipher' => $shopCipher,
+            'timestamp' => time(),
+        ];
+        $query['sign'] = $this->generateTiktokWriteSign($path, $query, $config['app_secret']);
+
+        $body = [
+            'skus' => [
+                [
+                    'id' => $skuId,
+                    'inventory' => [
+                        [
+                            'warehouse_id' => $warehouseId,
+                            'quantity' => $quantity,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $response = Http::timeout(45)
+            ->asJson()
+            ->withHeaders([
+                'x-tts-access-token' => $accessToken,
+                'content-type' => 'application/json',
+            ])
+            ->withOptions(['query' => $query])
+            ->post($config['api_host'].$path, $body);
+
+        $payload = $response->json();
+        if (! is_array($payload)) {
+            return [
+                'ok' => false,
+                'message' => 'TikTok tidak mengembalikan JSON valid saat update inventory.',
+                'http_status' => $response->status(),
+                'response_body' => $response->body(),
+                'request' => [
+                    'method' => 'POST',
+                    'path' => $path,
+                    'query' => $query,
+                    'body' => $body,
+                ],
+            ];
+        }
+
+        if ((int) ($payload['code'] ?? -1) !== 0) {
+            return [
+                'ok' => false,
+                'message' => $payload['message'] ?? 'Gagal update inventory TikTok.',
+                'response' => $payload,
+                'request' => [
+                    'method' => 'POST',
+                    'path' => $path,
+                    'query' => $query,
+                    'body' => $body,
+                ],
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Inventory TikTok berhasil diperbarui.',
+            'response' => $payload,
+            'request' => [
+                'method' => 'POST',
                 'path' => $path,
                 'query' => $query,
                 'body' => $body,
@@ -2509,16 +2683,9 @@ class OmnichannelController extends Controller
         return response()->json(['status' => 'ok', 'message' => 'Mapping SKU berhasil disimpan.']);
     }
 
-    public function prepareMissingVariant(Request $request): JsonResponse
+    private function loadSkuMappingVariantStockRow(int $stockMasterId): ?object
     {
-        $this->ensureSkuMappingTables();
-
-        $data = $request->validate([
-            'stock_master_id' => ['required', 'integer'],
-            'target_channel' => ['required', 'in:shopee,tiktok'],
-        ]);
-
-        $stock = DB::table('stock_master as sm')
+        return DB::table('stock_master as sm')
             ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
             ->leftJoin('shopee_product_model as spm', function ($join) {
                 $join->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
@@ -2533,7 +2700,7 @@ class OmnichannelController extends Controller
             ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
                 $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
             })
-            ->where('sm.id', $data['stock_master_id'])
+            ->where('sm.id', $stockMasterId)
             ->select(
                 'sm.id',
                 'sm.internal_sku',
@@ -2563,6 +2730,18 @@ class OmnichannelController extends Controller
                 'spi.image_url as shopee_product_image_url'
             )
             ->first();
+    }
+
+    public function prepareMissingVariant(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'stock_master_id' => ['required', 'integer'],
+            'target_channel' => ['required', 'in:shopee,tiktok'],
+        ]);
+
+        $stock = $this->loadSkuMappingVariantStockRow((int) $data['stock_master_id']);
 
         abort_if(! $stock, 404, 'Varian tidak ditemukan.');
 
@@ -2732,6 +2911,196 @@ class OmnichannelController extends Controller
             'message' => $actionMessage,
             'draft' => $draftPayload,
             'action_status' => $actionStatus,
+        ]);
+    }
+
+    public function tiktokVariantAction(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'stock_master_id' => ['required', 'integer'],
+            'action' => ['required', 'in:upload_image,save_product,update_inventory,full_sync'],
+            'warehouse_id' => ['nullable', 'string'],
+            'quantity' => ['nullable', 'integer'],
+        ]);
+
+        $stock = $this->loadSkuMappingVariantStockRow((int) $data['stock_master_id']);
+        abort_if(! $stock, 404, 'Varian tidak ditemukan.');
+
+        $sourceProductId = trim((string) ($stock->shopee_product_id ?? ''));
+        $sourceModelId = trim((string) ($stock->shopee_sku ?? ''));
+        $sourceVariantName = trim((string) ($stock->shopee_variant_name ?? $stock->variant_name ?? ''));
+        $sourceSellerSku = trim((string) ($stock->mapped_seller_sku ?? $stock->shopee_seller_sku ?? ''));
+        $sourceImageUrl = $stock->internal_image_url ?: $stock->shopee_image_url ?: $stock->shopee_model_image_url ?: $stock->shopee_product_image_url;
+
+        abort_if($sourceProductId === '' && $sourceModelId === '' && $sourceVariantName === '', 422, 'Data Shopee belum cukup untuk menyiapkan payload TikTok.');
+
+        $draftPayload = [
+            'target_channel' => 'tiktok',
+            'source_channel' => 'shopee',
+            'stock_master_id' => (int) $stock->id,
+            'product_name' => $stock->product_name,
+            'variant_name' => $stock->variant_name,
+            'source' => [
+                'item_id' => $sourceProductId ?: null,
+                'model_id' => $sourceModelId ?: null,
+                'variant_name' => $sourceVariantName ?: null,
+                'seller_sku' => $sourceSellerSku ?: null,
+                'image_url' => $sourceImageUrl ?: null,
+                'stock_qty' => (int) ($stock->stock_qty ?? 0),
+                'price' => (int) ($stock->shopee_variant_price ?? 0),
+            ],
+            'target' => [
+                'variant_name' => $stock->variant_name,
+                'seller_sku' => $sourceSellerSku ?: $stock->internal_sku,
+                'image_url' => $sourceImageUrl ?: null,
+                'stock_qty' => (int) ($stock->stock_qty ?? 0),
+            ],
+        ];
+
+        $accessToken = $this->activeTiktokAccessTokenForSync();
+        abort_if($accessToken === '', 422, 'Token TikTok belum aktif. Jalankan login/refresh token dulu.');
+
+        $action = (string) $data['action'];
+        $shop = $this->latestTiktokShop();
+        $actionStatus = 'ready_to_create';
+        $actionMessage = 'Action TikTok berhasil disiapkan.';
+        $actionPayload = $draftPayload;
+        $uploadResult = null;
+        $mutationResult = null;
+        $inventoryResult = null;
+
+        if (in_array($action, ['upload_image', 'save_product', 'full_sync'], true)) {
+            $uploadResult = $this->uploadTiktokProductImage(
+                $shop ?? (object) [],
+                $accessToken,
+                (string) ($sourceImageUrl ?: ''),
+                'MAIN_IMAGE'
+            );
+
+            $actionPayload['upload'] = $uploadResult;
+
+            if (($uploadResult['ok'] ?? false) !== true) {
+                $actionStatus = 'failed';
+                $actionMessage = $uploadResult['message'] ?? 'Gagal upload gambar ke TikTok.';
+            } elseif ($action === 'upload_image') {
+                $actionStatus = 'uploaded_image';
+                $actionMessage = $uploadResult['message'] ?? 'Gambar berhasil diupload ke TikTok.';
+            }
+        }
+
+        if (in_array($action, ['save_product', 'full_sync'], true) && $actionStatus !== 'failed') {
+            $shop = $shop ?? $this->latestTiktokShop();
+            abort_if(! $shop, 422, 'Shop TikTok belum tersedia. Klik Get Auth Shop dulu.');
+
+            $existingProduct = DB::table('tiktok_products')
+                ->whereRaw('COALESCE(is_active, true) = true')
+                ->whereRaw('LOWER(TRIM(product_name)) = LOWER(TRIM(?))', [$stock->product_name ?? ''])
+                ->orderByDesc('updated_at')
+                ->first();
+
+            $mutationResult = $this->submitTiktokVariantMutation(
+                $stock,
+                $draftPayload,
+                $shop,
+                $accessToken,
+                $existingProduct ? (array) $existingProduct : null,
+                ['uploaded_image_uri' => data_get($uploadResult, 'uri')]
+            );
+
+            $actionPayload['mutation'] = $mutationResult;
+
+            if (($mutationResult['ok'] ?? false) !== true) {
+                $actionStatus = 'failed';
+                $actionMessage = $mutationResult['message'] ?? 'Gagal mengirim produk ke TikTok.';
+            } else {
+                $actionStatus = 'submitted';
+                $actionMessage = $mutationResult['message'] ?? 'Produk TikTok berhasil dikirim.';
+
+                $returnedProductId = trim((string) ($mutationResult['product_id'] ?? ''));
+                $returnedSkuId = trim((string) ($mutationResult['sku_id'] ?? ''));
+
+                if ($returnedProductId !== '' || $returnedSkuId !== '') {
+                    DB::table('sku_mappings')->updateOrInsert(
+                        ['stock_master_id' => $stock->id],
+                        [
+                            'tiktok_product_id' => $returnedProductId !== '' ? $returnedProductId : ($stock->tiktok_product_id ?? null),
+                            'tiktok_sku_id' => $returnedSkuId !== '' ? $returnedSkuId : ($stock->tiktok_sku ?? null),
+                            'tiktok_sku_name' => $draftPayload['target']['variant_name'] ?? $stock->variant_name,
+                            'seller_sku' => $draftPayload['target']['seller_sku'] ?? $stock->internal_sku,
+                            'tiktok_image_url' => data_get($uploadResult, 'uri') ?: ($draftPayload['target']['image_url'] ?? null),
+                            'updated_at' => now(),
+                            'created_at' => now(),
+                        ]
+                    );
+
+                    DB::table('stock_master')
+                        ->where('id', $stock->id)
+                        ->update([
+                            'tiktok_product_id' => $returnedProductId !== '' ? $returnedProductId : ($stock->tiktok_product_id ?? null),
+                            'tiktok_sku' => $returnedSkuId !== '' ? $returnedSkuId : ($stock->tiktok_sku ?? null),
+                            'tiktok_seller_sku' => $draftPayload['target']['seller_sku'] ?? $stock->internal_sku,
+                            'updated_at' => now(),
+                        ]);
+                }
+            }
+        }
+
+        if (in_array($action, ['update_inventory', 'full_sync'], true) && $actionStatus !== 'failed') {
+            $shop = $shop ?? $this->latestTiktokShop();
+            abort_if(! $shop, 422, 'Shop TikTok belum tersedia. Klik Get Auth Shop dulu.');
+
+            $warehouseId = trim((string) ($data['warehouse_id'] ?? ''));
+            abort_if($warehouseId === '', 422, 'Warehouse ID TikTok wajib diisi untuk update inventory.');
+
+            $productId = trim((string) (
+                data_get($mutationResult, 'product_id')
+                ?: ($stock->mapped_tiktok_product_id ?? $stock->tiktok_product_id ?? '')
+            ));
+            $skuId = trim((string) (
+                data_get($mutationResult, 'sku_id')
+                ?: ($stock->tiktok_sku ?? $stock->tiktok_sku_id ?? '')
+            ));
+
+            abort_if($productId === '' || $skuId === '', 422, 'Product ID atau SKU ID TikTok belum tersedia untuk update inventory.');
+
+            $quantity = (int) ($data['quantity'] ?? ($stock->stock_qty ?? 0));
+            $inventoryResult = $this->updateTiktokInventory($shop, $accessToken, $productId, $skuId, $warehouseId, $quantity);
+            $actionPayload['inventory'] = $inventoryResult;
+
+            if (($inventoryResult['ok'] ?? false) !== true) {
+                $actionStatus = 'failed';
+                $actionMessage = $inventoryResult['message'] ?? 'Gagal update inventory TikTok.';
+            } else {
+                $actionStatus = 'inventory_updated';
+                $actionMessage = $inventoryResult['message'] ?? 'Inventory TikTok berhasil diperbarui.';
+            }
+        }
+
+        DB::table('sku_variant_actions')->updateOrInsert(
+            [
+                'stock_master_id' => $stock->id,
+                'target_channel' => 'tiktok',
+                'action_type' => 'tiktok_'.$action,
+            ],
+            [
+                'source_channel' => 'shopee',
+                'payload' => json_encode($actionPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => $actionStatus,
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => $actionMessage,
+            'draft' => $draftPayload,
+            'action_status' => $actionStatus,
+            'upload' => $uploadResult,
+            'mutation' => $mutationResult,
+            'inventory' => $inventoryResult,
         ]);
     }
 
@@ -4058,6 +4427,54 @@ class OmnichannelController extends Controller
         $stringToSign .= $secret;
 
         return hash_hmac('sha256', $stringToSign, $secret);
+    }
+
+    private function generateTiktokWriteSign(string $path, array $params, string $secret): string
+    {
+        unset($params['sign'], $params['access_token']);
+        ksort($params);
+
+        $stringToSign = $secret.$path;
+        foreach ($params as $key => $value) {
+            $stringToSign .= $key.$value;
+        }
+        $stringToSign .= $secret;
+
+        return hash_hmac('sha256', $stringToSign, $secret);
+    }
+
+    private function resolveUploadImagePath(?string $imageUrl): ?string
+    {
+        if (! is_string($imageUrl)) {
+            return null;
+        }
+
+        $value = trim($imageUrl);
+        if ($value === '') {
+            return null;
+        }
+
+        if (str_starts_with($value, '/cached-images/')) {
+            $relative = ltrim(substr($value, strlen('/cached-images/')), '/');
+            $path = storage_path('app/public/'.$relative);
+
+            return is_file($path) ? $path : null;
+        }
+
+        if (! preg_match('#^https?://#i', $value)) {
+            $path = storage_path('app/public/'.ltrim($value, '/'));
+            return is_file($path) ? $path : null;
+        }
+
+        $cached = $this->cacheMarketplaceImageUrl($value, 'tiktok', 'upload', sha1($value));
+        if (is_string($cached) && str_starts_with($cached, '/cached-images/')) {
+            $relative = ltrim(substr($cached, strlen('/cached-images/')), '/');
+            $path = storage_path('app/public/'.$relative);
+
+            return is_file($path) ? $path : null;
+        }
+
+        return null;
     }
 
     private function ensureTiktokAuthTables(): void
