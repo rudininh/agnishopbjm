@@ -1980,6 +1980,8 @@ class OmnichannelController extends Controller
         $search = trim((string) $request->query('search', ''));
         $status = (string) $request->query('status', 'all');
         $sort = (string) $request->query('sort', 'updated_desc');
+        $perPage = max(1, min(50, (int) $request->query('per_page', 5)));
+        $page = max(1, (int) $request->query('page', 1));
 
         $query = DB::table('stock_master as sm')
             ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
@@ -2138,13 +2140,7 @@ class OmnichannelController extends Controller
                 ],
                 'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
                     ? 'ready_to_sync'
-                    : ($variantActionStatus === 'submitted'
-                        ? 'submitted'
-                        : ($variantActionStatus === 'failed'
-                            ? 'failed'
-                            : ($variantActionStatus === 'ready_to_create'
-                                ? 'ready_to_create'
-                                : (($statusShopee !== 'unmapped' || $statusTikTok !== 'unmapped') ? 'needs_creation' : 'unmapped')))),
+                    : 'belum_ada_variant',
                 'updated_at' => $row->updated_at,
             ];
         }
@@ -2200,7 +2196,7 @@ class OmnichannelController extends Controller
                         'status' => 'mapped',
                         'source' => 'actual',
                     ],
-                    'status' => 'partially_mapped',
+                    'status' => 'belum_ada_variant',
                     'updated_at' => $skuRow->updated_at,
                 ];
             }
@@ -2209,8 +2205,7 @@ class OmnichannelController extends Controller
         $items = collect($items)
             ->filter(function (array $item) use ($search, $status) {
                 $matchesStatus = match ($status) {
-                    'mapped' => $item['shopee']['status'] !== 'unmapped' || $item['tiktok']['status'] !== 'unmapped',
-                    'unmapped' => $item['shopee']['status'] === 'unmapped' && $item['tiktok']['status'] === 'unmapped',
+                    'ready_to_sync', 'belum_ada_variant' => $item['status'] === $status,
                     default => true,
                 };
 
@@ -2254,6 +2249,9 @@ class OmnichannelController extends Controller
             })
             ->values();
 
+        $total = $items->count();
+        $pagedItems = $items->slice(($page - 1) * $perPage, $perPage)->values();
+
         return response()->json([
             'summary' => [
                 'total' => DB::table('stock_master')->count(),
@@ -2261,7 +2259,13 @@ class OmnichannelController extends Controller
                 'last_shopee_sync_at' => DB::table('shopee_sync_logs')->max('synced_at'),
                 'last_tiktok_sync_at' => DB::table('tiktok_sync_logs')->max('synced_at'),
             ],
-            'items' => $items,
+            'items' => $pagedItems,
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'last_page' => (int) max(1, (int) ceil($total / $perPage)),
+            ],
         ]);
     }
 
@@ -3101,6 +3105,125 @@ class OmnichannelController extends Controller
             'upload' => $uploadResult,
             'mutation' => $mutationResult,
             'inventory' => $inventoryResult,
+        ]);
+    }
+
+    public function tiktokGetProduct(Request $request): Response|JsonResponse
+    {
+        $this->ensureTiktokAuthTables();
+
+        $data = $request->validate([
+            'product_id' => ['required', 'string'],
+            'version' => ['nullable', 'string'],
+            'shop_id' => ['nullable', 'string'],
+            'shop_cipher' => ['nullable', 'string'],
+            'access_token' => ['nullable', 'string'],
+            'return_under_review_version' => ['nullable'],
+            'return_draft_version' => ['nullable'],
+            'locale' => ['nullable', 'string'],
+        ]);
+
+        $config = $this->tiktokConfig();
+        $context = $this->resolveTiktokGetProductContext($data);
+        $productId = trim((string) $data['product_id']);
+        $version = trim((string) ($context['version'] ?? ($data['version'] ?? '202309'))) ?: '202309';
+        $accessToken = trim((string) ($context['access_token'] ?? ''));
+        abort_if($accessToken === '', 422, 'Token TikTok belum aktif. Jalankan login/refresh token dulu.');
+
+        $shopId = trim((string) ($context['shop_id'] ?? ''));
+        $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+        abort_if($shopId === '' || $shopCipher === '', 422, 'Shop TikTok belum lengkap untuk request get-product.');
+
+        $query = [
+            'app_key' => $config['app_key'],
+            'shop_cipher' => $shopCipher,
+            'shop_id' => $shopId,
+            'timestamp' => time(),
+            'version' => $version,
+        ];
+
+        $returnUnderReviewVersion = trim((string) ($data['return_under_review_version'] ?? ''));
+        if ($returnUnderReviewVersion !== '') {
+            $query['return_under_review_version'] = filter_var($returnUnderReviewVersion, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+            $query['return_under_review_version'] = $query['return_under_review_version'] === null
+                ? $returnUnderReviewVersion
+                : ($query['return_under_review_version'] ? 'true' : 'false');
+        }
+
+        $returnDraftVersion = trim((string) ($data['return_draft_version'] ?? ''));
+        if ($returnDraftVersion !== '') {
+            $query['return_draft_version'] = filter_var($returnDraftVersion, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+            $query['return_draft_version'] = $query['return_draft_version'] === null
+                ? $returnDraftVersion
+                : ($query['return_draft_version'] ? 'true' : 'false');
+        }
+
+        $locale = trim((string) ($data['locale'] ?? ''));
+        if ($locale !== '') {
+            $query['locale'] = $locale;
+        }
+
+        $path = '/product/'.$version.'/products/'.$productId;
+        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret']);
+
+        try {
+            $response = Http::timeout(45)
+                ->withHeaders([
+                    'x-tts-access-token' => $accessToken,
+                    'content-type' => 'application/json',
+                ])
+                ->get($config['api_host'].$path, $query);
+        } catch (\Throwable $exception) {
+            logger()->warning('TikTok get-product request exception', [
+                'product_id' => $productId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'TikTok get-product request gagal dipanggil.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        $body = $response->body();
+        $decoded = json_decode($body, true);
+        if (! is_array($decoded)) {
+            logger()->warning('TikTok get-product returned invalid JSON', [
+                'product_id' => $productId,
+                'http_status' => $response->status(),
+                'body' => $body,
+            ]);
+
+            return response()->json([
+                'message' => 'TikTok tidak mengembalikan JSON valid.',
+                'raw' => $body,
+            ], 502);
+        }
+
+        return response($body, $response->status())
+            ->header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    public function tiktokGetProductContext(): JsonResponse
+    {
+        $this->ensureTiktokAuthTables();
+
+        $context = $this->resolveTiktokGetProductContext([]);
+
+        abort_if(trim((string) ($context['access_token'] ?? '')) === '', 422, 'Token TikTok aktif belum tersedia.');
+        abort_if(trim((string) ($context['shop_id'] ?? '')) === '' || trim((string) ($context['shop_cipher'] ?? '')) === '', 422, 'Shop TikTok aktif belum tersedia.');
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => 'Context TikTok aktif berhasil diambil.',
+            'data' => [
+                'account_key' => $context['account_key'] ?? null,
+                'account_name' => $context['account_name'] ?? null,
+                'version' => $context['version'] ?? '202309',
+                'shop_id' => $context['shop_id'] ?? null,
+                'shop_cipher' => $context['shop_cipher'] ?? null,
+                'access_token' => $context['access_token'] ?? null,
+            ],
         ]);
     }
 
@@ -4260,6 +4383,30 @@ class OmnichannelController extends Controller
             ->orderByDesc('updated_at')
             ->orderByDesc('created_at')
             ->first();
+    }
+
+    private function resolveTiktokGetProductContext(array $data): array
+    {
+        $account = $this->resolveAccount('tiktok-agnishopbjm', 'tiktok');
+        $token = $this->latestActiveTiktokToken($account);
+        $shop = $this->latestTiktokShop();
+
+        $accessToken = trim((string) ($token->access_token ?? $data['access_token'] ?? ''));
+        $shopId = trim((string) (
+            $shop->shop_id ?? $shop->id ?? $token->shop_id ?? $data['shop_id'] ?? ''
+        ));
+        $shopCipher = trim((string) (
+            $shop->cipher ?? $shop->shop_cipher ?? $token->shop_cipher ?? $data['shop_cipher'] ?? ''
+        ));
+
+        return [
+            'account_key' => $account['key'],
+            'account_name' => $account['name'],
+            'version' => trim((string) ($data['version'] ?? '202309')) ?: '202309',
+            'shop_id' => $shopId,
+            'shop_cipher' => $shopCipher,
+            'access_token' => $accessToken,
+        ];
     }
 
     private function resolveTiktokExpireAt(null|int|string $value): ?Carbon
