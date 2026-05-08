@@ -115,7 +115,7 @@
                     <div v-else class="thumb fallback">TT</div>
                     <div>
                       <div class="channel-title-row">
-                        <strong>{{ item.tiktok?.variant_name || item.tiktok?.sku_name || '-' }}</strong>
+                        <strong>{{ item.variant_name || item.tiktok?.variant_name || '-' }}</strong>
                         <span
                           v-if="item.tiktok?.status && item.tiktok.status !== 'unmapped'"
                           :class="['channel-badge', item.tiktok.status]"
@@ -127,8 +127,9 @@
                       <small>{{ item.tiktok?.product_name || '-' }}</small>
                       <small>Product ID: {{ hasTiktokActual(item) ? (item.tiktok?.product_id || '-') : '-' }}</small>
                       <small>SKU ID: {{ hasTiktokActual(item) ? (item.tiktok?.sku_id || '-') : '-' }}</small>
+                      <small>Nama Varian: {{ item.variant_name || item.tiktok?.variant_name || '-' }}</small>
                       <small>Kode Variasi: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }}</small>
-                      <small v-if="hasTiktokActual(item)">SKU Name: {{ item.tiktok?.sku_name || '-' }}</small>
+                      <small v-if="hasTiktokActual(item)">Kode SKU TikTok: {{ item.tiktok?.sku_name || '-' }}</small>
                       <small v-else>Kode ini belum menunjuk ke varian TikTok yang aktif.</small>
                       <small>Stok: {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
                     </div>
@@ -181,7 +182,7 @@
           <input v-model="form.tiktok_sku_id" />
         </label>
         <label>
-          <span>TikTok SKU Name</span>
+          <span>Nama Varian TikTok</span>
           <input v-model="form.tiktok_sku_name" />
         </label>
         <label>
