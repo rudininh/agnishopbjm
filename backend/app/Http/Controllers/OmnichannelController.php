@@ -1600,6 +1600,7 @@ class OmnichannelController extends Controller
     {
         $this->ensureShopeeProductTables();
         $this->ensureTiktokProductTables();
+        $this->ensureSkuVariantActionTables();
 
         DB::statement("
             CREATE TABLE IF NOT EXISTS sku_mappings (
@@ -1630,6 +1631,26 @@ class OmnichannelController extends Controller
         DB::statement("ALTER TABLE sku_mappings ADD COLUMN IF NOT EXISTS seller_sku TEXT NULL");
     }
 
+    private function ensureSkuVariantActionTables(): void
+    {
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS sku_variant_actions (
+                id BIGSERIAL PRIMARY KEY,
+                stock_master_id BIGINT NOT NULL,
+                target_channel TEXT NOT NULL,
+                source_channel TEXT NULL,
+                action_type TEXT NOT NULL,
+                payload JSONB NULL,
+                status TEXT NOT NULL DEFAULT 'ready_to_create',
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("CREATE INDEX IF NOT EXISTS sku_variant_actions_stock_master_id_idx ON sku_variant_actions (stock_master_id)");
+        DB::statement("CREATE UNIQUE INDEX IF NOT EXISTS sku_variant_actions_unique_idx ON sku_variant_actions (stock_master_id, target_channel, action_type)");
+    }
+
     public function skuMapping(Request $request): JsonResponse
     {
         $this->ensureSkuMappingTables();
@@ -1652,6 +1673,21 @@ class OmnichannelController extends Controller
             })
             ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
                 $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
+            ->leftJoin(DB::raw("(
+                SELECT DISTINCT ON (stock_master_id)
+                    stock_master_id,
+                    target_channel,
+                    source_channel,
+                    action_type,
+                    status AS variant_action_status,
+                    payload AS variant_action_payload,
+                    created_at,
+                    updated_at
+                FROM sku_variant_actions
+                ORDER BY stock_master_id, created_at DESC, id DESC
+            ) as sva"), function ($join) {
+                $join->on('sva.stock_master_id', '=', 'sm.id');
             })
             ->select(
             'sm.id',
@@ -1677,6 +1713,11 @@ class OmnichannelController extends Controller
             'map.shopee_image_url',
             'map.tiktok_image_url',
             'map.notes',
+            'sva.target_channel as variant_action_target_channel',
+            'sva.source_channel as variant_action_source_channel',
+            'sva.action_type as variant_action_type',
+            'sva.variant_action_status',
+            'sva.variant_action_payload',
             'sp.name as shopee_name',
             'spm.name as shopee_variant_name',
             'spm.stock as shopee_variant_stock',
@@ -1725,6 +1766,7 @@ class OmnichannelController extends Controller
             $statusTikTok = $hasSavedTiktokMapping
                 ? 'mapped'
                 : ($tiktokMatch ? 'suggested' : 'unmapped');
+            $variantActionStatus = trim((string) ($row->variant_action_status ?? ''));
 
             $shopeeImageUrl = $row->shopee_image_url
                 ?: $row->shopee_model_image_url
@@ -1748,6 +1790,8 @@ class OmnichannelController extends Controller
                 'image_url' => $row->internal_image_url ?: $shopeeImageUrl ?: $tiktokImageUrl ?: $row->shopee_product_image_url,
                 'mapping_id' => $row->mapping_id,
                 'seller_sku' => $shopeeSellerSku ?: $tiktokSellerSku,
+                'variant_action_status' => $variantActionStatus !== '' ? $variantActionStatus : null,
+                'variant_action_target_channel' => $row->variant_action_target_channel ?? null,
                 'shopee' => [
                     'item_id' => $shopeeItemId,
                     'model_id' => $shopeeModelId,
@@ -1772,7 +1816,9 @@ class OmnichannelController extends Controller
                 ],
                 'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
                     ? 'ready_to_sync'
-                    : ($statusShopee === 'unmapped' && $statusTikTok === 'unmapped' ? 'unmapped' : 'partially_mapped'),
+                    : ($variantActionStatus === 'ready_to_create'
+                        ? 'ready_to_create'
+                        : (($statusShopee !== 'unmapped' || $statusTikTok !== 'unmapped') ? 'needs_creation' : 'unmapped')),
                 'updated_at' => $row->updated_at,
             ];
         }
@@ -2309,6 +2355,162 @@ class OmnichannelController extends Controller
         ]);
 
         return response()->json(['status' => 'ok', 'message' => 'Mapping SKU berhasil disimpan.']);
+    }
+
+    public function prepareMissingVariant(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'stock_master_id' => ['required', 'integer'],
+            'target_channel' => ['required', 'in:shopee,tiktok'],
+        ]);
+
+        $stock = DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->leftJoin('shopee_product_model as spm', function ($join) {
+                $join->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin('shopee_product as sp', function ($join) {
+                $join->on('sp.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join) {
+                $join->on('spmi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->on('spmi.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
+                $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
+            ->where('sm.id', $data['stock_master_id'])
+            ->select(
+                'sm.id',
+                'sm.internal_sku',
+                'sm.product_name',
+                'sm.variant_name',
+                'sm.stock_qty',
+                'sm.shopee_product_id',
+                'sm.shopee_sku',
+                'sm.shopee_seller_sku',
+                'sm.tiktok_product_id',
+                'sm.tiktok_sku',
+                'sm.tiktok_seller_sku',
+                'map.seller_sku as mapped_seller_sku',
+                'map.shopee_item_id',
+                'map.shopee_model_id',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id',
+                'map.tiktok_sku_name',
+                'map.tiktok_image_url',
+                'map.shopee_image_url',
+                'map.internal_image_url',
+                'sp.name as shopee_product_name',
+                'spm.name as shopee_variant_name',
+                'spm.price as shopee_variant_price',
+                'spm.stock as shopee_variant_stock',
+                'spmi.image_url as shopee_model_image_url',
+                'spi.image_url as shopee_product_image_url'
+            )
+            ->first();
+
+        abort_if(! $stock, 404, 'Varian tidak ditemukan.');
+
+        $targetChannel = $data['target_channel'];
+        $sourceChannel = $targetChannel === 'tiktok' ? 'shopee' : 'tiktok';
+        $draftPayload = null;
+
+        if ($targetChannel === 'tiktok') {
+            $sourceProductId = trim((string) ($stock->shopee_product_id ?? ''));
+            $sourceModelId = trim((string) ($stock->shopee_sku ?? ''));
+            $sourceVariantName = trim((string) ($stock->shopee_variant_name ?? $stock->variant_name ?? ''));
+            $sourceSellerSku = trim((string) ($stock->mapped_seller_sku ?? $stock->shopee_seller_sku ?? ''));
+            $sourceImageUrl = $stock->internal_image_url ?: $stock->shopee_image_url ?: $stock->shopee_model_image_url ?: $stock->shopee_product_image_url;
+
+            abort_if($sourceProductId === '' && $sourceModelId === '' && $sourceVariantName === '', 422, 'Data Shopee belum cukup untuk membuat draft TikTok.');
+
+            $draftPayload = [
+                'target_channel' => 'tiktok',
+                'source_channel' => 'shopee',
+                'stock_master_id' => (int) $stock->id,
+                'product_name' => $stock->product_name,
+                'variant_name' => $stock->variant_name,
+                'source' => [
+                    'item_id' => $sourceProductId ?: null,
+                    'model_id' => $sourceModelId ?: null,
+                    'variant_name' => $sourceVariantName ?: null,
+                    'seller_sku' => $sourceSellerSku ?: null,
+                    'image_url' => $sourceImageUrl ?: null,
+                    'stock_qty' => (int) ($stock->stock_qty ?? 0),
+                    'price' => (int) ($stock->shopee_variant_price ?? 0),
+                ],
+                'target' => [
+                    'variant_name' => $stock->variant_name,
+                    'seller_sku' => $sourceSellerSku ?: $stock->internal_sku,
+                    'image_url' => $sourceImageUrl ?: null,
+                    'stock_qty' => (int) ($stock->stock_qty ?? 0),
+                ],
+            ];
+        } else {
+            $tiktokSource = DB::table('tiktok_products')
+                ->whereRaw('COALESCE(is_active, true) = true')
+                ->where(function ($query) use ($stock) {
+                    $query->where(function ($sub) use ($stock) {
+                        $sub->where('product_id', (string) ($stock->tiktok_product_id ?? ''))
+                            ->where(function ($inner) use ($stock) {
+                                $inner->where('sku_id', (string) ($stock->tiktok_sku ?? ''))
+                                    ->orWhereRaw('LOWER(TRIM(sku_name)) = LOWER(TRIM(?))', [$stock->variant_name ?? '']);
+                            });
+                    })
+                    ->orWhereRaw('LOWER(TRIM(product_name)) = LOWER(TRIM(?))', [$stock->product_name ?? '']);
+                })
+                ->orderByDesc('updated_at')
+                ->first();
+
+            abort_if(! $tiktokSource, 422, 'Data TikTok belum cukup untuk membuat draft Shopee.');
+
+            $draftPayload = [
+                'target_channel' => 'shopee',
+                'source_channel' => 'tiktok',
+                'stock_master_id' => (int) $stock->id,
+                'product_name' => $stock->product_name,
+                'variant_name' => $stock->variant_name,
+                'source' => [
+                    'product_id' => $tiktokSource->product_id,
+                    'sku_id' => $tiktokSource->sku_id,
+                    'sku_name' => $tiktokSource->sku_name,
+                    'seller_sku' => $tiktokSource->seller_sku ?? null,
+                    'image_url' => $tiktokSource->image_url ?? null,
+                    'stock_qty' => (int) ($tiktokSource->stock_qty ?? 0),
+                    'price' => (int) ($tiktokSource->price ?? 0),
+                ],
+                'target' => [
+                    'variant_name' => $stock->variant_name,
+                    'seller_sku' => $tiktokSource->seller_sku ?? $stock->internal_sku,
+                    'image_url' => $tiktokSource->image_url ?? null,
+                    'stock_qty' => (int) ($tiktokSource->stock_qty ?? 0),
+                ],
+            ];
+        }
+
+        DB::table('sku_variant_actions')->updateOrInsert(
+            [
+                'stock_master_id' => $stock->id,
+                'target_channel' => $targetChannel,
+                'action_type' => 'create_variant',
+            ],
+            [
+                'source_channel' => $sourceChannel,
+                'payload' => json_encode($draftPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => 'ready_to_create',
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => 'Draft varian berhasil disiapkan.',
+            'draft' => $draftPayload,
+        ]);
     }
 
     public function stockMaster(): JsonResponse

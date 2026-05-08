@@ -115,6 +115,10 @@ export const omnichannelService = {
     return api.post('/sku-mapping', data)
   },
 
+  prepareMissingVariant(data) {
+    return api.post('/sku-mapping/prepare-missing-variant', data)
+  },
+
   syncShopeeToTiktok() {
     return api.post('/sync-shopee-to-tiktok')
   },
