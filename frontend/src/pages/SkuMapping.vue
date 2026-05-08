@@ -8,6 +8,15 @@
       <div class="header-actions">
         <button class="ghost" @click="loadData" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
         <button class="primary" @click="save" :disabled="!selectedItem || !form.stock_master_id || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
+        <button class="ghost" @click.stop="selectedItem && selectItem(selectedItem)" :disabled="!selectedItem">Edit</button>
+        <button
+          v-if="selectedItem && canPrepareMissingVariant(selectedItem)"
+          class="primary"
+          :disabled="preparing || selectedItem.status === 'submitted'"
+          @click="prepareMissingVariant(selectedItem)"
+        >
+          {{ preparing ? 'Menyiapkan...' : `Buat Varian Hilang di ${missingTargetChannel(selectedItem) === 'tiktok' ? 'TikTok' : 'Shopee'}` }}
+        </button>
       </div>
     </header>
 
@@ -137,15 +146,6 @@
                 </td>
                 <td>
                   <span :class="['badge', item.status]">{{ labelStatus(item.status) }}</span>
-                  <button class="mini" @click.stop="selectItem(item)">Edit</button>
-                  <button
-                    v-if="canPrepareMissingVariant(item)"
-                    class="mini"
-                    :disabled="preparing || item.status === 'submitted'"
-                    @click.stop="prepareMissingVariant(item)"
-                  >
-                    {{ preparing ? 'Menyiapkan...' : variantActionLabel(item) }}
-                  </button>
                 </td>
               </tr>
             </tbody>
@@ -255,7 +255,6 @@ const missingTargetChannel = (item) => {
   return null
 }
 const canPrepareMissingVariant = (item) => Boolean(missingTargetChannel(item))
-const variantActionLabel = (item) => item?.status === 'ready_to_create' ? 'Siap dibuat' : item?.status === 'submitted' ? 'Dikirim ke TikTok' : item?.status === 'failed' ? 'Coba Lagi' : 'Buat Varian Hilang'
 const tiktokDetailHint = (item) => hasTiktokActual(item)
   ? 'Data TikTok aktif sudah tersedia.'
   : hasTiktokCandidate(item)
