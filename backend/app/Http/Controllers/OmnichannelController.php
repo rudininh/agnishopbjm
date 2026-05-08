@@ -1123,6 +1123,154 @@ class OmnichannelController extends Controller
         return is_array($payload) ? data_get($payload, 'data') : null;
     }
 
+    private function submitTiktokVariantMutation(object $stock, array $draftPayload, object $shop, string $accessToken, ?array $existingProduct = null): array
+    {
+        $config = $this->tiktokConfig();
+        $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
+        $shopId = (string) ($shop->shop_id ?? $shop->id ?? '');
+
+        if ($shopCipher === '' || $shopId === '') {
+            return [
+                'ok' => false,
+                'message' => 'Shop TikTok belum lengkap untuk mengirim request.',
+            ];
+        }
+
+        $existingDetail = null;
+        if ($existingProduct && ! empty($existingProduct['product_id'])) {
+            $existingDetail = $this->fetchTiktokProductDetail(
+                $config,
+                $accessToken,
+                $shop,
+                (string) $existingProduct['product_id'],
+                $config['api_host'].'/product/202309/products/'
+            );
+        }
+
+        $mainImages = [];
+        foreach ((array) data_get($existingDetail, 'main_images', []) as $imageNode) {
+            $imageUrl = $this->extractTiktokImageNodeUrl($imageNode);
+            if (is_string($imageUrl) && trim($imageUrl) !== '') {
+                $mainImages[] = $imageUrl;
+            }
+        }
+
+        foreach ([
+            $draftPayload['source']['image_url'] ?? null,
+            $draftPayload['target']['image_url'] ?? null,
+        ] as $imageUrl) {
+            if (is_string($imageUrl) && trim($imageUrl) !== '') {
+                $mainImages[] = trim($imageUrl);
+            }
+        }
+
+        $mainImages = array_values(array_unique($mainImages));
+
+        $skuRows = [];
+        $existingSkus = $this->normalizeTiktokSkuList(is_array($existingDetail) ? $existingDetail : []);
+        foreach ($existingSkus as $sku) {
+            $skuRows[] = array_filter([
+                'id' => data_get($sku, 'id') ?? data_get($sku, 'sku_id'),
+                'sku_name' => $this->deriveTiktokSkuName($sku),
+                'seller_sku' => $this->extractTiktokSellerSku($sku),
+                'price' => data_get($sku, 'price.sale_price', data_get($sku, 'price', 0)),
+                'stock' => data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0)),
+                'sku_img' => $this->extractTiktokSkuImageUrl($sku),
+            ], fn ($value) => $value !== null && $value !== '');
+        }
+
+        $skuRows[] = array_filter([
+            'sku_name' => (string) ($draftPayload['target']['variant_name'] ?? $stock->variant_name ?? 'Default'),
+            'seller_sku' => (string) ($draftPayload['target']['seller_sku'] ?? $stock->internal_sku ?? ''),
+            'price' => (int) data_get($draftPayload, 'source.price', 0),
+            'stock' => (int) data_get($draftPayload, 'target.stock_qty', 0),
+            'sku_img' => $draftPayload['target']['image_url'] ?? $draftPayload['source']['image_url'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $body = array_filter([
+            'title' => (string) ($existingDetail['title'] ?? $draftPayload['product_name'] ?? $stock->product_name ?? 'TikTok Product'),
+            'main_images' => $mainImages,
+            'skus' => $skuRows,
+        ], fn ($value) => $value !== null && $value !== []);
+
+        $method = $existingProduct && ! empty($existingProduct['product_id']) ? 'PUT' : 'POST';
+        $path = $method === 'PUT'
+            ? '/product/202309/products/'.(string) $existingProduct['product_id']
+            : '/product/202309/products';
+
+        $query = [
+            'app_key' => $config['app_key'],
+            'shop_cipher' => $shopCipher,
+            'shop_id' => $shopId,
+            'timestamp' => time(),
+            'version' => '202309',
+        ];
+
+        $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $bodyString);
+
+        $response = Http::timeout(45)
+            ->asJson()
+            ->withHeaders([
+                'x-tts-access-token' => $accessToken,
+                'content-type' => 'application/json',
+            ])
+            ->withOptions(['query' => $query])
+            ->send($method, $config['api_host'].$path, [
+                'json' => $body,
+            ]);
+
+        $payload = $response->json();
+        if (! is_array($payload)) {
+            return [
+                'ok' => false,
+                'message' => 'TikTok tidak mengembalikan JSON valid.',
+                'http_status' => $response->status(),
+                'response_body' => $response->body(),
+                'request' => [
+                    'method' => $method,
+                    'path' => $path,
+                    'query' => $query,
+                    'body' => $body,
+                ],
+            ];
+        }
+
+        if ((int) ($payload['code'] ?? -1) !== 0) {
+            return [
+                'ok' => false,
+                'message' => $payload['message'] ?? 'TikTok mengembalikan error.',
+                'response' => $payload,
+                'request' => [
+                    'method' => $method,
+                    'path' => $path,
+                    'query' => $query,
+                    'body' => $body,
+                ],
+            ];
+        }
+
+        $responseData = data_get($payload, 'data', []);
+        $returnedProductId = (string) (data_get($responseData, 'product_id') ?? data_get($responseData, 'id') ?? data_get($responseData, 'product.id') ?? '');
+        $returnedSkuId = (string) (data_get($responseData, 'sku_id') ?? data_get($responseData, 'skus.0.id') ?? data_get($responseData, 'skus.0.sku_id') ?? '');
+
+        return [
+            'ok' => true,
+            'message' => $method === 'PUT'
+                ? 'Varian TikTok berhasil diperbarui.'
+                : 'Varian TikTok berhasil dibuat.',
+            'product_id' => $returnedProductId !== '' ? $returnedProductId : ($existingProduct['product_id'] ?? null),
+            'sku_id' => $returnedSkuId !== '' ? $returnedSkuId : null,
+            'response' => $payload,
+            'request' => [
+                'method' => $method,
+                'path' => $path,
+                'query' => $query,
+                'body' => $body,
+            ],
+        ];
+    }
+
     private function buildTiktokCurl(string $method, string $url, array $query, array $headers = [], ?array $body = null): string
     {
         $queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
@@ -1816,9 +1964,13 @@ class OmnichannelController extends Controller
                 ],
                 'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
                     ? 'ready_to_sync'
-                    : ($variantActionStatus === 'ready_to_create'
-                        ? 'ready_to_create'
-                        : (($statusShopee !== 'unmapped' || $statusTikTok !== 'unmapped') ? 'needs_creation' : 'unmapped')),
+                    : ($variantActionStatus === 'submitted'
+                        ? 'submitted'
+                        : ($variantActionStatus === 'failed'
+                            ? 'failed'
+                            : ($variantActionStatus === 'ready_to_create'
+                                ? 'ready_to_create'
+                                : (($statusShopee !== 'unmapped' || $statusTikTok !== 'unmapped') ? 'needs_creation' : 'unmapped')))),
                 'updated_at' => $row->updated_at,
             ];
         }
@@ -2417,6 +2569,9 @@ class OmnichannelController extends Controller
         $targetChannel = $data['target_channel'];
         $sourceChannel = $targetChannel === 'tiktok' ? 'shopee' : 'tiktok';
         $draftPayload = null;
+        $actionStatus = 'ready_to_create';
+        $actionMessage = 'Draft varian berhasil disiapkan.';
+        $actionPayload = null;
 
         if ($targetChannel === 'tiktok') {
             $sourceProductId = trim((string) ($stock->shopee_product_id ?? ''));
@@ -2449,6 +2604,72 @@ class OmnichannelController extends Controller
                     'stock_qty' => (int) ($stock->stock_qty ?? 0),
                 ],
             ];
+
+            $actionPayload = $draftPayload;
+
+            $accessToken = $this->activeTiktokAccessTokenForSync();
+            $shop = $this->latestTiktokShop();
+
+            if ($accessToken !== '' && $shop) {
+                try {
+                    $existingProduct = DB::table('tiktok_products')
+                        ->whereRaw('COALESCE(is_active, true) = true')
+                        ->whereRaw('LOWER(TRIM(product_name)) = LOWER(TRIM(?))', [$stock->product_name ?? ''])
+                        ->orderByDesc('updated_at')
+                        ->first();
+
+                    $mutationResult = $this->submitTiktokVariantMutation(
+                        $stock,
+                        $draftPayload,
+                        $shop,
+                        $accessToken,
+                        $existingProduct ? (array) $existingProduct : null
+                    );
+
+                    $actionPayload = array_merge($draftPayload, ['mutation' => $mutationResult]);
+
+                    if (($mutationResult['ok'] ?? false) === true) {
+                        $actionStatus = 'submitted';
+                        $actionMessage = $mutationResult['message'] ?? 'Varian berhasil dikirim ke TikTok.';
+
+                        $returnedProductId = trim((string) ($mutationResult['product_id'] ?? ''));
+                        $returnedSkuId = trim((string) ($mutationResult['sku_id'] ?? ''));
+
+                        if ($returnedProductId !== '' || $returnedSkuId !== '') {
+                            DB::table('sku_mappings')->updateOrInsert(
+                                ['stock_master_id' => $stock->id],
+                                [
+                                    'tiktok_product_id' => $returnedProductId !== '' ? $returnedProductId : ($stock->tiktok_product_id ?? null),
+                                    'tiktok_sku_id' => $returnedSkuId !== '' ? $returnedSkuId : ($stock->tiktok_sku ?? null),
+                                    'tiktok_sku_name' => $draftPayload['target']['variant_name'] ?? $stock->variant_name,
+                                    'seller_sku' => $draftPayload['target']['seller_sku'] ?? $stock->internal_sku,
+                                    'tiktok_image_url' => $draftPayload['target']['image_url'] ?? null,
+                                    'updated_at' => now(),
+                                    'created_at' => now(),
+                                ]
+                            );
+
+                            DB::table('stock_master')
+                                ->where('id', $stock->id)
+                                ->update([
+                                    'tiktok_product_id' => $returnedProductId !== '' ? $returnedProductId : ($stock->tiktok_product_id ?? null),
+                                    'tiktok_sku' => $returnedSkuId !== '' ? $returnedSkuId : ($stock->tiktok_sku ?? null),
+                                    'tiktok_seller_sku' => $draftPayload['target']['seller_sku'] ?? $stock->internal_sku,
+                                    'updated_at' => now(),
+                                ]);
+                        }
+                    } else {
+                        $actionStatus = 'failed';
+                        $actionMessage = $mutationResult['message'] ?? 'Gagal mengirim varian ke TikTok.';
+                    }
+                } catch (\Throwable $exception) {
+                    $actionStatus = 'failed';
+                    $actionMessage = 'Gagal mencoba kirim ke TikTok: '.$exception->getMessage();
+                    $actionPayload = array_merge($draftPayload, ['mutation_error' => $exception->getMessage()]);
+                }
+            } else {
+                $actionMessage = 'Draft varian disiapkan, tetapi token atau shop TikTok belum lengkap untuk mengirim request.';
+            }
         } else {
             $tiktokSource = DB::table('tiktok_products')
                 ->whereRaw('COALESCE(is_active, true) = true')
@@ -2499,8 +2720,8 @@ class OmnichannelController extends Controller
             ],
             [
                 'source_channel' => $sourceChannel,
-                'payload' => json_encode($draftPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'status' => 'ready_to_create',
+                'payload' => json_encode($actionPayload ?? $draftPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => $actionStatus,
                 'updated_at' => now(),
                 'created_at' => now(),
             ]
@@ -2508,8 +2729,9 @@ class OmnichannelController extends Controller
 
         return response()->json([
             'status' => 'ok',
-            'message' => 'Draft varian berhasil disiapkan.',
+            'message' => $actionMessage,
             'draft' => $draftPayload,
+            'action_status' => $actionStatus,
         ]);
     }
 
