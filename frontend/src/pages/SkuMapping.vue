@@ -125,11 +125,12 @@
                       </div>
                       <small>{{ tiktokPresenceLabel(item) }}</small>
                       <small>{{ item.tiktok?.product_name || '-' }}</small>
-                      <small>Product ID: {{ item.tiktok?.product_id || '-' }}</small>
-                      <small>SKU ID: {{ item.tiktok?.sku_id || '-' }}</small>
+                      <small>Product ID: {{ hasTiktokActual(item) ? (item.tiktok?.product_id || '-') : '-' }}</small>
+                      <small>SKU ID: {{ hasTiktokActual(item) ? (item.tiktok?.sku_id || '-') : '-' }}</small>
                       <small>Kode Variasi: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }}</small>
-                      <small>SKU Name: {{ item.tiktok?.sku_name || '-' }}</small>
-                      <small>Stok: {{ displayStock(item.tiktok?.stock_qty) }}</small>
+                      <small v-if="hasTiktokActual(item)">SKU Name: {{ item.tiktok?.sku_name || '-' }}</small>
+                      <small v-else>Kode ini belum menunjuk ke varian TikTok yang aktif.</small>
+                      <small>Stok: {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
                     </div>
                   </div>
                 </td>
@@ -187,6 +188,7 @@
           <span>Notes</span>
           <textarea v-model="form.notes" rows="4"></textarea>
         </label>
+        <p class="notice">{{ shopeeDetailHint(selectedItem) }} {{ tiktokDetailHint(selectedItem) }}</p>
 
         <div class="actions">
           <button class="ghost" @click="fillFromSelected">Reset</button>
@@ -227,7 +229,7 @@ const form = reactive({
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
 const labelStatus = (status) => status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
-const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat cocok otomatis' : 'Belum'
+const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat kode variasi' : 'Belum'
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
 const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
@@ -235,8 +237,18 @@ const hasShopeeActual = (item) => Boolean(item?.shopee?.item_id || item?.shopee?
 const hasShopeeCandidate = (item) => Boolean(item?.shopee?.seller_sku || item?.seller_sku)
 const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
 const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
-const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kandidat Shopee' : 'Belum ada di Shopee'
-const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kandidat TikTok' : 'Belum ada di TikTok'
+const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
+const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
+const tiktokDetailHint = (item) => hasTiktokActual(item)
+  ? 'Data TikTok aktif sudah tersedia.'
+  : hasTiktokCandidate(item)
+    ? 'Yang cocok baru kode variasinya, belum ada varian TikTok aktif.'
+    : 'Varian ini memang belum ada di TikTok.'
+const shopeeDetailHint = (item) => hasShopeeActual(item)
+  ? 'Data Shopee aktif sudah tersedia.'
+  : hasShopeeCandidate(item)
+    ? 'Yang cocok baru kode variasinya, belum ada varian Shopee aktif.'
+    : 'Varian ini memang belum ada di Shopee.'
 
 const productGroups = computed(() => {
   const groups = new Map()
