@@ -2063,6 +2063,10 @@ class OmnichannelController extends Controller
             $bestScore = 0;
 
             foreach ($tiktokProductGroups as $productId => $tiktokGroup) {
+                if ($stockGroup['product_name_key'] === '' || $stockGroup['product_name_key'] !== $tiktokGroup['product_name_key']) {
+                    continue;
+                }
+
                 $variantOverlap = count(array_intersect($variantNames, $tiktokGroup['sku_names']));
 
                 if ($variantOverlap === 0) {
@@ -2154,18 +2158,6 @@ class OmnichannelController extends Controller
 
         if ($suggestedProductId && $variantKey !== '') {
             $match = $lookup['product_groups'][$suggestedProductId]['rows_by_sku_name'][$variantKey] ?? null;
-            if ($match) {
-                return [$match, $hasSavedMapping ? 'saved' : 'suggested'];
-            }
-        }
-
-        if ($variantKey !== '') {
-            $match = $this->bestTiktokVariantCandidateForStockRow(
-                $row,
-                $lookup['by_variant_name'][$variantKey] ?? [],
-                $lookup['product_groups']
-            );
-
             if ($match) {
                 return [$match, $hasSavedMapping ? 'saved' : 'suggested'];
             }
