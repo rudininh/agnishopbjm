@@ -217,7 +217,7 @@
               <div class="api-path-params">
                 <label>
                   <span>product_id (string)</span>
-                  <input v-model.trim="getProductTool.product_id" placeholder="1732272903733872574" />
+                  <input v-model.trim="getProductTool.product_id" />
                 </label>
               </div>
 
@@ -273,6 +273,91 @@
                     <span v-for="line in apiGetProductResponseLines" :key="line.no">{{ line.no }}</span>
                   </div>
                   <pre>{{ getProductResponseText || ' ' }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="api-panel variant-panel">
+          <div class="api-panel-head">
+            <div>
+              <strong>Tambah Variant/SKU TikTok</strong>
+              <small>Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu PUT.</small>
+            </div>
+          </div>
+          <div class="variant-tool">
+            <div class="api-left">
+              <div class="api-section-title">Target product</div>
+              <div class="api-path-params">
+                <label>
+                  <span>product_id (string)</span>
+                  <input v-model.trim="addVariantTool.product_id" />
+                </label>
+                <label>
+                  <span>shop_cipher (string)</span>
+                  <input v-model.trim="addVariantTool.shop_cipher" placeholder="ROW_AfAcCgAAAA..." />
+                </label>
+              </div>
+
+              <div class="api-section-title">SKU baru</div>
+              <div class="api-query-params">
+                <label>
+                  <span>seller_sku</span>
+                  <input v-model.trim="addVariantTool.seller_sku" placeholder="SKU-BARU-001" />
+                </label>
+                <label>
+                  <span>color_name</span>
+                  <input v-model.trim="addVariantTool.color_name" placeholder="Biru" />
+                </label>
+                <label>
+                  <span>image_uri</span>
+                  <input v-model.trim="addVariantTool.image_uri" placeholder="https://..." />
+                </label>
+                <label>
+                  <span>price</span>
+                  <input v-model.trim="addVariantTool.price" placeholder="50000" />
+                </label>
+                <label>
+                  <span>quantity</span>
+                  <input v-model.number="addVariantTool.quantity" type="number" min="0" />
+                </label>
+                <label class="dry-run-row">
+                  <input type="checkbox" v-model="addVariantTool.dry_run" />
+                  <span>Dry run saja, jangan PUT ke TikTok</span>
+                </label>
+              </div>
+
+              <div class="api-submit-row">
+                <button class="ghost" @click="loadAddVariantContext" :disabled="addVariantBusy">Ambil Context</button>
+                <button class="primary" @click="submitAddVariant" :disabled="addVariantBusy">
+                  {{ addVariantBusy ? 'Submitting...' : 'Submit Request' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="api-right">
+              <div class="api-right-block">
+                <div class="api-right-head">
+                  <strong>Request demo</strong>
+                  <button class="ghost mini" type="button" @click="copyAddVariantRequest">Copy</button>
+                </div>
+                <pre>{{ addVariantRequestPreview }}</pre>
+              </div>
+              <div class="api-right-block">
+                <div class="api-right-head">
+                  <strong>Response</strong>
+                  <button class="ghost mini" type="button" @click="copyAddVariantResponse">Copy</button>
+                </div>
+                <div class="api-status-line">
+                  <span>Status:</span>
+                  <span class="status-dot">{{ addVariantResponseStatus }}</span>
+                </div>
+                <div class="api-response-viewer">
+                  <div class="api-response-lines">
+                    <span v-for="line in addVariantResponseLines" :key="line.no">{{ line.no }}</span>
+                  </div>
+                  <pre>{{ addVariantResponseText || ' ' }}</pre>
                 </div>
               </div>
             </div>
@@ -370,9 +455,12 @@ const selectedItem = ref(null)
 const getProductRequestBusy = ref(false)
 const getProductResponseText = ref('')
 const getProductResponseStatus = ref('0')
+const addVariantBusy = ref(false)
+const addVariantResponseText = ref('')
+const addVariantResponseStatus = ref('0')
 const filters = reactive({
   search: DEFAULT_PRODUCT_NAME,
-  status: 'all'
+  status: 'belum_ada_variant'
 })
 const pageCache = new Map()
 const form = reactive({
@@ -386,6 +474,17 @@ const form = reactive({
   warehouse_id: '',
   inventory_qty: 0,
   notes: ''
+})
+
+const addVariantTool = reactive({
+  product_id: '',
+  shop_cipher: '',
+  seller_sku: '',
+  color_name: '',
+  image_uri: '',
+  price: '50000',
+  quantity: 1,
+  dry_run: true
 })
 
 const resetForm = () => {
@@ -434,6 +533,49 @@ const shopeeDetailHint = (item) => hasShopeeActual(item)
   : hasShopeeCandidate(item)
     ? 'Yang cocok baru kode variasinya, belum ada varian Shopee aktif.'
     : 'Varian ini memang belum ada di Shopee.'
+
+const fillAddVariantToolFromItem = (item) => {
+  if (!item) return
+
+  const productId = String(item.tiktok?.product_id || item.stock_tiktok_product_id || '').trim()
+  if (productId) {
+    addVariantTool.product_id = productId
+  }
+
+  if (item.status !== 'belum_ada_variant') return
+
+  const sellerSku = String(
+    item.shopee?.seller_sku ||
+    item.seller_sku ||
+    item.stock_shopee_seller_sku ||
+    item.internal_sku ||
+    item.tiktok?.seller_sku ||
+    ''
+  ).trim()
+  const colorName = String(
+    item.shopee?.variant_name ||
+    item.variant_name ||
+    item.tiktok?.variant_name ||
+    item.tiktok?.sku_name ||
+    ''
+  ).trim()
+  const imageUri = String(
+    item.shopee?.image_url ||
+    item.image_url ||
+    item.shopee_model_image_url ||
+    item.shopee_product_image_url ||
+    item.tiktok?.image_url ||
+    ''
+  ).trim()
+  const priceValue = item.shopee_variant_price ?? item.shopee?.price ?? item.price ?? addVariantTool.price
+  const quantityValue = item.shopee_variant_stock ?? item.shopee?.stock_qty ?? item.stock_qty ?? 0
+
+  addVariantTool.seller_sku = sellerSku
+  addVariantTool.color_name = colorName
+  addVariantTool.image_uri = imageUri
+  addVariantTool.price = String(priceValue ?? '').trim() || '50000'
+  addVariantTool.quantity = Number(quantityValue ?? 0)
+}
 
 const groupedItems = computed(() => {
   const groups = new Map()
@@ -588,6 +730,80 @@ const apiGetProductResponseHint = computed(() => {
 
   return ''
 })
+
+const addVariantRequestPreview = computed(() => {
+  return JSON.stringify({
+    product_id: addVariantTool.product_id || selectedItem.value?.tiktok?.product_id || '',
+    shop_cipher: addVariantTool.shop_cipher,
+    seller_sku: addVariantTool.seller_sku,
+    color_name: addVariantTool.color_name,
+    image_uri: addVariantTool.image_uri,
+    price: addVariantTool.price,
+    quantity: addVariantTool.quantity,
+    dry_run: addVariantTool.dry_run
+  }, null, 2)
+})
+
+const addVariantResponseLines = computed(() => {
+  return String(addVariantResponseText.value || '')
+    .split('\n')
+    .map((line, index) => ({
+      no: index + 1,
+      text: line
+    }))
+})
+
+const copyAddVariantRequest = async () => {
+  await navigator.clipboard.writeText(addVariantRequestPreview.value)
+}
+
+const copyAddVariantResponse = async () => {
+  await navigator.clipboard.writeText(addVariantResponseText.value)
+}
+
+const loadAddVariantContext = async () => {
+  try {
+    const response = await omnichannelService.tiktokGetProductContext()
+    const data = response.data?.data || {}
+
+    if (data.shop_cipher) addVariantTool.shop_cipher = data.shop_cipher
+    if (!String(addVariantTool.product_id || '').trim() && data.product_id) {
+      addVariantTool.product_id = data.product_id
+    }
+  } catch {
+    // Tetap biarkan user isi manual bila context belum tersedia.
+  }
+}
+
+const submitAddVariant = async () => {
+  addVariantBusy.value = true
+  loadError.value = ''
+  addVariantResponseText.value = ''
+  addVariantResponseStatus.value = '0'
+
+  try {
+    const productId = String(addVariantTool.product_id || selectedItem.value?.tiktok?.product_id || '').trim()
+    const response = await omnichannelService.addTiktokProductVariant(productId, {
+      shop_cipher: addVariantTool.shop_cipher,
+      seller_sku: addVariantTool.seller_sku,
+      color_name: addVariantTool.color_name,
+      image_uri: addVariantTool.image_uri,
+      price: addVariantTool.price,
+      quantity: addVariantTool.quantity,
+      dry_run: addVariantTool.dry_run
+    })
+
+    addVariantResponseText.value = JSON.stringify(response.data, null, 2)
+    addVariantResponseStatus.value = String(response.status || 200)
+  } catch (error) {
+    const responseData = error.response?.data
+    addVariantResponseText.value = responseData ? JSON.stringify(responseData, null, 2) : (error.message || 'Request gagal.')
+    addVariantResponseStatus.value = String(error.response?.status || 0)
+    loadError.value = error.response?.data?.message || error.message || 'Tambah variant gagal diproses.'
+  } finally {
+    addVariantBusy.value = false
+  }
+}
 
 const copyGetProductCurl = async () => {
   await navigator.clipboard.writeText(apiGetProductCurl.value)
@@ -749,6 +965,7 @@ const selectItem = (item) => {
   getProductTool.product_id = item.tiktok?.product_id || ''
   getProductResponseText.value = ''
   getProductResponseStatus.value = '0'
+  fillAddVariantToolFromItem(item)
 }
 
 const fillFromSelected = () => {
@@ -826,7 +1043,8 @@ const runTiktokAction = async (action) => {
 onMounted(async () => {
   await Promise.all([
     loadData(true),
-    loadGetProductContext()
+    loadGetProductContext(),
+    loadAddVariantContext()
   ])
 })
 </script>
@@ -915,6 +1133,8 @@ onMounted(async () => {
 .api-response-lines { background:#f8fafc; border-right:1px solid #e5e7eb; color:#94a3b8; font-size:12px; line-height:1.55; text-align:right; padding:12px 8px 12px 0; user-select:none; }
 .api-response-lines span { display:block; min-height:1.55em; }
 .api-response-viewer pre { margin:0; padding:12px; border:0; max-height:none; }
+.variant-panel { margin-top:14px; }
+.variant-tool { display:grid; grid-template-columns:minmax(0,1fr) minmax(360px, 0.95fr); gap:0; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
 .mapping-table { width:100%; border-collapse:collapse; font-size:13px; min-width:1240px; table-layout:fixed; }
 .col-product { width:28%; }
 .col-channel { width:31%; }
@@ -949,7 +1169,7 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .actions { display:flex; gap:10px; margin-top:12px; }
 .actions.stacked { margin-top: 10px; }
 .action-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
-@media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } .api-testing-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
+@media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } .api-testing-tool, .variant-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
 @media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } }
 </style>
 
