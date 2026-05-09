@@ -437,6 +437,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { omnichannelService } from '@/services'
 
 const DEFAULT_PRODUCT_NAME = 'Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo'
+const DEFAULT_API_PRODUCT_ID = '1732272903733872574'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -477,7 +478,7 @@ const form = reactive({
 })
 
 const addVariantTool = reactive({
-  product_id: '',
+  product_id: DEFAULT_API_PRODUCT_ID,
   shop_cipher: '',
   seller_sku: '',
   color_name: '',
@@ -655,7 +656,7 @@ const getProductTool = reactive({
   shop_id: '',
   shop_cipher: '',
   access_token: '',
-  product_id: '',
+  product_id: DEFAULT_API_PRODUCT_ID,
   return_under_review_version: 'false',
   return_draft_version: 'false',
   locale: ''
@@ -962,7 +963,9 @@ const selectItem = (item) => {
   form.warehouse_id = item.tiktok?.warehouse_id || form.warehouse_id || ''
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
-  getProductTool.product_id = item.tiktok?.product_id || ''
+  if (String(item.tiktok?.product_id || '').trim()) {
+    getProductTool.product_id = item.tiktok.product_id
+  }
   getProductResponseText.value = ''
   getProductResponseStatus.value = '0'
   fillAddVariantToolFromItem(item)
