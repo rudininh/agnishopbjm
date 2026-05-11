@@ -864,11 +864,11 @@ const addVariantResponseLines = computed(() => {
 })
 
 const copyAddVariantRequest = async () => {
-  await navigator.clipboard.writeText(addVariantRequestPreview.value)
+  await copyTextToClipboard(addVariantRequestPreview.value)
 }
 
 const copyAddVariantResponse = async () => {
-  await navigator.clipboard.writeText(addVariantResponseText.value)
+  await copyTextToClipboard(addVariantResponseText.value)
 }
 
 const loadAddVariantContext = async () => {
@@ -916,11 +916,43 @@ const submitAddVariant = async () => {
 }
 
 const copyGetProductCurl = async () => {
-  await navigator.clipboard.writeText(apiGetProductCurl.value)
+  await copyTextToClipboard(apiGetProductCurl.value)
 }
 
 const copyGetProductResponse = async () => {
-  await navigator.clipboard.writeText(getProductResponseText.value)
+  await copyTextToClipboard(getProductResponseText.value)
+}
+
+const copyTextToClipboard = async (text) => {
+  const value = String(text || '')
+  if (!value) return
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return
+    } catch {
+      // Fallback ke cara lama jika clipboard API diblokir browser atau origin.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-9999px'
+  textarea.style.left = '-9999px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+
+  try {
+    const ok = document.execCommand('copy')
+    if (!ok) throw new Error('Copy command failed')
+  } finally {
+    document.body.removeChild(textarea)
+  }
 }
 
 const loadGetProductContext = async () => {
