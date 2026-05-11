@@ -578,6 +578,61 @@ const fillAddVariantToolFromItem = (item) => {
   addVariantTool.quantity = Number(quantityValue ?? 0)
 }
 
+const normalizeTextForSku = (value) => String(value || '').trim()
+
+const getFirstSkuFromProductPayload = (payload) => {
+  const skus = Array.isArray(payload?.skus) ? payload.skus : []
+  return skus.length ? skus[0] : null
+}
+
+const mapProductPayloadToVariantDefaults = (payload) => {
+  const firstSku = getFirstSkuFromProductPayload(payload)
+  const salesAttributes = Array.isArray(firstSku?.sales_attributes) ? firstSku.sales_attributes : []
+  const firstAttribute = salesAttributes[0] || {}
+  const inventory = Array.isArray(firstSku?.inventory) ? firstSku.inventory[0] : null
+  const mainImage = Array.isArray(payload?.main_images) ? payload.main_images[0] : null
+  const skuImage = firstAttribute?.sku_img?.uri || ''
+  const salePrice = firstSku?.price?.sale_price || firstSku?.price?.amount || firstSku?.price?.tax_exclusive_price || '50000'
+  const quantity = inventory?.quantity ?? 0
+
+  return {
+    product_id: normalizeTextForSku(payload?.product_id || getProductTool.product_id || selectedItem.value?.tiktok?.product_id || ''),
+    seller_sku: normalizeTextForSku(firstSku?.seller_sku || ''),
+    color_name: normalizeTextForSku(firstAttribute?.value_name || firstAttribute?.name || ''),
+    image_uri: normalizeTextForSku(skuImage || mainImage?.uri || ''),
+    price: normalizeTextForSku(salePrice || '50000'),
+    quantity: Number(quantity || 0)
+  }
+}
+
+const buildNewSkuPayload = () => {
+  const productSkuImg = addVariantTool.image_uri ? { uri: addVariantTool.image_uri } : {}
+  return {
+    seller_sku: normalizeTextForSku(addVariantTool.seller_sku),
+    sales_attributes: [
+      {
+        id: '100000',
+        name: 'Warna',
+        value_id: '',
+        value_name: normalizeTextForSku(addVariantTool.color_name),
+        sku_img: productSkuImg
+      }
+    ],
+    price: {
+      currency: 'IDR',
+      sale_price: String(addVariantTool.price || '50000'),
+      tax_exclusive_price: String(addVariantTool.price || '50000'),
+      amount: String(addVariantTool.price || '50000')
+    },
+    inventory: [
+      {
+        quantity: Number(addVariantTool.quantity ?? 0),
+        warehouse_id: ''
+      }
+    ]
+  }
+}
+
 const groupedItems = computed(() => {
   const groups = new Map()
 
@@ -714,6 +769,14 @@ const apiGetProductResponsePayload = computed(() => {
   }
 })
 
+const apiGetProductResponseProduct = computed(() => {
+  const payload = apiGetProductResponsePayload.value
+  if (!payload) return null
+
+  if (payload?.data && typeof payload.data === 'object') return payload.data
+  return payload
+})
+
 const apiGetProductResponseHint = computed(() => {
   const payload = apiGetProductResponsePayload.value
   if (!payload) return ''
@@ -733,16 +796,62 @@ const apiGetProductResponseHint = computed(() => {
 })
 
 const addVariantRequestPreview = computed(() => {
-  return JSON.stringify({
-    product_id: addVariantTool.product_id || selectedItem.value?.tiktok?.product_id || '',
-    shop_cipher: addVariantTool.shop_cipher,
-    seller_sku: addVariantTool.seller_sku,
-    color_name: addVariantTool.color_name,
-    image_uri: addVariantTool.image_uri,
-    price: addVariantTool.price,
-    quantity: addVariantTool.quantity,
-    dry_run: addVariantTool.dry_run
-  }, null, 2)
+  const payload = apiGetProductResponseProduct.value
+  const baseProduct = payload ? JSON.parse(JSON.stringify(payload)) : null
+  const existingSkus = Array.isArray(baseProduct?.skus) ? baseProduct.skus : []
+  const newSku = buildNewSkuPayload()
+
+  const body = baseProduct ? {
+    save_mode: baseProduct.save_mode || 'LISTING',
+    description: baseProduct.description || '',
+    category_id: baseProduct.category_id || '',
+    category_version: baseProduct.category_version || '',
+    main_images: Array.isArray(baseProduct.main_images) ? baseProduct.main_images : [],
+    skus: [...existingSkus, newSku],
+    title: baseProduct.title || selectedItem.value?.product_name || '',
+    is_cod_allowed: Boolean(baseProduct.is_cod_allowed ?? true),
+    package_weight: baseProduct.package_weight || {
+      unit: 'KILOGRAM',
+      value: '0'
+    },
+    package_dimensions: baseProduct.package_dimensions || {
+      height: '0',
+      length: '0',
+      unit: 'CENTIMETER',
+      width: '0'
+    },
+    product_attributes: Array.isArray(baseProduct.product_attributes) ? baseProduct.product_attributes : [],
+    size_chart: baseProduct.size_chart || null,
+    shipping_insurance_requirement: baseProduct.shipping_insurance_requirement || '',
+    is_pre_owned: Boolean(baseProduct.is_pre_owned ?? false),
+    listing_platforms: Array.isArray(baseProduct.listing_platforms) ? baseProduct.listing_platforms : []
+  } : {
+    save_mode: 'LISTING',
+    description: '',
+    category_id: '',
+    category_version: '',
+    main_images: [],
+    skus: [newSku],
+    title: selectedItem.value?.product_name || '',
+    is_cod_allowed: true,
+    package_weight: {
+      unit: 'KILOGRAM',
+      value: '0'
+    },
+    package_dimensions: {
+      height: '0',
+      length: '0',
+      unit: 'CENTIMETER',
+      width: '0'
+    },
+    product_attributes: [],
+    size_chart: null,
+    shipping_insurance_requirement: '',
+    is_pre_owned: false,
+    listing_platforms: []
+  }
+
+  return JSON.stringify(body, null, 2)
 })
 
 const addVariantResponseLines = computed(() => {
@@ -876,6 +985,16 @@ const submitGetProductDemo = async () => {
     try {
       const parsed = responseText ? JSON.parse(responseText) : null
       getProductResponseStatus.value = String(parsed?.code ?? response.status ?? 0)
+      const payload = parsed?.data || parsed
+      if (payload) {
+        const mapped = mapProductPayloadToVariantDefaults(payload)
+        if (mapped.product_id) addVariantTool.product_id = mapped.product_id
+        if (mapped.seller_sku) addVariantTool.seller_sku = mapped.seller_sku
+        if (mapped.color_name) addVariantTool.color_name = mapped.color_name
+        if (mapped.image_uri) addVariantTool.image_uri = mapped.image_uri
+        if (mapped.price) addVariantTool.price = mapped.price
+        addVariantTool.quantity = Number(mapped.quantity ?? 0)
+      }
     } catch {
       getProductResponseStatus.value = String(response.status ?? 0)
     }
@@ -1131,13 +1250,16 @@ onMounted(async () => {
 .status-dot::before { content:''; width:10px; height:10px; border-radius:999px; background:#16a34a; box-shadow:0 0 0 2px rgba(22,163,74,.15); display:inline-block; }
 .api-right-block pre { margin:0; padding:12px; border:1px solid #e5e7eb; background:#fff; font-size:12px; line-height:1.55; color:#111827; overflow:auto; white-space:pre-wrap; word-break:break-word; max-height:460px; }
 .api-right-block:first-of-type pre { max-height:150px; }
+.variant-tool .api-right-block:first-of-type pre { max-height:520px; min-height:520px; }
 .api-response-hint { margin:8px 0 10px; color:#b45309; font-size:12px; line-height:1.45; background:#fffbeb; border:1px solid #fcd34d; border-radius:4px; padding:8px 10px; }
 .api-response-viewer { display:grid; grid-template-columns:44px minmax(0,1fr); border:1px solid #e5e7eb; background:#fff; max-height:460px; overflow:auto; }
+.variant-tool .api-response-viewer { max-height:520px; min-height:520px; }
 .api-response-lines { background:#f8fafc; border-right:1px solid #e5e7eb; color:#94a3b8; font-size:12px; line-height:1.55; text-align:right; padding:12px 8px 12px 0; user-select:none; }
 .api-response-lines span { display:block; min-height:1.55em; }
 .api-response-viewer pre { margin:0; padding:12px; border:0; max-height:none; }
 .variant-panel { margin-top:14px; }
 .variant-tool { display:grid; grid-template-columns:minmax(0,1fr) minmax(360px, 0.95fr); gap:0; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
+.variant-panel .api-right { padding-top:12px; }
 .mapping-table { width:100%; border-collapse:collapse; font-size:13px; min-width:1240px; table-layout:fixed; }
 .col-product { width:28%; }
 .col-channel { width:31%; }
