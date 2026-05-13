@@ -283,7 +283,7 @@
           <div class="api-panel-head">
             <div>
               <strong>Tambah Variant/SKU TikTok</strong>
-              <small>Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu PUT.</small>
+              <small>Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu copy payload untuk PUT.</small>
             </div>
           </div>
           <div class="variant-tool">
@@ -312,7 +312,7 @@
                 </label>
                 <label>
                   <span>image_uri</span>
-                  <input v-model.trim="addVariantTool.image_uri" placeholder="https://..." />
+                  <input v-model.trim="addVariantTool.image_uri" placeholder="tos-maliva-.../..." />
                 </label>
                 <label>
                   <span>price</span>
@@ -331,7 +331,7 @@
               <div class="api-submit-row">
                 <button class="ghost" @click="loadAddVariantContext" :disabled="addVariantBusy">Ambil Context</button>
                 <button class="primary" @click="submitAddVariant" :disabled="addVariantBusy">
-                  {{ addVariantBusy ? 'Submitting...' : 'Submit Request' }}
+                  {{ addVariantBusy ? 'Generating...' : 'Generate Payload' }}
                 </button>
               </div>
             </div>
@@ -438,6 +438,9 @@ import { omnichannelService } from '@/services'
 
 const DEFAULT_PRODUCT_NAME = 'Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo'
 const DEFAULT_API_PRODUCT_ID = '1732272903733872574'
+const TIKTOK_VARIANT_ATTRIBUTE_ID = '100000'
+const TIKTOK_VARIANT_ATTRIBUTE_NAME = 'Warna'
+const TIKTOK_VARIANT_WAREHOUSE_ID = '7395901885692495617'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -605,34 +608,6 @@ const mapProductPayloadToVariantDefaults = (payload) => {
   }
 }
 
-const buildNewSkuPayload = () => {
-  const productSkuImg = addVariantTool.image_uri ? { uri: addVariantTool.image_uri } : {}
-  return {
-    seller_sku: normalizeTextForSku(addVariantTool.seller_sku),
-    sales_attributes: [
-      {
-        id: '100000',
-        name: 'Warna',
-        value_id: '',
-        value_name: normalizeTextForSku(addVariantTool.color_name),
-        sku_img: productSkuImg
-      }
-    ],
-    price: {
-      currency: 'IDR',
-      sale_price: String(addVariantTool.price || '50000'),
-      tax_exclusive_price: String(addVariantTool.price || '50000'),
-      amount: String(addVariantTool.price || '50000')
-    },
-    inventory: [
-      {
-        quantity: Number(addVariantTool.quantity ?? 0),
-        warehouse_id: ''
-      }
-    ]
-  }
-}
-
 const groupedItems = computed(() => {
   const groups = new Map()
 
@@ -777,6 +752,287 @@ const apiGetProductResponseProduct = computed(() => {
   return payload
 })
 
+const cloneJson = (value) => {
+  if (value === null || value === undefined) return value
+  return JSON.parse(JSON.stringify(value))
+}
+
+const normalizeNumericString = (value) => {
+  const text = String(value ?? '').trim()
+  if (!/^\d+$/.test(text)) return null
+  return text.replace(/^0+/, '') || '0'
+}
+
+const compareNumericStrings = (left, right) => {
+  const a = normalizeNumericString(left)
+  const b = normalizeNumericString(right)
+  if (a === null && b === null) return 0
+  if (a === null) return -1
+  if (b === null) return 1
+  if (a.length !== b.length) return a.length - b.length
+  return a.localeCompare(b)
+}
+
+const addNumericStrings = (value, step) => {
+  const left = normalizeNumericString(value) || '0'
+  const right = normalizeNumericString(step) || '0'
+  let carry = 0
+  let result = ''
+  let leftIndex = left.length - 1
+  let rightIndex = right.length - 1
+
+  while (leftIndex >= 0 || rightIndex >= 0 || carry > 0) {
+    const leftDigit = leftIndex >= 0 ? Number(left[leftIndex]) : 0
+    const rightDigit = rightIndex >= 0 ? Number(right[rightIndex]) : 0
+    const sum = leftDigit + rightDigit + carry
+    result = String(sum % 10) + result
+    carry = Math.floor(sum / 10)
+    leftIndex -= 1
+    rightIndex -= 1
+  }
+
+  return result
+}
+
+const subtractNumericStrings = (left, right) => {
+  let a = normalizeNumericString(left) || '0'
+  let b = normalizeNumericString(right) || '0'
+  if (compareNumericStrings(a, b) < 0) return null
+
+  let borrow = 0
+  let result = ''
+  let leftIndex = a.length - 1
+  let rightIndex = b.length - 1
+
+  while (leftIndex >= 0) {
+    let leftDigit = Number(a[leftIndex]) - borrow
+    const rightDigit = rightIndex >= 0 ? Number(b[rightIndex]) : 0
+    borrow = 0
+
+    if (leftDigit < rightDigit) {
+      leftDigit += 10
+      borrow = 1
+    }
+
+    result = String(leftDigit - rightDigit) + result
+    leftIndex -= 1
+    rightIndex -= 1
+  }
+
+  return normalizeNumericString(result)
+}
+
+const buildNumericFallback = (seed, digits = 19) => {
+  const modulus = 1000000000
+  let firstHash = 0
+  let secondHash = 7
+  const text = String(seed || '').trim() || 'tiktok'
+
+  for (const character of text) {
+    const code = character.charCodeAt(0)
+    firstHash = (firstHash * 131 + code) % modulus
+    secondHash = (secondHash * 137 + code) % modulus
+  }
+
+  return `${secondHash}${String(firstHash).padStart(9, '0')}`.padStart(digits, '0').slice(-digits)
+}
+
+const buildNextNumericValue = (values, seed, preferredStep = null) => {
+  const numericValues = values
+    .map(normalizeNumericString)
+    .filter((value) => value !== null)
+
+  if (!numericValues.length) {
+    return buildNumericFallback(seed)
+  }
+
+  const positiveDiffs = []
+  for (let index = 1; index < numericValues.length; index += 1) {
+    const diff = subtractNumericStrings(numericValues[index], numericValues[index - 1])
+    if (diff !== null && diff !== '0') positiveDiffs.push(diff)
+  }
+
+  let step = normalizeNumericString(preferredStep)
+  if (step === null) {
+    if (positiveDiffs.length) {
+      step = positiveDiffs[0]
+      for (let index = 1; index < positiveDiffs.length; index += 1) {
+        if (compareNumericStrings(positiveDiffs[index], step) < 0) {
+          step = positiveDiffs[index]
+        }
+      }
+    } else {
+      step = '1'
+    }
+  }
+
+  if (step === '0') {
+    step = '1'
+  }
+
+  const maxValue = numericValues.reduce((max, value) => (compareNumericStrings(value, max) > 0 ? value : max), numericValues[0])
+  return addNumericStrings(maxValue, step)
+}
+
+const extractTiktokProductBody = (payload) => {
+  if (!payload || typeof payload !== 'object') return null
+
+  if (Array.isArray(payload.skus) || Array.isArray(payload.main_images) || String(payload.title || '').trim() !== '') {
+    return payload
+  }
+
+  if (payload.data && typeof payload.data === 'object') {
+    const data = payload.data
+    if (Array.isArray(data.skus) || Array.isArray(data.main_images) || String(data.title || '').trim() !== '') {
+      return data
+    }
+  }
+
+  return null
+}
+
+const normalizeTiktokUploadedImageUri = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  if (/^(https?:|data:|blob:)/i.test(text)) return ''
+  if (text.startsWith('/') || text.includes('/cached-images/')) return ''
+  if (text.startsWith('cached-images/')) return ''
+  return text.includes('/') ? text : ''
+}
+
+const firstTiktokUploadedImageUri = (...values) => {
+  for (const value of values) {
+    const uri = normalizeTiktokUploadedImageUri(value)
+    if (uri) return uri
+  }
+
+  return ''
+}
+
+const findExistingTiktokImageUri = (productBody, existingSkus, preferredValueName = '') => {
+  const targetValueName = normalizeText(preferredValueName)
+  const matchingSku = existingSkus.find((sku) => {
+    return normalizeText(sku?.sales_attributes?.[0]?.value_name) === targetValueName
+  })
+  const skuWithImage = existingSkus.find((sku) => normalizeTiktokUploadedImageUri(sku?.sales_attributes?.[0]?.sku_img?.uri))
+  const mainImages = Array.isArray(productBody.main_images) ? productBody.main_images : []
+
+  return firstTiktokUploadedImageUri(
+    matchingSku?.sales_attributes?.[0]?.sku_img?.uri,
+    skuWithImage?.sales_attributes?.[0]?.sku_img?.uri,
+    ...mainImages.map((image) => typeof image === 'string' ? image : image?.uri)
+  )
+}
+
+const buildAddVariantRequestPreview = () => {
+  const productBody = cloneJson(extractTiktokProductBody(apiGetProductResponsePayload.value)) || {}
+  const existingSkus = Array.isArray(productBody.skus)
+    ? productBody.skus.map((sku) => cloneJson(sku) || {})
+    : []
+
+  const productTitle = String(
+    productBody.title ||
+    selectedItem.value?.tiktok?.product_name ||
+    selectedItem.value?.product_name ||
+    DEFAULT_PRODUCT_NAME
+  ).trim() || DEFAULT_PRODUCT_NAME
+
+  const sellerSku = String(addVariantTool.seller_sku || selectedItem.value?.seller_sku || '').trim()
+  const colorName = String(addVariantTool.color_name || selectedItem.value?.variant_name || 'Variant Baru').trim() || 'Variant Baru'
+  const imageUri = String(addVariantTool.image_uri || selectedItem.value?.image_url || '').trim()
+  const tiktokImageUri = firstTiktokUploadedImageUri(
+    imageUri,
+    findExistingTiktokImageUri(productBody, existingSkus, colorName)
+  )
+  const priceValue = String(addVariantTool.price || '50000').trim() || '50000'
+  const quantityValue = Number(addVariantTool.quantity ?? 0)
+
+  const generatedId = buildNextNumericValue(
+    existingSkus.map((sku) => sku.id || sku.sku_id),
+    `${productTitle}|${sellerSku}|id`,
+    '65536'
+  )
+  const existingAttribute = existingSkus.find((sku) => sku?.sales_attributes?.[0]?.id || sku?.sales_attributes?.[0]?.name)?.sales_attributes?.[0] || {}
+
+  const baseAttribute = {
+    id: String(existingAttribute.id || TIKTOK_VARIANT_ATTRIBUTE_ID),
+    name: String(existingAttribute.name || TIKTOK_VARIANT_ATTRIBUTE_NAME),
+    value_name: colorName
+  }
+
+  if (tiktokImageUri) {
+    baseAttribute.sku_img = {
+      uri: tiktokImageUri
+    }
+  }
+
+  const baseInventory = {
+    quantity: quantityValue,
+    warehouse_id: TIKTOK_VARIANT_WAREHOUSE_ID
+  }
+
+  const newSku = {
+    seller_sku: sellerSku || `SKU-${generatedId.slice(-6)}`,
+    sales_attributes: [baseAttribute],
+    price: {
+      currency: 'IDR',
+      sale_price: priceValue,
+      tax_exclusive_price: priceValue,
+      amount: priceValue
+    },
+    inventory: [baseInventory]
+  }
+
+  const matchingSellerSkuIndex = existingSkus.findIndex((sku) => {
+    return normalizeText(sku?.seller_sku) === normalizeText(newSku.seller_sku)
+  })
+  let placeholderIndex = -1
+  for (let index = existingSkus.length - 1; index >= 0; index -= 1) {
+    const sku = existingSkus[index]
+    const skuId = String(sku?.id || sku?.sku_id || '').trim()
+    const valueId = String(sku?.sales_attributes?.[0]?.value_id || '').trim()
+    const warehouseId = String(sku?.inventory?.[0]?.warehouse_id || '').trim()
+
+    if (skuId === '' && (valueId === '' || warehouseId === '')) {
+      placeholderIndex = index
+      break
+    }
+  }
+
+  if (matchingSellerSkuIndex >= 0) {
+    existingSkus[matchingSellerSkuIndex] = {
+      ...existingSkus[matchingSellerSkuIndex],
+      ...newSku,
+      sales_attributes: newSku.sales_attributes,
+      inventory: newSku.inventory
+    }
+  } else if (placeholderIndex >= 0) {
+    const replacementSku = {
+      ...existingSkus[placeholderIndex],
+      ...newSku,
+      sales_attributes: newSku.sales_attributes,
+      inventory: newSku.inventory
+    }
+    delete replacementSku.id
+    delete replacementSku.sku_id
+    existingSkus[placeholderIndex] = replacementSku
+  } else {
+    existingSkus.push(newSku)
+  }
+
+  productBody.save_mode = 'LISTING'
+  productBody.category_id = '601307'
+  productBody.category_version = 'v2'
+  productBody.title = productTitle
+  productBody.skus = existingSkus
+
+  if (!Array.isArray(productBody.main_images) || productBody.main_images.length === 0) {
+    productBody.main_images = tiktokImageUri ? [{ uri: tiktokImageUri }] : []
+  }
+
+  return JSON.stringify(productBody, null, 2)
+}
+
 const apiGetProductResponseHint = computed(() => {
   const payload = apiGetProductResponsePayload.value
   if (!payload) return ''
@@ -796,62 +1052,21 @@ const apiGetProductResponseHint = computed(() => {
 })
 
 const addVariantRequestPreview = computed(() => {
-  const payload = apiGetProductResponseProduct.value
-  const baseProduct = payload ? JSON.parse(JSON.stringify(payload)) : null
-  const existingSkus = Array.isArray(baseProduct?.skus) ? baseProduct.skus : []
-  const newSku = buildNewSkuPayload()
-
-  const body = baseProduct ? {
-    save_mode: baseProduct.save_mode || 'LISTING',
-    description: baseProduct.description || '',
-    category_id: baseProduct.category_id || '',
-    category_version: baseProduct.category_version || '',
-    main_images: Array.isArray(baseProduct.main_images) ? baseProduct.main_images : [],
-    skus: [...existingSkus, newSku],
-    title: baseProduct.title || selectedItem.value?.product_name || '',
-    is_cod_allowed: Boolean(baseProduct.is_cod_allowed ?? true),
-    package_weight: baseProduct.package_weight || {
-      unit: 'KILOGRAM',
-      value: '0'
-    },
-    package_dimensions: baseProduct.package_dimensions || {
-      height: '0',
-      length: '0',
-      unit: 'CENTIMETER',
-      width: '0'
-    },
-    product_attributes: Array.isArray(baseProduct.product_attributes) ? baseProduct.product_attributes : [],
-    size_chart: baseProduct.size_chart || null,
-    shipping_insurance_requirement: baseProduct.shipping_insurance_requirement || '',
-    is_pre_owned: Boolean(baseProduct.is_pre_owned ?? false),
-    listing_platforms: Array.isArray(baseProduct.listing_platforms) ? baseProduct.listing_platforms : []
-  } : {
-    save_mode: 'LISTING',
-    description: '',
-    category_id: '',
-    category_version: '',
-    main_images: [],
-    skus: [newSku],
-    title: selectedItem.value?.product_name || '',
-    is_cod_allowed: true,
-    package_weight: {
-      unit: 'KILOGRAM',
-      value: '0'
-    },
-    package_dimensions: {
-      height: '0',
-      length: '0',
-      unit: 'CENTIMETER',
-      width: '0'
-    },
-    product_attributes: [],
-    size_chart: null,
-    shipping_insurance_requirement: '',
-    is_pre_owned: false,
-    listing_platforms: []
+  try {
+    return buildAddVariantRequestPreview()
+  } catch (error) {
+    return JSON.stringify({
+      product_id: addVariantTool.product_id || selectedItem.value?.tiktok?.product_id || '',
+      shop_cipher: addVariantTool.shop_cipher,
+      seller_sku: addVariantTool.seller_sku,
+      color_name: addVariantTool.color_name,
+      image_uri: addVariantTool.image_uri,
+      price: addVariantTool.price,
+      quantity: addVariantTool.quantity,
+      dry_run: addVariantTool.dry_run,
+      preview_error: error?.message || 'Request demo gagal digenerate.'
+    }, null, 2)
   }
-
-  return JSON.stringify(body, null, 2)
 })
 
 const addVariantResponseLines = computed(() => {
@@ -863,12 +1078,59 @@ const addVariantResponseLines = computed(() => {
     }))
 })
 
+const copyTextToClipboard = async (value) => {
+  const text = String(value ?? '')
+
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // Domain lokal kadang menolak Clipboard API; lanjut pakai fallback.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, text.length)
+
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+
+  if (!copied) {
+    throw new Error('Browser menolak akses clipboard.')
+  }
+}
+
 const copyAddVariantRequest = async () => {
-  await copyTextToClipboard(addVariantRequestPreview.value)
+  try {
+    await copyTextToClipboard(addVariantRequestPreview.value)
+    loadError.value = ''
+  } catch (error) {
+    loadError.value = error?.message || 'Copy request gagal.'
+  }
 }
 
 const copyAddVariantResponse = async () => {
-  await copyTextToClipboard(addVariantResponseText.value)
+  try {
+    if (!String(addVariantResponseText.value || '').trim()) {
+      addVariantResponseText.value = addVariantRequestPreview.value
+      addVariantResponseStatus.value = 'READY'
+    }
+
+    await copyTextToClipboard(addVariantResponseText.value)
+    loadError.value = ''
+  } catch (error) {
+    loadError.value = error?.message || 'Copy response gagal.'
+  }
 }
 
 const loadAddVariantContext = async () => {
@@ -892,66 +1154,35 @@ const submitAddVariant = async () => {
   addVariantResponseStatus.value = '0'
 
   try {
-    const productId = String(addVariantTool.product_id || selectedItem.value?.tiktok?.product_id || '').trim()
-    const response = await omnichannelService.addTiktokProductVariant(productId, {
-      shop_cipher: addVariantTool.shop_cipher,
-      seller_sku: addVariantTool.seller_sku,
-      color_name: addVariantTool.color_name,
-      image_uri: addVariantTool.image_uri,
-      price: addVariantTool.price,
-      quantity: addVariantTool.quantity,
-      dry_run: addVariantTool.dry_run
-    })
-
-    addVariantResponseText.value = JSON.stringify(response.data, null, 2)
-    addVariantResponseStatus.value = String(response.status || 200)
+    addVariantResponseText.value = buildAddVariantRequestPreview()
+    addVariantResponseStatus.value = 'READY'
   } catch (error) {
-    const responseData = error.response?.data
-    addVariantResponseText.value = responseData ? JSON.stringify(responseData, null, 2) : (error.message || 'Request gagal.')
-    addVariantResponseStatus.value = String(error.response?.status || 0)
-    loadError.value = error.response?.data?.message || error.message || 'Tambah variant gagal diproses.'
+    addVariantResponseText.value = JSON.stringify({
+      message: 'Payload tambah variant gagal digenerate dari response GET Product.',
+      error: error?.message || 'Request demo gagal digenerate.'
+    }, null, 2)
+    addVariantResponseStatus.value = 'ERROR'
+    loadError.value = error?.message || 'Payload tambah variant gagal digenerate.'
   } finally {
     addVariantBusy.value = false
   }
 }
 
 const copyGetProductCurl = async () => {
-  await copyTextToClipboard(apiGetProductCurl.value)
+  try {
+    await copyTextToClipboard(apiGetProductCurl.value)
+    loadError.value = ''
+  } catch (error) {
+    loadError.value = error?.message || 'Copy cURL gagal.'
+  }
 }
 
 const copyGetProductResponse = async () => {
-  await copyTextToClipboard(getProductResponseText.value)
-}
-
-const copyTextToClipboard = async (text) => {
-  const value = String(text || '')
-  if (!value) return
-
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value)
-      return
-    } catch {
-      // Fallback ke cara lama jika clipboard API diblokir browser atau origin.
-    }
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = value
-  textarea.setAttribute('readonly', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.top = '-9999px'
-  textarea.style.left = '-9999px'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-
   try {
-    const ok = document.execCommand('copy')
-    if (!ok) throw new Error('Copy command failed')
-  } finally {
-    document.body.removeChild(textarea)
+    await copyTextToClipboard(getProductResponseText.value)
+    loadError.value = ''
+  } catch (error) {
+    loadError.value = error?.message || 'Copy response gagal.'
   }
 }
 
