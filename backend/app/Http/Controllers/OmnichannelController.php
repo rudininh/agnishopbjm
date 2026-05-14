@@ -1480,6 +1480,7 @@ class OmnichannelController extends Controller
         $imageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokImageUrl($data), 'tiktok', $productId, 'product');
         $skus = $this->normalizeTiktokSkuList($data);
         $statusInfo = $this->tiktokPayloadStatusInfo($data);
+        $activeSkuKeys = [];
 
         if (! is_array($skus) || $skus === []) {
             $skus = [[
@@ -1497,6 +1498,11 @@ class OmnichannelController extends Controller
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
             $skuImageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokSkuImageUrl($sku), 'tiktok', $productId, $skuId !== '' ? $skuId : $skuName);
+            $skuKey = $skuId !== '' ? $skuId : $skuName;
+
+            if ($skuKey !== '') {
+                $activeSkuKeys[$this->normalizeSkuMatchValue($skuKey)] = true;
+            }
 
             DB::table('tiktok_products')->updateOrInsert(
                 ['product_id' => $productId, 'sku_id' => $skuId !== '' ? $skuId : $skuName],
@@ -1516,6 +1522,35 @@ class OmnichannelController extends Controller
                     'created_at' => now(),
                 ]
             );
+        }
+
+        if ($activeSkuKeys !== []) {
+            $existingRows = DB::table('tiktok_products')
+                ->where('product_id', $productId)
+                ->whereRaw('COALESCE(is_active, true) = true')
+                ->select('id', 'sku_id', 'sku_name', 'seller_sku')
+                ->get();
+
+            foreach ($existingRows as $existingRow) {
+                $existingKey = $this->normalizeSkuMatchValue($existingRow->sku_id ?? '');
+
+                if ($existingKey === '') {
+                    $existingKey = $this->normalizeSkuMatchValue($existingRow->sku_name ?? '');
+                }
+
+                if ($existingKey === '') {
+                    $existingKey = $this->normalizeSkuMatchValue($existingRow->seller_sku ?? '');
+                }
+
+                if ($existingKey !== '' && ! isset($activeSkuKeys[$existingKey])) {
+                    DB::table('tiktok_products')
+                        ->where('id', $existingRow->id)
+                        ->update([
+                            'is_active' => DB::raw('false'),
+                            'updated_at' => now(),
+                        ]);
+                }
+            }
         }
     }
 
@@ -3202,6 +3237,24 @@ class OmnichannelController extends Controller
                 'message' => 'TikTok tidak mengembalikan JSON valid.',
                 'raw' => $body,
             ], 502);
+        }
+
+        if ((int) ($decoded['code'] ?? -1) === 0) {
+            $productPayload = data_get($decoded, 'data');
+            if (is_array($productPayload)) {
+                $productPayload = is_array($productPayload['product'] ?? null)
+                    ? $productPayload['product']
+                    : $productPayload;
+
+                try {
+                    $this->storeTiktokProductPayload($productPayload);
+                } catch (\Throwable $exception) {
+                    logger()->warning('TikTok get-product cache sync failed', [
+                        'product_id' => $productId,
+                        'exception' => $exception->getMessage(),
+                    ]);
+                }
+            }
         }
 
         return response($body, $response->status())
