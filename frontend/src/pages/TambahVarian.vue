@@ -1574,6 +1574,14 @@ const submitGetProductDemo = async () => {
     try {
       const parsed = responseText ? JSON.parse(responseText) : null
       getProductResponseStatus.value = String(parsed?.code ?? response.status ?? 0)
+
+      if (Number(parsed?.code ?? -1) === 0) {
+        try {
+          await refreshMappingTableAfterGetProduct()
+        } catch (refreshError) {
+          loadError.value = refreshError?.message || 'Data tabel gagal di-refresh setelah Get Product.'
+        }
+      }
     } catch {
       getProductResponseStatus.value = String(response.status ?? 0)
     }
@@ -1586,7 +1594,12 @@ const submitGetProductDemo = async () => {
   }
 }
 
-const loadData = async (resetPage = false) => {
+const loadData = async (resetPage = false, options = {}) => {
+  const {
+    bypassCache = false,
+    preserveSelection = false
+  } = options
+
   loading.value = true
   loadError.value = ''
   if (resetPage) pagination.page = 1
@@ -1597,17 +1610,24 @@ const loadData = async (resetPage = false) => {
     page: pagination.page,
     per_page: pagination.per_page
   })
+  const selectedIdBeforeRefresh = preserveSelection ? selectedItem.value?.id || null : null
   try {
-    if (pageCache.has(cacheKey)) {
+    if (!bypassCache && pageCache.has(cacheKey)) {
       const cached = pageCache.get(cacheKey)
       items.value = cached.items
       Object.assign(pagination, cached.pagination)
-      const firstCached = activeGroup.value?.variants?.[0] || null
-      if (firstCached) {
-        selectItem(firstCached)
+      if (preserveSelection) {
+        selectedItem.value = selectedIdBeforeRefresh
+          ? items.value.find((item) => item.id === selectedIdBeforeRefresh) || null
+          : null
       } else {
-        selectedItem.value = null
-        resetForm()
+        const firstCached = activeGroup.value?.variants?.[0] || null
+        if (firstCached) {
+          selectItem(firstCached)
+        } else {
+          selectedItem.value = null
+          resetForm()
+        }
       }
       return
     }
@@ -1625,12 +1645,18 @@ const loadData = async (resetPage = false) => {
       items: items.value,
       pagination: { ...pagination }
     })
-    const first = activeGroup.value?.variants?.[0] || null
-    if (first) {
-      selectItem(first)
+    if (preserveSelection) {
+      selectedItem.value = selectedIdBeforeRefresh
+        ? items.value.find((item) => item.id === selectedIdBeforeRefresh) || null
+        : null
     } else {
-      selectedItem.value = null
-      resetForm()
+      const first = activeGroup.value?.variants?.[0] || null
+      if (first) {
+        selectItem(first)
+      } else {
+        selectedItem.value = null
+        resetForm()
+      }
     }
   } catch (error) {
     loadError.value = error.response?.data?.message || 'Data tambah varian gagal dimuat.'
@@ -1640,6 +1666,13 @@ const loadData = async (resetPage = false) => {
   } finally {
     loading.value = false
   }
+}
+
+const refreshMappingTableAfterGetProduct = async () => {
+  await loadData(false, {
+    bypassCache: true,
+    preserveSelection: true
+  })
 }
 
 const changePage = async (nextPage) => {
@@ -1679,7 +1712,10 @@ const save = async () => {
   loadError.value = ''
   try {
     await omnichannelService.saveSkuMapping({ ...form })
-    await loadData()
+    await loadData(false, {
+      bypassCache: true,
+      preserveSelection: true
+    })
   } catch (error) {
     loadError.value = error.response?.data?.message || 'Mapping gagal disimpan.'
   } finally {
@@ -1698,7 +1734,10 @@ const prepareMissingVariant = async (item) => {
       stock_master_id: item.stock_master_id || item.id,
       target_channel: targetChannel
     })
-    await loadData()
+    await loadData(false, {
+      bypassCache: true,
+      preserveSelection: true
+    })
     const refreshed = activeGroup.value?.variants?.find((candidate) => candidate.stock_master_id === item.stock_master_id) || activeGroup.value?.variants?.[0]
     if (refreshed) selectItem(refreshed)
   } catch (error) {
@@ -1731,7 +1770,10 @@ const runTiktokAction = async (action) => {
     })
 
     actionLog.value = response.data?.message || 'Aksi TikTok berhasil diproses.'
-    await loadData()
+    await loadData(false, {
+      bypassCache: true,
+      preserveSelection: true
+    })
     const refreshed = activeGroup.value?.variants?.find((candidate) => candidate.stock_master_id === form.stock_master_id) || activeGroup.value?.variants?.[0]
     if (refreshed) selectItem(refreshed)
   } catch (error) {
