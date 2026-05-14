@@ -2082,6 +2082,7 @@ class OmnichannelController extends Controller
             'sva.variant_action_payload',
             'sp.name as shopee_name',
             'spm.name as shopee_variant_name',
+            'spm.price as shopee_variant_price',
             'spm.stock as shopee_variant_stock',
             'spmi.image_url as shopee_model_image_url',
             'spi.image_url as shopee_product_image_url'
@@ -2160,10 +2161,12 @@ class OmnichannelController extends Controller
                     'product_name' => $row->shopee_name ?: $row->product_name,
                     'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
                     'seller_sku' => $shopeeSellerSku,
+                    'price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                     'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
                     'image_url' => $shopeeImageUrl,
                     'status' => $statusShopee,
                 ],
+                'shopee_variant_price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                 'tiktok' => [
                     'product_id' => $tiktokProductId ?: ($tiktokMatch->product_id ?? null),
                     'sku_id' => $tiktokSkuId ?: ($tiktokMatch->sku_id ?? null),
