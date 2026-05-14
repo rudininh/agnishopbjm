@@ -660,8 +660,6 @@ const fillAddVariantToolFromItem = (item) => {
     addVariantTool.product_id = productId
   }
 
-  if (item.status !== 'belum_ada_variant') return
-
   const sellerSku = String(
     item.shopee?.seller_sku ||
     item.seller_sku ||
