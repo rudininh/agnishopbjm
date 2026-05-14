@@ -1574,16 +1574,6 @@ const submitGetProductDemo = async () => {
     try {
       const parsed = responseText ? JSON.parse(responseText) : null
       getProductResponseStatus.value = String(parsed?.code ?? response.status ?? 0)
-      const payload = parsed?.data || parsed
-      if (payload) {
-        const mapped = mapProductPayloadToVariantDefaults(payload)
-        if (mapped.product_id) addVariantTool.product_id = mapped.product_id
-        if (mapped.seller_sku) addVariantTool.seller_sku = mapped.seller_sku
-        if (mapped.color_name) addVariantTool.color_name = mapped.color_name
-        if (mapped.image_uri) addVariantTool.image_uri = mapped.image_uri
-        if (mapped.price) addVariantTool.price = mapped.price
-        addVariantTool.quantity = Number(mapped.quantity ?? 0)
-      }
     } catch {
       getProductResponseStatus.value = String(response.status ?? 0)
     }
