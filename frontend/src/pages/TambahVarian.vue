@@ -7,10 +7,11 @@
         <small class="subtitle">Halaman uji untuk satu etalase: create / update / mapping varian.</small>
       </div>
       <div class="header-actions">
-        <button class="ghost" @click="loadData(true)" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
-        <button class="primary" @click="save" :disabled="!selectedItem || !form.stock_master_id || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
-        <button class="ghost" @click.stop="selectedItem && selectItem(selectedItem)" :disabled="!selectedItem">Edit</button>
+        <button type="button" class="ghost" @click="loadData(true)" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
+        <button type="button" class="primary" @click="save" :disabled="!selectedItem || !form.stock_master_id || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
+        <button type="button" class="ghost" @click.stop="selectedItem && selectItem(selectedItem)" :disabled="!selectedItem">Edit</button>
         <button
+          type="button"
           v-if="selectedItem && canPrepareMissingVariant(selectedItem)"
           class="primary"
           :disabled="preparing"
@@ -29,7 +30,7 @@
         <span>Nama etalase uji</span>
         <input v-model.trim="filters.search" type="search" placeholder="Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo" @keyup.enter="loadData(true)" />
       </label>
-      <button class="ghost" @click="loadData(true)" :disabled="loading">Muat etalase ini</button>
+      <button type="button" class="ghost" @click="loadData(true)" :disabled="loading">Muat etalase ini</button>
     </div>
 
     <div class="summary-grid" v-if="summaryItem">
@@ -157,9 +158,9 @@
         </div>
 
         <div class="pagination" v-if="pagination.last_page > 1">
-          <button class="ghost" @click="changePage(pagination.page - 1)" :disabled="loading || pagination.page <= 1">Prev</button>
+          <button type="button" class="ghost" @click="changePage(pagination.page - 1)" :disabled="loading || pagination.page <= 1">Prev</button>
           <span>Halaman {{ pagination.page }} / {{ pagination.last_page }} | {{ pagination.total }} data</span>
-          <button class="ghost" @click="changePage(pagination.page + 1)" :disabled="loading || pagination.page >= pagination.last_page">Next</button>
+          <button type="button" class="ghost" @click="changePage(pagination.page + 1)" :disabled="loading || pagination.page >= pagination.last_page">Next</button>
         </div>
 
         <div class="api-panel">
@@ -244,7 +245,7 @@
               </div>
 
               <div class="api-submit-row">
-                <button class="primary" @click="submitGetProductDemo" :disabled="getProductRequestBusy">
+                <button type="button" class="primary" @click="submitGetProductDemo" :disabled="getProductRequestBusy">
                   {{ getProductRequestBusy ? 'Submitting...' : 'Submit Request' }}
                 </button>
               </div>
@@ -329,9 +330,12 @@
               </div>
 
               <div class="api-submit-row">
-                <button class="ghost" @click="loadAddVariantContext" :disabled="addVariantBusy">Ambil Context</button>
-                <button class="primary" @click="submitAddVariant" :disabled="addVariantBusy">
+                <button type="button" class="ghost" @click="loadAddVariantContext" :disabled="addVariantBusy">Ambil Context</button>
+                <button type="button" class="primary" @click="submitAddVariant" :disabled="addVariantBusy">
                   {{ addVariantBusy ? 'Generating...' : 'Generate Payload' }}
+                </button>
+                <button type="button" class="ghost" @click="openTiktokSubmitDialog" :disabled="addVariantBusy || tiktokSubmitBusy || !resolveAddVariantProductId()">
+                  {{ tiktokSubmitBusy ? 'Mengirim...' : 'Submit ke TikTok' }}
                 </button>
               </div>
             </div>
@@ -346,7 +350,7 @@
               </div>
               <div class="api-right-block">
                 <div class="api-right-head">
-                  <strong>Response</strong>
+                  <strong>Response Generate Payload</strong>
                   <button class="ghost mini" type="button" @click="copyAddVariantResponse">Copy</button>
                 </div>
                 <div class="api-status-line">
@@ -358,6 +362,23 @@
                     <span v-for="line in addVariantResponseLines" :key="line.no">{{ line.no }}</span>
                   </div>
                   <pre>{{ addVariantResponseText || ' ' }}</pre>
+                </div>
+              </div>
+              <div class="api-right-block tiktok-response-block">
+                <div class="api-right-head">
+                  <strong>Response TikTok</strong>
+                  <button class="ghost mini" type="button" @click="copyTiktokSubmitResponse">Copy</button>
+                </div>
+                <div class="api-status-line">
+                  <span>Status:</span>
+                  <span class="status-dot">{{ tiktokSubmitResponseStatus || '-' }}</span>
+                </div>
+                <p v-if="tiktokSubmitResponseHint" class="api-response-hint">{{ tiktokSubmitResponseHint }}</p>
+                <div class="api-response-viewer">
+                  <div class="api-response-lines">
+                    <span v-for="line in tiktokSubmitResponseLines" :key="line.no">{{ line.no }}</span>
+                  </div>
+                  <pre>{{ tiktokSubmitResponseText || ' ' }}</pre>
                 </div>
               </div>
             </div>
@@ -415,20 +436,54 @@
         <p class="notice">{{ shopeeDetailHint(selectedItem) }} {{ tiktokDetailHint(selectedItem) }}</p>
 
         <div class="actions stacked">
-          <button class="ghost" @click="fillFromSelected">Reset</button>
-          <button class="primary" @click="save" :disabled="saving || !form.stock_master_id">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
+          <button type="button" class="ghost" @click="fillFromSelected">Reset</button>
+          <button type="button" class="primary" @click="save" :disabled="saving || !form.stock_master_id">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
         </div>
         <div class="action-grid">
-          <button class="ghost" @click="runTiktokAction('upload_image')" :disabled="actionBusy || !selectedItem">Upload Gambar</button>
-          <button class="ghost" @click="runTiktokAction('save_product')" :disabled="actionBusy || !selectedItem">Simpan Produk</button>
-          <button class="ghost" @click="runTiktokAction('update_inventory')" :disabled="actionBusy || !selectedItem">Update Stok</button>
-          <button class="primary" @click="runTiktokAction('full_sync')" :disabled="actionBusy || !selectedItem">{{ actionBusy ? 'Memproses...' : 'Full Sync TikTok' }}</button>
+          <button type="button" class="ghost" @click="runTiktokAction('upload_image')" :disabled="actionBusy || !selectedItem">Upload Gambar</button>
+          <button type="button" class="ghost" @click="runTiktokAction('save_product')" :disabled="actionBusy || !selectedItem">Simpan Produk</button>
+          <button type="button" class="ghost" @click="runTiktokAction('update_inventory')" :disabled="actionBusy || !selectedItem">Update Stok</button>
+          <button type="button" class="primary" @click="runTiktokAction('full_sync')" :disabled="actionBusy || !selectedItem">{{ actionBusy ? 'Memproses...' : 'Full Sync TikTok' }}</button>
         </div>
         <p v-if="actionLog" class="notice">{{ actionLog }}</p>
         <p v-if="!form.stock_master_id" class="notice">Baris ini hanya ada di TikTok. Save Mapping aktif setelah dipasangkan ke varian Shopee.</p>
       </aside>
     </div>
 
+    <div v-if="tiktokSubmitDialogOpen" class="dialog-backdrop" @click.self="closeTiktokSubmitDialog">
+      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="tiktok-submit-dialog-title">
+        <div class="dialog-header">
+          <div>
+            <p>Konfirmasi TikTok</p>
+            <h3 id="tiktok-submit-dialog-title">Yakin submit payload ini ke TikTok?</h3>
+          </div>
+          <button class="ghost mini" type="button" @click="closeTiktokSubmitDialog" :disabled="tiktokSubmitBusy">Tutup</button>
+        </div>
+        <p class="dialog-copy">
+          Tombol ini akan menjalankan request PUT ke TikTok memakai payload yang sama persis seperti hasil Generate Payload.
+        </p>
+        <dl class="dialog-meta">
+          <div>
+            <dt>Product ID</dt>
+            <dd>{{ pendingTiktokSubmitMeta.product_id || '-' }}</dd>
+          </div>
+          <div>
+            <dt>Version</dt>
+            <dd>{{ pendingTiktokSubmitMeta.version || '-' }}</dd>
+          </div>
+          <div>
+            <dt>Shop Cipher</dt>
+            <dd>{{ pendingTiktokSubmitMeta.shop_cipher || '-' }}</dd>
+          </div>
+        </dl>
+        <div class="dialog-actions">
+          <button class="ghost" type="button" @click="closeTiktokSubmitDialog" :disabled="tiktokSubmitBusy">Tidak</button>
+          <button class="primary" type="button" @click="confirmSubmitTiktokPayload" :disabled="tiktokSubmitBusy || !pendingTiktokSubmitPayload">
+            {{ tiktokSubmitBusy ? 'Mengirim ke TikTok...' : 'Ya, Submit' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -438,6 +493,8 @@ import { omnichannelService } from '@/services'
 
 const DEFAULT_PRODUCT_NAME = 'Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo'
 const DEFAULT_API_PRODUCT_ID = '1732272903733872574'
+const TIKTOK_GET_PRODUCT_VERSION = '202309'
+const TIKTOK_SUBMIT_VERSION = '202509'
 const TIKTOK_VARIANT_ATTRIBUTE_ID = '100000'
 const TIKTOK_VARIANT_ATTRIBUTE_NAME = 'Warna'
 const TIKTOK_VARIANT_WAREHOUSE_ID = '7395901885692495617'
@@ -446,6 +503,14 @@ const loading = ref(false)
 const saving = ref(false)
 const preparing = ref(false)
 const actionBusy = ref(false)
+const tiktokSubmitBusy = ref(false)
+const tiktokSubmitDialogOpen = ref(false)
+const pendingTiktokSubmitPayload = ref('')
+const pendingTiktokSubmitMeta = reactive({
+  product_id: '',
+  version: '',
+  shop_cipher: ''
+})
 const loadError = ref('')
 const actionLog = ref('')
 const items = ref([])
@@ -462,6 +527,9 @@ const getProductResponseStatus = ref('0')
 const addVariantBusy = ref(false)
 const addVariantResponseText = ref('')
 const addVariantResponseStatus = ref('0')
+const tiktokSubmitResponseText = ref('')
+const tiktokSubmitResponseStatus = ref('')
+const tiktokSubmitResponseHint = ref('')
 const filters = reactive({
   search: DEFAULT_PRODUCT_NAME,
   status: 'belum_ada_variant'
@@ -532,6 +600,52 @@ const tiktokDetailHint = (item) => hasTiktokActual(item)
   : hasTiktokCandidate(item)
     ? 'Yang cocok baru kode variasinya, belum ada varian TikTok aktif.'
     : 'Varian ini memang belum ada di TikTok.'
+const resolveAddVariantProductId = () => {
+  return String(
+    addVariantTool.product_id ||
+    getProductTool.product_id ||
+    selectedItem.value?.tiktok?.product_id ||
+    ''
+  ).trim()
+}
+const resolveAddVariantShopCipher = () => {
+  return String(
+    addVariantTool.shop_cipher ||
+    getProductTool.shop_cipher ||
+    ''
+  ).trim()
+}
+const resolveAddVariantVersion = () => {
+  return String(TIKTOK_SUBMIT_VERSION).trim() || TIKTOK_SUBMIT_VERSION
+}
+const buildTiktokSubmitMeta = () => ({
+  product_id: resolveAddVariantProductId(),
+  version: resolveAddVariantVersion(),
+  shop_cipher: resolveAddVariantShopCipher()
+})
+const formatResponseText = (value) => {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  return JSON.stringify(value, null, 2)
+}
+const parseResponseJson = (value) => {
+  const text = formatResponseText(value).trim()
+  if (!text) return null
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+const responseLinesFromText = (value) => {
+  return String(value || '')
+    .split('\n')
+    .map((line, index) => ({
+      no: index + 1,
+      text: line
+    }))
+}
 const shopeeDetailHint = (item) => hasShopeeActual(item)
   ? 'Data Shopee aktif sudah tersedia.'
   : hasShopeeCandidate(item)
@@ -682,7 +796,7 @@ const displayVariants = computed(() => activeGroup.value?.variants || [])
 const summaryItem = computed(() => selectedItem.value || activeGroup.value?.variants?.[0] || null)
 
 const getProductTool = reactive({
-  version: '202309',
+  version: TIKTOK_GET_PRODUCT_VERSION,
   shop_id: '',
   shop_cipher: '',
   access_token: '',
@@ -705,7 +819,7 @@ const buildGetProductQuery = () => {
   pushIfValue('shop_id', getProductTool.shop_id)
   pushIfValue('sign', '4a76ac82d74afd02afd9cc3c41fe131a167592f0d374237ad301dba5bd3a6089')
   pushIfValue('timestamp', '1778278324')
-  pushIfValue('version', getProductTool.version || '202309')
+  pushIfValue('version', getProductTool.version || TIKTOK_GET_PRODUCT_VERSION)
   pushIfValue('return_under_review_version', getProductTool.return_under_review_version)
   pushIfValue('return_draft_version', getProductTool.return_draft_version)
   pushIfValue('locale', getProductTool.locale)
@@ -714,7 +828,7 @@ const buildGetProductQuery = () => {
 
 const apiGetProductCurl = computed(() => {
   const productId = String(getProductTool.product_id || selectedItem.value?.tiktok?.product_id || '').trim()
-  const url = `https://open-api.tiktokglobalshop.com/product/${getProductTool.version || '202309'}/products/${productId}`
+  const url = `https://open-api.tiktokglobalshop.com/product/${getProductTool.version || TIKTOK_GET_PRODUCT_VERSION}/products/${productId}`
   const query = buildGetProductQuery()
   const querySuffix = query ? `?${query}` : ''
   const accessToken = String(getProductTool.access_token || '').trim()
@@ -1026,9 +1140,106 @@ const buildAddVariantRequestPreview = () => {
   productBody.title = productTitle
   productBody.skus = existingSkus
 
+  if (!Array.isArray(productBody.category_chains) || productBody.category_chains.length === 0) {
+    productBody.category_chains = [
+      {
+        id: '601303',
+        is_leaf: false,
+        local_name: 'Fashion Muslim',
+        parent_id: '0'
+      },
+      {
+        id: '601304',
+        is_leaf: false,
+        local_name: 'Hijab',
+        parent_id: '601303'
+      },
+      {
+        id: '601307',
+        is_leaf: true,
+        local_name: 'Hijab Persegi',
+        parent_id: '601304'
+      }
+    ]
+  }
+
   if (!Array.isArray(productBody.main_images) || productBody.main_images.length === 0) {
     productBody.main_images = tiktokImageUri ? [{ uri: tiktokImageUri }] : []
   }
+
+  const ensureArrayField = (key, fallback = []) => {
+    if (!Array.isArray(productBody[key])) {
+      productBody[key] = cloneJson(fallback)
+    }
+  }
+
+  const ensureObjectField = (key, fallback = {}) => {
+    if (!productBody[key] || typeof productBody[key] !== 'object' || Array.isArray(productBody[key])) {
+      productBody[key] = cloneJson(fallback)
+    }
+  }
+
+  ensureObjectField('audit', {
+    pre_approved_reasons: [],
+    status: 'NONE'
+  })
+  ensureArrayField('manufacturer_ids', [])
+  ensureArrayField('recommended_categories', [])
+  ensureArrayField('responsible_person_ids', [])
+  ensureArrayField('delivery_option_ids', [])
+  ensureArrayField('external_urls', [])
+  ensureArrayField('extra_identifier_codes', [])
+  ensureArrayField('certifications', [])
+  ensureArrayField('listing_platforms', ['TIKTOK_SHOP'])
+  ensureArrayField('search_terms', [])
+  ensureArrayField('key_product_features', [])
+  ensureArrayField('product_attributes', [])
+
+  if (!productBody.package_dimensions || typeof productBody.package_dimensions !== 'object') {
+    productBody.package_dimensions = {
+      height: '0',
+      length: '0',
+      unit: 'CENTIMETER',
+      width: '0'
+    }
+  }
+
+  if (!productBody.package_weight || typeof productBody.package_weight !== 'object') {
+    productBody.package_weight = {
+      unit: 'KILOGRAM',
+      value: '0'
+    }
+  }
+
+  if (!productBody.shipping_insurance_requirement) {
+    productBody.shipping_insurance_requirement = 'REQUIRED'
+  }
+
+  if (!productBody.create_time) {
+    productBody.create_time = Math.floor(Date.now() / 1000)
+  }
+
+  if (!productBody.update_time) {
+    productBody.update_time = Math.floor(Date.now() / 1000)
+  }
+
+  if (!productBody.subscribe_info || typeof productBody.subscribe_info !== 'object') {
+    productBody.subscribe_info = {
+      subscribe_promotion_config: [
+        { discount_level: 'REGULAR' },
+        { discount_level: 'FIRST_ORDER', max_discount: 99, min_discount: 1 }
+      ],
+      subscribe_status: 'NOT_ENABLED',
+      support_subscribe: false
+    }
+  }
+
+  if (productBody.has_draft === undefined) productBody.has_draft = false
+  if (productBody.is_cod_allowed === undefined) productBody.is_cod_allowed = false
+  if (productBody.is_not_for_sale === undefined) productBody.is_not_for_sale = false
+  if (productBody.is_pre_owned === undefined) productBody.is_pre_owned = false
+  if (productBody.is_replicated === undefined) productBody.is_replicated = false
+  if (!productBody.category_version) productBody.category_version = 'v2'
 
   return JSON.stringify(productBody, null, 2)
 }
@@ -1070,12 +1281,11 @@ const addVariantRequestPreview = computed(() => {
 })
 
 const addVariantResponseLines = computed(() => {
-  return String(addVariantResponseText.value || '')
-    .split('\n')
-    .map((line, index) => ({
-      no: index + 1,
-      text: line
-    }))
+  return responseLinesFromText(addVariantResponseText.value)
+})
+
+const tiktokSubmitResponseLines = computed(() => {
+  return responseLinesFromText(tiktokSubmitResponseText.value)
 })
 
 const copyTextToClipboard = async (value) => {
@@ -1133,6 +1343,20 @@ const copyAddVariantResponse = async () => {
   }
 }
 
+const copyTiktokSubmitResponse = async () => {
+  try {
+    const text = String(tiktokSubmitResponseText.value || '').trim()
+    if (!text) {
+      throw new Error('Belum ada response TikTok yang bisa disalin.')
+    }
+
+    await copyTextToClipboard(text)
+    loadError.value = ''
+  } catch (error) {
+    loadError.value = error?.message || 'Copy response TikTok gagal.'
+  }
+}
+
 const loadAddVariantContext = async () => {
   try {
     const response = await omnichannelService.tiktokGetProductContext()
@@ -1144,6 +1368,110 @@ const loadAddVariantContext = async () => {
     }
   } catch {
     // Tetap biarkan user isi manual bila context belum tersedia.
+  }
+}
+
+const openTiktokSubmitDialog = () => {
+  loadError.value = ''
+
+  try {
+    const payloadText = buildAddVariantRequestPreview()
+    const meta = buildTiktokSubmitMeta()
+
+    if (!meta.product_id) {
+      throw new Error('Product ID TikTok belum diisi.')
+    }
+
+    pendingTiktokSubmitPayload.value = payloadText
+    pendingTiktokSubmitMeta.product_id = meta.product_id
+    pendingTiktokSubmitMeta.version = meta.version
+    pendingTiktokSubmitMeta.shop_cipher = meta.shop_cipher
+    addVariantResponseText.value = payloadText
+    addVariantResponseStatus.value = 'READY'
+    tiktokSubmitResponseText.value = ''
+    tiktokSubmitResponseStatus.value = ''
+    tiktokSubmitResponseHint.value = ''
+    tiktokSubmitDialogOpen.value = true
+  } catch (error) {
+    pendingTiktokSubmitPayload.value = ''
+    pendingTiktokSubmitMeta.product_id = ''
+    pendingTiktokSubmitMeta.version = ''
+    pendingTiktokSubmitMeta.shop_cipher = ''
+    loadError.value = error?.message || 'Payload TikTok gagal disiapkan.'
+  }
+}
+
+const closeTiktokSubmitDialog = () => {
+  if (tiktokSubmitBusy.value) return
+  tiktokSubmitDialogOpen.value = false
+}
+
+const applyTiktokSubmitResponse = (responseText, statusCode, hint = '') => {
+  tiktokSubmitResponseText.value = responseText
+  tiktokSubmitResponseStatus.value = statusCode === null || statusCode === undefined || statusCode === ''
+    ? ''
+    : String(statusCode)
+  tiktokSubmitResponseHint.value = hint
+}
+
+const confirmSubmitTiktokPayload = async () => {
+  if (!pendingTiktokSubmitPayload.value.trim()) {
+    loadError.value = 'Payload TikTok belum siap.'
+    return
+  }
+
+  tiktokSubmitBusy.value = true
+  loadError.value = ''
+  tiktokSubmitResponseText.value = ''
+  tiktokSubmitResponseStatus.value = ''
+  tiktokSubmitResponseHint.value = ''
+
+  try {
+    const response = await omnichannelService.tiktokSubmitGeneratedPayload({
+      product_id: pendingTiktokSubmitMeta.product_id,
+      version: pendingTiktokSubmitMeta.version,
+      shop_id: getProductTool.shop_id || '',
+      shop_cipher: pendingTiktokSubmitMeta.shop_cipher,
+      access_token: getProductTool.access_token || '',
+      payload_json: pendingTiktokSubmitPayload.value
+    })
+
+    const responseText = formatResponseText(response.data)
+    const parsed = parseResponseJson(responseText)
+    const statusCode = parsed?.code ?? response.status ?? ''
+    const responseHint = parsed?.message
+      ? String(parsed.message)
+      : Number(statusCode) === 0
+        ? 'Response berhasil diterima langsung dari TikTok Shop.'
+        : `Response TikTok diterima dengan status ${statusCode || response.status || '-'}.`
+
+    applyTiktokSubmitResponse(
+      responseText,
+      statusCode,
+      responseHint
+    )
+  } catch (error) {
+    const responseData = error.response?.data
+    const responseText = formatResponseText(responseData || {
+      message: error.message || 'Submit TikTok gagal diproses.'
+    })
+    const parsed = parseResponseJson(responseText)
+
+    applyTiktokSubmitResponse(
+      responseText,
+      error.response?.status || parsed?.code || 'ERROR',
+      parsed?.message
+        ? String(parsed.message)
+        : (typeof responseData === 'object' && responseData && 'message' in responseData
+          ? String(responseData.message)
+          : error.message || 'Submit TikTok gagal diproses.')
+    )
+    loadError.value = (typeof responseData === 'object' && responseData && 'message' in responseData
+      ? String(responseData.message)
+      : error.message || 'Submit TikTok gagal diproses.')
+  } finally {
+    tiktokSubmitBusy.value = false
+    tiktokSubmitDialogOpen.value = false
   }
 }
 
@@ -1513,10 +1841,12 @@ onMounted(async () => {
 .status-dot::before { content:''; width:10px; height:10px; border-radius:999px; background:#16a34a; box-shadow:0 0 0 2px rgba(22,163,74,.15); display:inline-block; }
 .api-right-block pre { margin:0; padding:12px; border:1px solid #e5e7eb; background:#fff; font-size:12px; line-height:1.55; color:#111827; overflow:auto; white-space:pre-wrap; word-break:break-word; max-height:460px; }
 .api-right-block:first-of-type pre { max-height:150px; }
-.variant-tool .api-right-block:first-of-type pre { max-height:520px; min-height:520px; }
+.variant-tool .api-right-block:first-of-type pre { max-height:280px; min-height:280px; }
+.variant-tool .tiktok-response-block .api-response-viewer { max-height:280px; min-height:280px; }
+.variant-tool .tiktok-response-block pre { max-height:none; min-height:280px; }
 .api-response-hint { margin:8px 0 10px; color:#b45309; font-size:12px; line-height:1.45; background:#fffbeb; border:1px solid #fcd34d; border-radius:4px; padding:8px 10px; }
 .api-response-viewer { display:grid; grid-template-columns:44px minmax(0,1fr); border:1px solid #e5e7eb; background:#fff; max-height:460px; overflow:auto; }
-.variant-tool .api-response-viewer { max-height:520px; min-height:520px; }
+.variant-tool .api-response-viewer { max-height:280px; min-height:280px; }
 .api-response-lines { background:#f8fafc; border-right:1px solid #e5e7eb; color:#94a3b8; font-size:12px; line-height:1.55; text-align:right; padding:12px 8px 12px 0; user-select:none; }
 .api-response-lines span { display:block; min-height:1.55em; }
 .api-response-viewer pre { margin:0; padding:12px; border:0; max-height:none; }
@@ -1557,7 +1887,18 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .actions { display:flex; gap:10px; margin-top:12px; }
 .actions.stacked { margin-top: 10px; }
 .action-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+.dialog-backdrop { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.58); display:grid; place-items:center; padding:20px; }
+.dialog-card { width:min(560px, 100%); background:#fff; border:1px solid #e2e8f0; border-radius:16px; box-shadow:0 30px 80px rgba(15,23,42,.28); padding:20px; }
+.dialog-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:12px; }
+.dialog-header p { color:#64748b; font-size:12px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.08em; font-weight:700; }
+.dialog-header h3 { font-size:20px; color:#0f172a; line-height:1.2; }
+.dialog-copy { color:#475569; margin-bottom:14px; line-height:1.55; }
+.dialog-meta { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; margin:0 0 16px; }
+.dialog-meta div { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; background:#f8fafc; }
+.dialog-meta dt { color:#64748b; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+.dialog-meta dd { margin:0; color:#0f172a; font-size:13px; overflow-wrap:anywhere; }
+.dialog-actions { display:flex; justify-content:flex-end; gap:10px; }
 @media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } .api-testing-tool, .variant-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
-@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } }
+@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } .dialog-meta { grid-template-columns:1fr; } .dialog-actions { flex-direction:column; } .dialog-actions .ghost, .dialog-actions .primary { width:100%; } }
 </style>
 
