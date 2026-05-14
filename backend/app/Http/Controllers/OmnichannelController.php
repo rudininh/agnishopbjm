@@ -1206,12 +1206,13 @@ class OmnichannelController extends Controller
 
         $query = [
             'app_key' => $config['app_key'],
+            'access_token' => $accessToken,
             'shop_cipher' => $shopCipher,
             'timestamp' => time(),
         ];
 
         $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $query['sign'] = $this->generateTiktokWriteSign($path, $query, $config['app_secret']);
+        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $bodyString);
 
         $response = Http::timeout(45)
             ->asJson()
@@ -1283,7 +1284,8 @@ class OmnichannelController extends Controller
             'app_key' => $config['app_key'],
             'timestamp' => time(),
         ];
-        $query['sign'] = $this->generateTiktokWriteSign($path, $query, $config['app_secret']);
+        $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $bodyString);
 
         $absolutePath = $this->resolveUploadImagePath($sourceImageUrl);
         if ($absolutePath === null) {
@@ -1374,6 +1376,7 @@ class OmnichannelController extends Controller
         $path = '/product/202309/products/'.$productId.'/inventory/update';
         $query = [
             'app_key' => $config['app_key'],
+            'access_token' => $accessToken,
             'shop_cipher' => $shopCipher,
             'timestamp' => time(),
         ];
@@ -3136,6 +3139,7 @@ class OmnichannelController extends Controller
 
         $query = [
             'app_key' => $config['app_key'],
+            'access_token' => $accessToken,
             'shop_cipher' => $shopCipher,
             'shop_id' => $shopId,
             'timestamp' => time(),
@@ -3202,6 +3206,205 @@ class OmnichannelController extends Controller
 
         return response($body, $response->status())
             ->header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    public function tiktokSubmitGeneratedPayload(Request $request): Response|JsonResponse
+    {
+        $this->ensureTiktokAuthTables();
+
+        $data = $request->validate([
+            'product_id' => ['required', 'string'],
+            'version' => ['nullable', 'string'],
+            'shop_id' => ['nullable', 'string'],
+            'shop_cipher' => ['nullable', 'string'],
+            'access_token' => ['nullable', 'string'],
+            'payload_json' => ['required', 'string'],
+        ]);
+
+        $config = $this->tiktokConfig();
+        $context = $this->resolveTiktokGetProductContext($data);
+
+        $productId = trim((string) $data['product_id']);
+        $version = trim((string) ($data['version'] ?? '202509')) ?: '202509';
+        $accessToken = trim((string) ($data['access_token'] ?? ''));
+        if ($accessToken === '') {
+            $accessToken = trim((string) ($context['access_token'] ?? ''));
+        }
+
+        $shopId = trim((string) ($data['shop_id'] ?? ''));
+        if ($shopId === '') {
+            $shopId = trim((string) ($context['shop_id'] ?? ''));
+        }
+
+        $shopCipher = trim((string) ($data['shop_cipher'] ?? ''));
+        if ($shopCipher === '') {
+            $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+        }
+        $payloadJson = trim((string) $data['payload_json']);
+
+        abort_if($accessToken === '', 422, 'Token TikTok belum aktif. Jalankan login/refresh token dulu.');
+        abort_if($shopId === '' || $shopCipher === '', 422, 'Shop TikTok belum lengkap untuk request submit payload.');
+
+        $decodedPayload = json_decode($payloadJson, true);
+        if (! is_array($decodedPayload)) {
+            return response()->json([
+                'message' => 'Payload JSON tidak valid.',
+                'raw' => $payloadJson,
+            ], 422);
+        }
+
+        $payloadBody = json_encode($decodedPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payloadBody === false) {
+            return response()->json([
+                'message' => 'Payload JSON tidak bisa dinormalisasi.',
+                'raw' => $payloadJson,
+            ], 422);
+        }
+
+        $path = '/product/'.$version.'/products/'.$productId;
+        $query = [
+            'access_token' => $accessToken,
+            'app_key' => $config['app_key'],
+            'shop_cipher' => $shopCipher,
+            'shop_id' => $shopId,
+            'timestamp' => time(),
+            'version' => $version,
+        ];
+        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $payloadBody);
+        $submitUrl = $config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        try {
+            $curlResult = $this->executeTiktokSubmitPayloadRequest($submitUrl, $payloadBody, $accessToken);
+            $responseStatus = (int) ($curlResult['status'] ?? 0);
+            $responseBody = (string) ($curlResult['body'] ?? '');
+        } catch (\Throwable $exception) {
+            logger()->warning('TikTok submit generated payload request exception', [
+                'product_id' => $productId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'TikTok submit payload request gagal dipanggil.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        $body = $responseBody;
+        $decoded = json_decode($body, true);
+        if (! is_array($decoded)) {
+            logger()->warning('TikTok submit generated payload returned invalid JSON', [
+                'product_id' => $productId,
+                'http_status' => $responseStatus,
+                'body' => $body,
+            ]);
+
+            return response()->json([
+                'message' => 'TikTok tidak mengembalikan JSON valid.',
+                'raw' => $body,
+            ], 502);
+        }
+
+        return response($body, $responseStatus)
+            ->header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    private function executeTiktokSubmitPayloadRequest(string $submitUrl, string $payloadBody, string $accessToken): array
+    {
+        $curlBinary = $this->resolveTiktokCurlBinary();
+        $tempDir = storage_path('app/tiktok-submit');
+        if (! is_dir($tempDir) && ! @mkdir($tempDir, 0777, true) && ! is_dir($tempDir)) {
+            throw new \RuntimeException('Tidak bisa menyiapkan folder sementara untuk request TikTok.');
+        }
+
+        $payloadFile = tempnam($tempDir, 'payload_');
+        $responseFile = tempnam($tempDir, 'response_');
+
+        if ($payloadFile === false || $responseFile === false) {
+            throw new \RuntimeException('Tidak bisa membuat file sementara untuk request TikTok.');
+        }
+
+        try {
+            if (file_put_contents($payloadFile, $payloadBody) === false) {
+                throw new \RuntimeException('Tidak bisa menulis payload sementara untuk request TikTok.');
+            }
+
+            $command = [
+                $curlBinary,
+                '--insecure',
+                '--silent',
+                '--show-error',
+                '--request',
+                'PUT',
+                '--header',
+                'Content-Type: application/json',
+                '--header',
+                'x-tts-access-token: '.$accessToken,
+                '--data-binary',
+                '@'.$payloadFile,
+                '--output',
+                $responseFile,
+                '--write-out',
+                '%{http_code}',
+                $submitUrl,
+            ];
+
+            $descriptors = [
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ];
+
+            $process = proc_open($command, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
+            if (! is_resource($process)) {
+                throw new \RuntimeException('curl TikTok gagal dijalankan.');
+            }
+
+            $stdout = stream_get_contents($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $exitCode = proc_close($process);
+
+            $responseStatus = (int) trim((string) $stdout);
+            $responseBody = is_file($responseFile) ? (string) file_get_contents($responseFile) : '';
+            $stderr = trim((string) $stderr);
+
+            if ($responseStatus <= 0) {
+                throw new \RuntimeException($stderr !== '' ? $stderr : 'HTTP status dari curl TikTok tidak terbaca.');
+            }
+
+            if ($exitCode !== 0 && $responseBody === '' && $stderr !== '') {
+                throw new \RuntimeException($stderr);
+            }
+
+            return [
+                'status' => $responseStatus,
+                'body' => $responseBody,
+                'stderr' => $stderr,
+            ];
+        } finally {
+            if (is_file($payloadFile)) {
+                @unlink($payloadFile);
+            }
+            if (is_file($responseFile)) {
+                @unlink($responseFile);
+            }
+        }
+    }
+
+    private function resolveTiktokCurlBinary(): string
+    {
+        $candidates = [
+            'C:\\Windows\\System32\\curl.exe',
+            'C:\\Windows\\SysWOW64\\curl.exe',
+            'curl.exe',
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate === 'curl.exe' || is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return 'curl.exe';
     }
 
     public function tiktokGetProductContext(): JsonResponse

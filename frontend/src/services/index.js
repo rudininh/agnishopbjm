@@ -123,9 +123,17 @@ export const omnichannelService = {
     return api.post('/tiktok-variant/action', data)
   },
 
+  tiktokSubmitGeneratedPayload(data) {
+    return api.post('/tiktok/submit-generated-payload', data, {
+      responseType: 'text',
+      validateStatus: () => true
+    })
+  },
+
   tiktokGetProduct(data) {
     return api.post('/tiktok/get-product', data, {
-      responseType: 'text'
+      responseType: 'text',
+      validateStatus: () => true
     })
   },
 

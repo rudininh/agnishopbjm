@@ -46,6 +46,7 @@ Route::get('sku-mapping', [OmnichannelController::class, 'skuMapping']);
 Route::post('sku-mapping', [OmnichannelController::class, 'saveSkuMapping']);
 Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
 Route::post('tiktok-variant/action', [OmnichannelController::class, 'tiktokVariantAction']);
+Route::post('tiktok/submit-generated-payload', [OmnichannelController::class, 'tiktokSubmitGeneratedPayload']);
 Route::post('tiktok/get-product', [OmnichannelController::class, 'tiktokGetProduct']);
 Route::get('tiktok/get-product-context', [OmnichannelController::class, 'tiktokGetProductContext']);
 Route::match(['get', 'post'], 'sync-shopee-to-tiktok', [OmnichannelController::class, 'syncShopeeToTiktok']);
