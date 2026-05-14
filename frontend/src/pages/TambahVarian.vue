@@ -79,6 +79,7 @@
         <div class="table-wrap">
           <table class="mapping-table">
             <colgroup>
+              <col class="col-check" />
               <col class="col-product" />
               <col class="col-channel" />
               <col class="col-channel" />
@@ -86,6 +87,15 @@
             </colgroup>
             <thead>
               <tr>
+                <th class="check-col">
+                  <input
+                    type="checkbox"
+                    :checked="allDisplayedVariantsSelected"
+                    :indeterminate="someDisplayedVariantsSelected && !allDisplayedVariantsSelected"
+                    @click.stop
+                    @change="toggleDisplayedVariantsSelection($event.target.checked)"
+                  />
+                </th>
                 <th>Varian</th>
                 <th>Shopee</th>
                 <th>TikTok</th>
@@ -94,7 +104,7 @@
             </thead>
             <tbody>
               <tr v-if="!displayVariants.length">
-                <td colspan="4" class="empty-row">Tidak ada baris untuk filter ini.</td>
+                <td colspan="5" class="empty-row">Tidak ada baris untuk filter ini.</td>
               </tr>
               <tr
                 v-for="item in displayVariants"
@@ -102,6 +112,14 @@
                 :class="['variant-row', { active: selectedItem?.id === item.id }]"
                 @click="selectItem(item)"
               >
+                <td class="check-col">
+                  <input
+                    type="checkbox"
+                    :checked="isVariantSelected(item)"
+                    @click.stop
+                    @change="toggleVariantSelection(item, $event.target.checked)"
+                  />
+                </td>
                 <td>
                   <div class="variant-title">
                     <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
@@ -329,6 +347,27 @@
                 </label>
               </div>
 
+              <div class="variant-selection-summary">
+                <div class="variant-selection-head">
+                  <div>
+                    <strong>Varian terpilih</strong>
+                    <small v-if="selectedVariantItems.length">{{ selectedVariantItems.length }} varian akan masuk ke payload</small>
+                    <small v-else>Pilih satu atau banyak baris checkbox di tabel kiri.</small>
+                  </div>
+                  <button type="button" class="ghost mini" @click="clearSelectedVariants" :disabled="!selectedVariantItems.length">Clear</button>
+                </div>
+                <div v-if="selectedVariantItems.length" class="variant-selection-list">
+                  <div v-for="variant in selectedVariantItems" :key="variant.id" class="variant-selection-item">
+                    <div class="variant-selection-copy">
+                      <strong>{{ variant.variant_name || 'Tanpa Varian' }}</strong>
+                      <small>SKU: {{ variant.seller_sku || variant.internal_sku || '-' }}</small>
+                      <small>Stok: {{ displayStock(variant.shopee?.stock_qty ?? variant.stock_qty) }}</small>
+                    </div>
+                    <button type="button" class="ghost mini" @click="toggleVariantSelection(variant, false)">Hapus</button>
+                  </div>
+                </div>
+              </div>
+
               <div class="api-submit-row">
                 <button type="button" class="ghost" @click="loadAddVariantContext" :disabled="addVariantBusy">Ambil Context</button>
                 <button type="button" class="primary" @click="submitAddVariant" :disabled="addVariantBusy">
@@ -347,6 +386,23 @@
                   <button class="ghost mini" type="button" @click="copyAddVariantRequest">Copy</button>
                 </div>
                 <pre>{{ addVariantRequestPreview }}</pre>
+              </div>
+              <div class="api-right-block">
+                <div class="api-right-head">
+                  <strong>Ringkasan Varian</strong>
+                  <button class="ghost mini" type="button" @click="clearSelectedVariants" :disabled="!selectedVariantItems.length">Clear</button>
+                </div>
+                <p class="api-response-hint">
+                  {{ selectedVariantItems.length ? `Payload akan berisi ${selectedVariantItems.length} SKU baru.` : 'Belum ada checkbox varian yang dipilih.' }}
+                </p>
+                <div v-if="selectedVariantItems.length" class="variant-selection-list compact">
+                  <div v-for="variant in selectedVariantItems" :key="`summary-${variant.id}`" class="variant-selection-item">
+                    <div class="variant-selection-copy">
+                      <strong>{{ variant.variant_name || 'Tanpa Varian' }}</strong>
+                      <small>{{ variant.seller_sku || variant.internal_sku || '-' }}</small>
+                    </div>
+                  </div>
+                </div>
               </div>
               <div class="api-right-block">
                 <div class="api-right-head">
@@ -521,6 +577,8 @@ const pagination = reactive({
   last_page: 1
 })
 const selectedItem = ref(null)
+const selectedVariantIds = ref([])
+const selectedVariantSnapshots = reactive({})
 const getProductRequestBusy = ref(false)
 const getProductResponseText = ref('')
 const getProductResponseStatus = ref('0')
@@ -586,6 +644,15 @@ const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
 const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
 const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
 const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
+const normalizeSelectionId = (value) => String(value ?? '').trim()
+const isVariantSelected = (item) => selectedVariantIds.value.includes(normalizeSelectionId(item?.id))
+const selectedVariantItems = computed(() => {
+  return selectedVariantIds.value
+    .map((value) => selectedVariantSnapshots[normalizeSelectionId(value)])
+    .filter(Boolean)
+})
+const allDisplayedVariantsSelected = computed(() => displayVariants.value.length > 0 && displayVariants.value.every((item) => isVariantSelected(item)))
+const someDisplayedVariantsSelected = computed(() => displayVariants.value.some((item) => isVariantSelected(item)))
 const missingTargetChannel = (item) => {
   if (hasShopeeActual(item) && !hasTiktokActual(item)) return 'tiktok'
   if (hasTiktokActual(item) && !hasShopeeActual(item)) return 'shopee'
@@ -617,6 +684,59 @@ const resolveAddVariantShopCipher = () => {
 }
 const resolveAddVariantVersion = () => {
   return String(TIKTOK_SUBMIT_VERSION).trim() || TIKTOK_SUBMIT_VERSION
+}
+const toggleVariantSelection = (item, checked = null) => {
+  const key = normalizeSelectionId(item?.id)
+  if (!key) return
+
+  const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
+  const nextChecked = checked === null ? !selected.has(key) : Boolean(checked)
+
+  if (nextChecked) {
+    selected.add(key)
+    selectedVariantSnapshots[key] = cloneJson(item) || item
+  } else {
+    selected.delete(key)
+    delete selectedVariantSnapshots[key]
+  }
+
+  selectedVariantIds.value = Array.from(selected)
+}
+const toggleDisplayedVariantsSelection = (checked) => {
+  const visibleIds = displayVariants.value.map((item) => normalizeSelectionId(item.id)).filter(Boolean)
+  const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
+
+  if (checked) {
+    displayVariants.value.forEach((item) => {
+      const key = normalizeSelectionId(item?.id)
+      if (!key) return
+      selected.add(key)
+      selectedVariantSnapshots[key] = cloneJson(item) || item
+    })
+  } else {
+    visibleIds.forEach((id) => {
+      selected.delete(id)
+      delete selectedVariantSnapshots[id]
+    })
+  }
+
+  selectedVariantIds.value = Array.from(selected)
+}
+const clearSelectedVariants = () => {
+  selectedVariantIds.value = []
+  Object.keys(selectedVariantSnapshots).forEach((key) => {
+    delete selectedVariantSnapshots[key]
+  })
+}
+const syncSelectedVariantSnapshots = (currentItems = []) => {
+  if (!selectedVariantIds.value.length || !currentItems.length) return
+
+  const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
+  currentItems.forEach((item) => {
+    const key = normalizeSelectionId(item?.id)
+    if (!key || !selected.has(key)) return
+    selectedVariantSnapshots[key] = cloneJson(item) || item
+  })
 }
 const buildTiktokSubmitMeta = () => ({
   product_id: resolveAddVariantProductId(),
@@ -1041,96 +1161,131 @@ const buildAddVariantRequestPreview = () => {
   const existingSkus = Array.isArray(productBody.skus)
     ? productBody.skus.map((sku) => cloneJson(sku) || {})
     : []
+  const selectedSources = selectedVariantItems.value.length ? selectedVariantItems.value : []
+  const titleSource = selectedSources[0] || selectedItem.value || {}
 
   const productTitle = String(
     productBody.title ||
-    selectedItem.value?.tiktok?.product_name ||
-    selectedItem.value?.product_name ||
+    titleSource?.tiktok?.product_name ||
+    titleSource?.product_name ||
     DEFAULT_PRODUCT_NAME
   ).trim() || DEFAULT_PRODUCT_NAME
 
-  const sellerSku = String(addVariantTool.seller_sku || selectedItem.value?.seller_sku || '').trim()
-  const colorName = String(addVariantTool.color_name || selectedItem.value?.variant_name || 'Variant Baru').trim() || 'Variant Baru'
-  const imageUri = String(addVariantTool.image_uri || selectedItem.value?.image_url || '').trim()
-  const tiktokImageUri = firstTiktokUploadedImageUri(
-    imageUri,
-    findExistingTiktokImageUri(productBody, existingSkus, colorName)
-  )
-  const priceValue = String(addVariantTool.price || '50000').trim() || '50000'
-  const quantityValue = Number(addVariantTool.quantity ?? 0)
-
-  const generatedId = buildNextNumericValue(
-    existingSkus.map((sku) => sku.id || sku.sku_id),
-    `${productTitle}|${sellerSku}|id`,
-    '65536'
-  )
   const existingAttribute = existingSkus.find((sku) => sku?.sales_attributes?.[0]?.id || sku?.sales_attributes?.[0]?.name)?.sales_attributes?.[0] || {}
 
   const baseAttribute = {
     id: String(existingAttribute.id || TIKTOK_VARIANT_ATTRIBUTE_ID),
     name: String(existingAttribute.name || TIKTOK_VARIANT_ATTRIBUTE_NAME),
-    value_name: colorName
+    value_name: 'Variant Baru'
   }
 
-  if (tiktokImageUri) {
-    baseAttribute.sku_img = {
-      uri: tiktokImageUri
-    }
-  }
-
-  const baseInventory = {
-    quantity: quantityValue,
-    warehouse_id: TIKTOK_VARIANT_WAREHOUSE_ID
-  }
-
-  const newSku = {
-    seller_sku: sellerSku || `SKU-${generatedId.slice(-6)}`,
-    sales_attributes: [baseAttribute],
-    price: {
-      currency: 'IDR',
-      sale_price: priceValue,
-      tax_exclusive_price: priceValue,
-      amount: priceValue
+  const skuDrafts = selectedSources.length ? selectedSources : [{
+    id: 'manual',
+    product_name: productTitle,
+    variant_name: String(addVariantTool.color_name || 'Variant Baru').trim() || 'Variant Baru',
+    seller_sku: String(addVariantTool.seller_sku || '').trim(),
+    image_url: String(addVariantTool.image_uri || '').trim(),
+    shopee: {
+      stock_qty: Number(addVariantTool.quantity ?? 0)
     },
-    inventory: [baseInventory]
+    stock_qty: Number(addVariantTool.quantity ?? 0)
+  }]
+
+  const usedSkuIndices = new Set()
+  const resolveNextPlaceholderIndex = () => {
+    for (let index = existingSkus.length - 1; index >= 0; index -= 1) {
+      if (usedSkuIndices.has(index)) continue
+      const sku = existingSkus[index]
+      const skuId = String(sku?.id || sku?.sku_id || '').trim()
+      const valueId = String(sku?.sales_attributes?.[0]?.value_id || '').trim()
+      const warehouseId = String(sku?.inventory?.[0]?.warehouse_id || '').trim()
+
+      if (skuId === '' && (valueId === '' || warehouseId === '')) {
+        return index
+      }
+    }
+
+    return -1
   }
 
-  const matchingSellerSkuIndex = existingSkus.findIndex((sku) => {
-    return normalizeText(sku?.seller_sku) === normalizeText(newSku.seller_sku)
+  skuDrafts.forEach((source, sourceIndex) => {
+    const colorName = String(source?.variant_name || source?.tiktok?.variant_name || source?.tiktok?.sku_name || 'Variant Baru').trim() || 'Variant Baru'
+    const sellerSku = String(source?.seller_sku || source?.tiktok?.seller_sku || `SKU-${buildNextNumericValue(
+      existingSkus.map((sku) => sku.id || sku.sku_id),
+      `${productTitle}|${colorName}|${sourceIndex}`,
+      '65536'
+    ).slice(-6)}`).trim()
+    const imageUri = String(source?.image_url || source?.tiktok?.image_url || '').trim()
+    const quantityValue = Number(
+      source?.shopee?.stock_qty ??
+      source?.shopee_variant_stock ??
+      source?.stock_qty ??
+      addVariantTool.quantity ??
+      0
+    )
+    const priceValue = String(
+      source?.shopee?.price ??
+      source?.shopee_variant_price ??
+      source?.price ??
+      addVariantTool.price ??
+      '50000'
+    ).trim() || '50000'
+    const tiktokImageUri = firstTiktokUploadedImageUri(
+      imageUri,
+      findExistingTiktokImageUri(productBody, existingSkus, colorName)
+    )
+    const generatedSku = {
+      seller_sku: sellerSku,
+      sales_attributes: [{
+        ...baseAttribute,
+        value_name: colorName,
+        ...(tiktokImageUri ? { sku_img: { uri: tiktokImageUri } } : {})
+      }],
+      price: {
+        currency: 'IDR',
+        sale_price: priceValue,
+        tax_exclusive_price: priceValue,
+        amount: priceValue
+      },
+      inventory: [{
+        quantity: quantityValue,
+        warehouse_id: TIKTOK_VARIANT_WAREHOUSE_ID
+      }]
+    }
+
+    const matchingSellerSkuIndex = existingSkus.findIndex((sku, index) => {
+      if (usedSkuIndices.has(index)) return false
+      return normalizeText(sku?.seller_sku) === normalizeText(generatedSku.seller_sku)
+    })
+
+    if (matchingSellerSkuIndex >= 0) {
+      usedSkuIndices.add(matchingSellerSkuIndex)
+      existingSkus[matchingSellerSkuIndex] = {
+        ...existingSkus[matchingSellerSkuIndex],
+        ...generatedSku,
+        sales_attributes: generatedSku.sales_attributes,
+        inventory: generatedSku.inventory
+      }
+      return
+    }
+
+    const placeholderIndex = resolveNextPlaceholderIndex()
+    if (placeholderIndex >= 0) {
+      usedSkuIndices.add(placeholderIndex)
+      const replacementSku = {
+        ...existingSkus[placeholderIndex],
+        ...generatedSku,
+        sales_attributes: generatedSku.sales_attributes,
+        inventory: generatedSku.inventory
+      }
+      delete replacementSku.id
+      delete replacementSku.sku_id
+      existingSkus[placeholderIndex] = replacementSku
+      return
+    }
+
+    existingSkus.push(generatedSku)
   })
-  let placeholderIndex = -1
-  for (let index = existingSkus.length - 1; index >= 0; index -= 1) {
-    const sku = existingSkus[index]
-    const skuId = String(sku?.id || sku?.sku_id || '').trim()
-    const valueId = String(sku?.sales_attributes?.[0]?.value_id || '').trim()
-    const warehouseId = String(sku?.inventory?.[0]?.warehouse_id || '').trim()
-
-    if (skuId === '' && (valueId === '' || warehouseId === '')) {
-      placeholderIndex = index
-      break
-    }
-  }
-
-  if (matchingSellerSkuIndex >= 0) {
-    existingSkus[matchingSellerSkuIndex] = {
-      ...existingSkus[matchingSellerSkuIndex],
-      ...newSku,
-      sales_attributes: newSku.sales_attributes,
-      inventory: newSku.inventory
-    }
-  } else if (placeholderIndex >= 0) {
-    const replacementSku = {
-      ...existingSkus[placeholderIndex],
-      ...newSku,
-      sales_attributes: newSku.sales_attributes,
-      inventory: newSku.inventory
-    }
-    delete replacementSku.id
-    delete replacementSku.sku_id
-    existingSkus[placeholderIndex] = replacementSku
-  } else {
-    existingSkus.push(newSku)
-  }
 
   productBody.save_mode = 'LISTING'
   productBody.category_id = '601307'
@@ -1616,6 +1771,7 @@ const loadData = async (resetPage = false, options = {}) => {
       const cached = pageCache.get(cacheKey)
       items.value = cached.items
       Object.assign(pagination, cached.pagination)
+      syncSelectedVariantSnapshots(items.value)
       if (preserveSelection) {
         selectedItem.value = selectedIdBeforeRefresh
           ? items.value.find((item) => item.id === selectedIdBeforeRefresh) || null
@@ -1645,6 +1801,7 @@ const loadData = async (resetPage = false, options = {}) => {
       items: items.value,
       pagination: { ...pagination }
     })
+    syncSelectedVariantSnapshots(items.value)
     if (preserveSelection) {
       selectedItem.value = selectedIdBeforeRefresh
         ? items.value.find((item) => item.id === selectedIdBeforeRefresh) || null
