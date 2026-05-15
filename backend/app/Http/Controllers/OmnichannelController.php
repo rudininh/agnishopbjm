@@ -2018,7 +2018,7 @@ class OmnichannelController extends Controller
         $search = trim((string) $request->query('search', ''));
         $status = (string) $request->query('status', 'all');
         $sort = (string) $request->query('sort', 'updated_desc');
-        $perPage = max(1, min(50, (int) $request->query('per_page', 5)));
+        $perPage = max(1, min(50, (int) $request->query('per_page', 10)));
         $page = max(1, (int) $request->query('page', 1));
 
         $query = DB::table('stock_master as sm')
@@ -2100,6 +2100,21 @@ class OmnichannelController extends Controller
         }
         $matchedTiktokVariantKeys = [];
         $items = [];
+        $resolveItemStatus = static function (string $statusShopee, string $statusTikTok): string {
+            if ($statusShopee === 'mapped' && $statusTikTok === 'mapped') {
+                return 'ready_to_sync';
+            }
+
+            if ($statusShopee === 'mapped') {
+                return 'tiktok_missing';
+            }
+
+            if ($statusTikTok === 'mapped') {
+                return 'shopee_missing';
+            }
+
+            return 'belum_ada_variant';
+        };
 
         foreach ($rows as $row) {
             $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
@@ -2173,6 +2188,7 @@ class OmnichannelController extends Controller
                     'sku_id' => $tiktokSkuId ?: ($tiktokMatch->sku_id ?? null),
                     'sku_name' => $tiktokSkuName ?: ($tiktokMatch->sku_name ?? null),
                     'seller_sku' => $tiktokSellerSku ?: ($tiktokMatch->seller_sku ?? null),
+                    'price' => isset($tiktokMatch->price) ? (int) $tiktokMatch->price : null,
                     'product_name' => $tiktokMatch->product_name ?? null,
                     'variant_name' => $tiktokMatch->sku_name ?? $tiktokSkuName,
                     'stock_qty' => $tiktokMatch ? (int) ($tiktokMatch->stock_qty ?? 0) : null,
@@ -2180,9 +2196,7 @@ class OmnichannelController extends Controller
                     'status' => $statusTikTok,
                     'source' => $tiktokMatchSource,
                 ],
-                'status' => $statusShopee === 'mapped' && $statusTikTok === 'mapped'
-                    ? 'ready_to_sync'
-                    : 'belum_ada_variant',
+                'status' => $resolveItemStatus($statusShopee, $statusTikTok),
                 'updated_at' => $row->updated_at,
             ];
         }
@@ -2233,12 +2247,13 @@ class OmnichannelController extends Controller
                         'sku_name' => $skuRow->sku_name,
                         'product_name' => $skuRow->product_name,
                         'variant_name' => $skuRow->sku_name,
+                        'price' => (int) ($skuRow->price ?? 0),
                         'stock_qty' => (int) ($skuRow->stock_qty ?? 0),
                         'image_url' => $skuRow->image_url ?: $productImageUrl,
                         'status' => 'mapped',
                         'source' => 'actual',
                     ],
-                    'status' => 'belum_ada_variant',
+                    'status' => $resolveItemStatus('unmapped', 'mapped'),
                     'updated_at' => $skuRow->updated_at,
                 ];
             }
@@ -2247,7 +2262,7 @@ class OmnichannelController extends Controller
         $items = collect($items)
             ->filter(function (array $item) use ($search, $status) {
                 $matchesStatus = match ($status) {
-                    'ready_to_sync', 'belum_ada_variant' => $item['status'] === $status,
+                    'ready_to_sync', 'shopee_missing', 'tiktok_missing', 'belum_ada_variant' => $item['status'] === $status,
                     default => true,
                 };
 
@@ -2329,7 +2344,7 @@ class OmnichannelController extends Controller
 
         $rows = DB::table('tiktok_products')
             ->whereRaw('COALESCE(is_active, true) = true')
-            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'updated_at')
+            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'price', 'updated_at')
             ->get();
 
         if ($rows->isEmpty()) {

@@ -6,6 +6,7 @@ import TiktokStock from '@/pages/TiktokStock.vue'
 import StockMaster from '@/pages/StockMaster.vue'
 import SkuMapping from '@/pages/SkuMapping.vue'
 import TambahVarian from '@/pages/TambahVarian.vue'
+import TambahVarianShopee from '@/pages/TambahVarianShopee.vue'
 import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
 import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
@@ -47,8 +48,19 @@ const routes = [
   },
   {
     path: '/tambah-varian',
-    name: 'tambah-varian',
-    component: TambahVarian
+    redirect: '/tambah-varian-tiktok'
+  },
+  {
+    path: '/tambah-varian-tiktok',
+    name: 'tambah-varian-tiktok',
+    component: TambahVarian,
+    meta: { flow: 'shopee-to-tiktok' }
+  },
+  {
+    path: '/tambah-varian-shopee',
+    name: 'tambah-varian-shopee',
+    component: TambahVarianShopee,
+    meta: { flow: 'tiktok-to-shopee' }
   },
   {
     path: '/sync-shopee-to-tiktok',

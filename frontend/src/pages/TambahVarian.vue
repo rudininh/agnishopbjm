@@ -2,17 +2,13 @@
   <section class="page-shell">
     <header class="page-header">
       <div>
-        <p>Eksperimen TikTok</p>
-        <h1>Tambah Varian</h1>
-        <small class="subtitle">Halaman uji untuk satu etalase: create / update / mapping varian.</small>
+        <p>{{ pageEyebrow }}</p>
+        <h1>{{ pageTitle }}</h1>
+        <small class="subtitle">{{ pageSubtitle }}</small>
       </div>
-      <div class="header-actions">
-        <button type="button" class="ghost" @click="loadData(true)" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
-        <button type="button" class="primary" @click="save" :disabled="!selectedItem || !form.stock_master_id || saving">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
-        <button type="button" class="ghost" @click.stop="selectedItem && selectItem(selectedItem)" :disabled="!selectedItem">Edit</button>
+      <div class="header-actions" v-if="selectedItem && canPrepareMissingVariant(selectedItem)">
         <button
           type="button"
-          v-if="selectedItem && canPrepareMissingVariant(selectedItem)"
           class="primary"
           :disabled="preparing"
           @click="prepareMissingVariant(selectedItem)"
@@ -28,7 +24,7 @@
     <div class="control-band">
       <label>
         <span>Nama etalase uji</span>
-        <input v-model.trim="filters.search" type="search" placeholder="Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo" @keyup.enter="loadData(true)" />
+        <input v-model.trim="filters.search" type="search" placeholder="Cari etalase / produk (opsional)" @keyup.enter="loadData(true)" />
       </label>
       <button type="button" class="ghost" @click="loadData(true)" :disabled="loading">Muat etalase ini</button>
     </div>
@@ -41,12 +37,12 @@
       </article>
       <article class="metric">
         <span>Product ID TikTok</span>
-        <strong>{{ summaryItem.tiktok?.product_id || '-' }}</strong>
+        <strong>{{ summaryItem.mapped_tiktok_product_id || summaryItem.tiktok?.product_id || summaryItem.stock_tiktok_product_id || '-' }}</strong>
         <small>{{ summaryItem.tiktok?.variant_name || summaryItem.variant_name || '-' }}</small>
       </article>
     </div>
 
-    <div class="layout">
+    <div class="layout" :class="{ 'list-only': !isShopeeFlow }">
       <div class="panel list-panel">
         <div class="group-head" v-if="activeGroup">
           <div class="group-title">
@@ -61,16 +57,16 @@
           <span :class="['badge', activeGroup.status]">{{ labelStatus(activeGroup.status) }}</span>
         </div>
         <div v-else class="group-empty">
-          Tidak ada data untuk filter yang dipilih.
+          Tidak ada produk untuk filter yang dipilih.
         </div>
 
         <div class="table-filters">
           <label>
             <span>Status</span>
             <select v-model="filters.status" @change="loadData(true)">
-              <option value="all">Semua</option>
-              <option value="ready_to_sync">Siap Disinkronkan</option>
-              <option value="belum_ada_variant">Belum Ada Variant</option>
+              <option v-for="option in statusOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
             </select>
           </label>
           <div class="filter-hint">Filter ini berlaku untuk data tabel dan pagination di bawahnya.</div>
@@ -103,77 +99,84 @@
                 </th>
               </tr>
             </thead>
-            <tbody>
-              <tr v-if="!displayVariants.length">
-                <td colspan="5" class="empty-row">Tidak ada baris untuk filter ini.</td>
-              </tr>
-              <tr
-                v-for="item in displayVariants"
-                :key="item.id"
-                :class="['variant-row', { active: selectedItem?.id === item.id }]"
-                @click="selectItem(item)"
-              >
-                <td>
-                  <div class="variant-title">
-                    <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
-                    <small>SKU internal: {{ item.internal_sku }}</small>
-                    <small>Stock Master: {{ item.stock_qty }}</small>
-                  </div>
-                </td>
-                <td>
-                  <div class="channel-cell">
-                    <img v-if="item.shopee?.image_url" :src="item.shopee.image_url" class="thumb" :alt="item.shopee.variant_name" />
-                    <div v-else class="thumb fallback">SP</div>
-                    <div>
-                      <strong>{{ item.shopee?.variant_name || item.shopee?.product_name || '-' }}</strong>
-                      <small>{{ shopeePresenceLabel(item) }}</small>
-                      <small>Item ID: {{ item.shopee?.item_id || '-' }}</small>
-                      <small>Model ID: {{ item.shopee?.model_id || '-' }}</small>
-                      <small>Kode Variasi: {{ item.shopee?.seller_sku || item.seller_sku || '-' }}</small>
-                      <small>Stok: {{ displayStock(item.shopee?.stock_qty) }}</small>
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <div :class="['channel-cell', { muted: !hasTiktok(item) }]">
-                    <img v-if="item.tiktok?.image_url" :src="item.tiktok.image_url" class="thumb" :alt="item.tiktok.variant_name" />
-                    <div v-else class="thumb fallback">TT</div>
-                    <div>
-                      <div class="channel-title-row">
-                        <strong>{{ item.variant_name || item.tiktok?.variant_name || '-' }}</strong>
-                        <span
-                          v-if="item.tiktok?.status && item.tiktok.status !== 'unmapped'"
-                          :class="['channel-badge', item.tiktok.status]"
-                        >
-                          {{ channelStatusLabel(item.tiktok.status) }}
-                        </span>
-                      </div>
-                      <small>{{ tiktokPresenceLabel(item) }}</small>
-                      <small>{{ item.tiktok?.product_name || '-' }}</small>
-                      <small>Product ID: {{ hasTiktokActual(item) ? (item.tiktok?.product_id || '-') : '-' }}</small>
-                      <small>SKU ID: {{ hasTiktokActual(item) ? (item.tiktok?.sku_id || '-') : '-' }}</small>
-                      <small>Nama Varian Asli: {{ item.variant_name || item.tiktok?.variant_name || '-' }}</small>
-                      <small>Kode Variasi: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }}</small>
-                      <small v-if="hasTiktokActual(item)">Kode SKU TikTok: {{ item.tiktok?.sku_name || '-' }}</small>
-                      <small v-else>Kode ini belum menunjuk ke varian TikTok yang aktif.</small>
-                      <small>Stok: {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <span :class="['badge', item.status]">{{ labelStatus(item.status) }}</span>
-                </td>
-                <td class="check-col">
-                  <input
-                    type="checkbox"
-                    :checked="isVariantSelected(item)"
-                    aria-label="Pilih varian ini"
-                    @click.stop
-                    @change="toggleVariantSelection(item, $event.target.checked)"
-                  />
-                </td>
+            <tbody v-if="!groupedItems.length">
+              <tr>
+                <td colspan="5" class="empty-row">Tidak ada produk untuk filter yang dipilih.</td>
               </tr>
             </tbody>
+            <template v-for="group in groupedItems" :key="group.key">
+              <tbody>
+                <tr class="product-row">
+                  <td colspan="5">
+                    <div class="product-row-inner" @click="toggleGroup(group.key)">
+                      <button type="button" class="expand group-toggle" @click.stop="toggleGroup(group.key)">
+                        {{ isExpanded(group.key) ? '−' : '+' }}
+                      </button>
+                      <img v-if="group.image_url" :src="group.image_url" class="thumb small" :alt="group.name" />
+                      <div v-else class="thumb small fallback">{{ initials(group.name) }}</div>
+                      <div class="group-copy">
+                        <strong>{{ group.name }}</strong>
+                        <small>Shopee: {{ group.shopee.present }} varian, stok {{ group.shopee.total_stock }}</small>
+                        <small>TikTok: {{ group.tiktok.present }} varian, stok {{ group.tiktok.total_stock }}</small>
+                      </div>
+                      <div class="group-meta">
+                        <strong>{{ group.variants.length }} varian</strong>
+                        <span :class="['badge', group.status]">{{ labelStatus(group.status) }}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+                <tr
+                  v-for="item in group.variants"
+                  v-show="isExpanded(group.key)"
+                  :key="item.id"
+                  :class="['variant-row', { active: selectedItem?.id === item.id }]"
+                  @click="selectItem(item)"
+                >
+                  <td>
+                    <div class="variant-title">
+                      <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
+                      <small>SKU internal: {{ item.internal_sku }} | Stock Master: {{ item.stock_qty }}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="channel-cell">
+                      <img v-if="item.shopee?.image_url" :src="item.shopee.image_url" class="thumb" :alt="item.shopee.variant_name" />
+                      <div v-else class="thumb fallback">SP</div>
+                      <div>
+                        <small>{{ shopeePresenceLabel(item) }}</small>
+                        <small>Item/Model: {{ item.shopee?.item_id || '-' }} / {{ item.shopee?.model_id || '-' }}</small>
+                        <small>Kode/Stok: {{ item.shopee?.seller_sku || item.seller_sku || '-' }} / {{ displayStock(item.shopee?.stock_qty) }}</small>
+                        <small v-if="hasPrice(item.shopee?.price ?? item.shopee_variant_price)">Harga: {{ displayPrice(item.shopee?.price ?? item.shopee_variant_price) }}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div :class="['channel-cell', { muted: !hasTiktok(item) }]">
+                      <img v-if="item.tiktok?.image_url" :src="item.tiktok.image_url" class="thumb" :alt="item.tiktok.variant_name" />
+                      <div v-else class="thumb fallback">TT</div>
+                      <div>
+                        <small>{{ tiktokPresenceLabel(item) }}</small>
+                        <small>Product/SKU: {{ hasTiktokActual(item) ? `${item.tiktok?.product_id || '-'} / ${item.tiktok?.sku_id || '-'}` : '-' }} | Kode/Stok: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }} / {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
+                        <small v-if="hasPrice(item.tiktok?.price)">Harga: {{ displayPrice(item.tiktok?.price) }}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <span :class="['badge', item.status]">{{ labelStatus(item.status) }}</span>
+                  </td>
+                  <td class="check-col">
+                    <input
+                      type="checkbox"
+                      :checked="isVariantSelected(item)"
+                      aria-label="Pilih varian ini"
+                      @click.stop
+                      @change="toggleVariantSelection(item, $event.target.checked)"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </template>
           </table>
         </div>
 
@@ -303,8 +306,8 @@
         <div class="api-panel variant-panel">
           <div class="api-panel-head">
             <div>
-              <strong>Tambah Variant/SKU TikTok</strong>
-              <small>Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu copy payload untuk PUT.</small>
+              <strong>{{ addVariantPanelTitle }}</strong>
+              <small>{{ addVariantPanelSubtitle }}</small>
             </div>
           </div>
           <div class="variant-tool">
@@ -447,7 +450,7 @@
         </div>
       </div>
 
-      <aside class="panel detail-panel" v-if="selectedItem">
+      <aside class="panel detail-panel" v-if="isShopeeFlow && selectedItem">
         <div class="detail-head">
           <div>
             <span>Nama Varian Asli</span>
@@ -550,6 +553,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { omnichannelService } from '@/services'
 
 const DEFAULT_PRODUCT_NAME = 'Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo'
@@ -577,11 +581,12 @@ const actionLog = ref('')
 const items = ref([])
 const pagination = reactive({
   page: 1,
-  per_page: 5,
+  per_page: 50,
   total: 0,
   last_page: 1
 })
 const selectedItem = ref(null)
+const expandedGroups = ref({})
 const selectedVariantIds = ref([])
 const selectedVariantSnapshots = reactive({})
 const getProductRequestBusy = ref(false)
@@ -593,9 +598,36 @@ const addVariantResponseStatus = ref('0')
 const tiktokSubmitResponseText = ref('')
 const tiktokSubmitResponseStatus = ref('')
 const tiktokSubmitResponseHint = ref('')
+const route = useRoute()
+const isShopeeFlow = computed(() => route.meta?.flow === 'tiktok-to-shopee')
+const pageEyebrow = computed(() => isShopeeFlow.value ? 'Eksperimen Shopee' : 'Eksperimen TikTok')
+const pageTitle = computed(() => isShopeeFlow.value ? 'Tambah Varian Shopee' : 'Tambah Varian TikTok')
+const pageSubtitle = computed(() => isShopeeFlow.value
+  ? 'Halaman uji TikTok ke Shopee: create / update / mapping varian.'
+  : 'Halaman uji TikTok untuk satu etalase: create / update / mapping varian.')
+const addVariantPanelTitle = computed(() => isShopeeFlow.value ? 'Tambah Variant/SKU Shopee' : 'Tambah Variant/SKU TikTok')
+const addVariantPanelSubtitle = computed(() => isShopeeFlow.value
+  ? 'Workflow sementara: klik baris berstatus belum ada variant untuk menyiapkan draft Shopee dari data TikTok, lalu simpan mapping bila perlu.'
+  : 'Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu copy payload untuk PUT.')
+const statusOptions = computed(() => {
+  const primaryMissingStatus = isShopeeFlow.value
+    ? { value: 'shopee_missing', label: 'Belum Ada Variant Shopee' }
+    : { value: 'tiktok_missing', label: 'Belum Ada Variant TikTok' }
+  const secondaryMissingStatus = isShopeeFlow.value
+    ? { value: 'tiktok_missing', label: 'Belum Ada Variant TikTok' }
+    : { value: 'shopee_missing', label: 'Belum Ada Variant Shopee' }
+
+  return [
+    { value: 'all', label: 'Semua' },
+    { value: 'ready_to_sync', label: 'Siap Disinkronkan' },
+    primaryMissingStatus,
+    secondaryMissingStatus,
+    { value: 'belum_ada_variant', label: 'Belum Ada Variant' }
+  ]
+})
 const filters = reactive({
-  search: DEFAULT_PRODUCT_NAME,
-  status: 'belum_ada_variant'
+  search: '',
+  status: isShopeeFlow.value ? 'shopee_missing' : 'tiktok_missing'
 })
 const pageCache = new Map()
 const form = reactive({
@@ -638,9 +670,41 @@ const resetForm = () => {
 const normalizeText = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap Disinkronkan' : 'Belum Ada Variant'
+const labelStatus = (status) => {
+  const labels = {
+    ready_to_sync: 'Siap Disinkronkan',
+    shopee_missing: 'Belum Ada Variant Shopee',
+    tiktok_missing: 'Belum Ada Variant TikTok',
+    belum_ada_variant: 'Belum Ada Variant'
+  }
+
+  return labels[status] || labels.belum_ada_variant
+}
 const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat kode variasi' : 'Belum'
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
+const hasPrice = (value) => value !== null && value !== undefined && String(value).trim() !== ''
+const displayPrice = (value) => {
+  const text = String(value ?? '').trim()
+  if (!text) return '-'
+
+  const numeric = Number(text)
+  if (!Number.isFinite(numeric)) return '-'
+
+  return `Rp ${new Intl.NumberFormat('id-ID').format(numeric)}`
+}
+const resolveTiktokProductId = (item) => String(
+  item?.mapped_tiktok_product_id ||
+  item?.tiktok?.product_id ||
+  item?.stock_tiktok_product_id ||
+  ''
+).trim()
+const resolveTiktokSkuId = (item) => String(
+  item?.tiktok_sku_id ||
+  item?.mapped_tiktok_sku_id ||
+  item?.tiktok?.sku_id ||
+  item?.stock_tiktok_sku_id ||
+  ''
+).trim()
 const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
 const hasShopeeActual = (item) => Boolean(item?.shopee?.item_id || item?.shopee?.model_id || item?.shopee?.image_url || item?.shopee?.stock_qty !== null && item?.shopee?.stock_qty !== undefined)
@@ -649,8 +713,30 @@ const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
 const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
 const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
 const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
+const getGroupKey = (item) => item?.group_key || item?.shopee?.item_id || item?.tiktok?.product_id || item?.product_name || item?.internal_sku || ''
 const normalizeSelectionId = (value) => String(value ?? '').trim()
 const isVariantSelected = (item) => selectedVariantIds.value.includes(normalizeSelectionId(item?.id))
+const sortGroupVariants = (group) => ({
+  ...group,
+  variants: [...group.variants].sort((a, b) => {
+    const rankDiff = variantSortRank(a) - variantSortRank(b)
+    if (rankDiff !== 0) return rankDiff
+
+    const aName = normalizeText(a.variant_name || a.tiktok?.variant_name || '')
+    const bName = normalizeText(b.variant_name || b.tiktok?.variant_name || '')
+    return aName.localeCompare(bName)
+  })
+})
+const isExpanded = (key) => expandedGroups.value[key] !== false
+const toggleGroup = (key) => {
+  expandedGroups.value = {
+    ...expandedGroups.value,
+    [key]: !isExpanded(key)
+  }
+}
+const expandAllGroups = () => {
+  expandedGroups.value = Object.fromEntries(groupedItems.value.map((group) => [group.key, true]))
+}
 const resolveSelectedVariantSource = (value) => {
   const key = normalizeSelectionId(value)
   if (!key) return null
@@ -692,7 +778,7 @@ const resolveAddVariantProductId = () => {
   return String(
     addVariantTool.product_id ||
     getProductTool.product_id ||
-    selectedItem.value?.tiktok?.product_id ||
+    resolveTiktokProductId(selectedItem.value) ||
     ''
   ).trim()
 }
@@ -799,10 +885,7 @@ const shopeeDetailHint = (item) => hasShopeeActual(item)
 const fillAddVariantToolFromItem = (item) => {
   if (!item) return
 
-  const productId = String(item.tiktok?.product_id || item.stock_tiktok_product_id || '').trim()
-  if (productId) {
-    addVariantTool.product_id = productId
-  }
+  addVariantTool.product_id = resolveTiktokProductId(item)
 
   const sellerSku = String(
     item.shopee?.seller_sku ||
@@ -855,7 +938,7 @@ const mapProductPayloadToVariantDefaults = (payload) => {
   const quantity = inventory?.quantity ?? 0
 
   return {
-    product_id: normalizeTextForSku(payload?.product_id || getProductTool.product_id || selectedItem.value?.tiktok?.product_id || ''),
+    product_id: normalizeTextForSku(payload?.product_id || getProductTool.product_id || resolveTiktokProductId(selectedItem.value) || ''),
     seller_sku: normalizeTextForSku(firstSku?.seller_sku || ''),
     color_name: normalizeTextForSku(firstAttribute?.value_name || firstAttribute?.name || ''),
     image_uri: normalizeTextForSku(skuImage || mainImage?.uri || ''),
@@ -868,7 +951,7 @@ const groupedItems = computed(() => {
   const groups = new Map()
 
   items.value.forEach((item) => {
-    const key = item.group_key || item.shopee?.item_id || item.tiktok?.product_id || item.product_name || item.internal_sku
+    const key = getGroupKey(item)
     if (!groups.has(key)) {
       groups.set(key, {
         key,
@@ -907,34 +990,36 @@ const groupedItems = computed(() => {
   })
 
   return Array.from(groups.values()).map((group) => {
+    const allReadyToSync = group.variants.every((variant) => variant.status === 'ready_to_sync')
+    const allShopeeMissing = group.variants.every((variant) => variant.status === 'shopee_missing')
+    const allTiktokMissing = group.variants.every((variant) => variant.status === 'tiktok_missing')
+
     return {
       ...group,
-      status: group.variants.every((variant) => variant.status === 'ready_to_sync')
+      status: allReadyToSync
         ? 'ready_to_sync'
-        : 'belum_ada_variant'
+        : allShopeeMissing
+          ? 'shopee_missing'
+          : allTiktokMissing
+            ? 'tiktok_missing'
+            : 'belum_ada_variant'
     }
   })
 })
 
 const activeGroup = computed(() => {
   if (!groupedItems.value.length) return null
-  const exact = groupedItems.value.find((group) => normalizeText(group.name) === normalizeText(filters.search))
-  const group = exact || groupedItems.value[0]
+  const selectedKey = getGroupKey(selectedItem.value)
+  const selectedGroup = selectedKey ? groupedItems.value.find((group) => group.key === selectedKey) : null
+  const exact = normalizeText(filters.search)
+    ? groupedItems.value.find((group) => normalizeText(group.name) === normalizeText(filters.search))
+    : null
+  const group = selectedGroup || exact || groupedItems.value[0]
 
-  return {
-    ...group,
-    variants: [...group.variants].sort((a, b) => {
-      const rankDiff = variantSortRank(a) - variantSortRank(b)
-      if (rankDiff !== 0) return rankDiff
-
-      const aName = normalizeText(a.variant_name || a.tiktok?.variant_name || '')
-      const bName = normalizeText(b.variant_name || b.tiktok?.variant_name || '')
-      return aName.localeCompare(bName)
-    })
-  }
+  return sortGroupVariants(group)
 })
 
-const displayVariants = computed(() => activeGroup.value?.variants || [])
+const displayVariants = computed(() => items.value)
 const summaryItem = computed(() => selectedItem.value || activeGroup.value?.variants?.[0] || null)
 
 const getProductTool = reactive({
@@ -969,7 +1054,7 @@ const buildGetProductQuery = () => {
 }
 
 const apiGetProductCurl = computed(() => {
-  const productId = String(getProductTool.product_id || selectedItem.value?.tiktok?.product_id || '').trim()
+  const productId = String(getProductTool.product_id || resolveTiktokProductId(selectedItem.value) || '').trim()
   const url = `https://open-api.tiktokglobalshop.com/product/${getProductTool.version || TIKTOK_GET_PRODUCT_VERSION}/products/${productId}`
   const query = buildGetProductQuery()
   const querySuffix = query ? `?${query}` : ''
@@ -1399,7 +1484,7 @@ const addVariantRequestPreview = computed(() => {
     return buildAddVariantRequestPreview()
   } catch (error) {
     return JSON.stringify({
-      product_id: addVariantTool.product_id || selectedItem.value?.tiktok?.product_id || '',
+      product_id: addVariantTool.product_id || resolveTiktokProductId(selectedItem.value) || '',
       shop_cipher: addVariantTool.shop_cipher,
       seller_sku: addVariantTool.seller_sku,
       color_name: addVariantTool.color_name,
@@ -1681,8 +1766,8 @@ const submitGetProductDemo = async () => {
   getProductResponseStatus.value = '0'
 
   try {
-    if (selectedItem.value?.tiktok?.product_id && !String(getProductTool.product_id || '').trim()) {
-      getProductTool.product_id = selectedItem.value.tiktok.product_id
+    if (resolveTiktokProductId(selectedItem.value) && !String(getProductTool.product_id || '').trim()) {
+      getProductTool.product_id = resolveTiktokProductId(selectedItem.value)
     }
 
     const response = await fetch('/api/tiktok/get-product', {
@@ -1692,7 +1777,7 @@ const submitGetProductDemo = async () => {
         Accept: 'application/json'
       },
       body: JSON.stringify({
-      product_id: getProductTool.product_id || selectedItem.value?.tiktok?.product_id || '',
+      product_id: getProductTool.product_id || resolveTiktokProductId(selectedItem.value) || '',
       version: getProductTool.version,
       shop_id: getProductTool.shop_id,
       shop_cipher: getProductTool.shop_cipher,
@@ -1750,6 +1835,7 @@ const loadData = async (resetPage = false, options = {}) => {
       const cached = pageCache.get(cacheKey)
       items.value = cached.items
       Object.assign(pagination, cached.pagination)
+      expandAllGroups()
       syncSelectedVariantSnapshots(items.value)
       if (preserveSelection) {
         selectedItem.value = selectedIdBeforeRefresh
@@ -1780,6 +1866,7 @@ const loadData = async (resetPage = false, options = {}) => {
       items: items.value,
       pagination: { ...pagination }
     })
+    expandAllGroups()
     syncSelectedVariantSnapshots(items.value)
     if (preserveSelection) {
       selectedItem.value = selectedIdBeforeRefresh
@@ -1798,6 +1885,7 @@ const loadData = async (resetPage = false, options = {}) => {
     loadError.value = error.response?.data?.message || 'Data tambah varian gagal dimuat.'
     items.value = []
     selectedItem.value = null
+    expandedGroups.value = {}
     resetForm()
   } finally {
     loading.value = false
@@ -1824,15 +1912,13 @@ const selectItem = (item) => {
   form.shopee_item_id = item.shopee?.item_id || ''
   form.shopee_model_id = item.shopee?.model_id || ''
   form.seller_sku = item.seller_sku || item.shopee?.seller_sku || item.tiktok?.seller_sku || ''
-  form.tiktok_product_id = item.tiktok?.product_id || ''
-  form.tiktok_sku_id = item.tiktok?.sku_id || ''
+  form.tiktok_product_id = resolveTiktokProductId(item)
+  form.tiktok_sku_id = resolveTiktokSkuId(item)
   form.tiktok_sku_name = item.tiktok?.variant_name || item.tiktok?.sku_name || item.variant_name || ''
   form.warehouse_id = item.tiktok?.warehouse_id || form.warehouse_id || ''
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
-  if (String(item.tiktok?.product_id || '').trim()) {
-    getProductTool.product_id = item.tiktok.product_id
-  }
+  getProductTool.product_id = resolveTiktokProductId(item)
   getProductResponseText.value = ''
   getProductResponseStatus.value = '0'
   fillAddVariantToolFromItem(item)
@@ -1952,12 +2038,12 @@ onMounted(async () => {
 .metric strong { display:block; font-size:18px; color:#111827; line-height:1.2; }
 .metric small { color:#64748b; display:block; margin-top:6px; }
 .layout { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:12px; }
+.layout.list-only { grid-template-columns:minmax(0,1fr); }
 .panel { background:#fff; border:1px solid #d9e2ec; border-radius:8px; padding:14px; }
 .group-head { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:12px; }
 .group-title { display:flex; gap:12px; align-items:flex-start; min-width:0; }
 .group-title strong { display:block; color:#111827; font-size:18px; line-height:1.25; margin-bottom:4px; }
 .group-title small { color:#64748b; display:block; margin-top:3px; }
-.table-wrap { max-height:72vh; overflow:auto; border:1px solid #e5e7eb; border-radius:8px; }
 .group-empty { margin-bottom:12px; padding:12px; border:1px dashed #cbd5e1; border-radius:8px; color:#64748b; background:#f8fafc; }
 .empty-row { text-align:center; color:#64748b; padding:20px !important; }
 .table-filters { display:flex; align-items:end; gap:12px; margin: 0 0 12px; padding: 12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:8px; }
@@ -1965,6 +2051,15 @@ onMounted(async () => {
 .table-filters span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
 .table-filters select { width:100%; border:1px solid #d7dde8; border-radius:6px; padding:10px; font-size:13px; background:#fff; }
 .filter-hint { color:#64748b; font-size:12px; }
+.table-wrap {
+  height: 860px;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fff;
+  scrollbar-gutter: stable;
+}
 .api-panel { margin-top:14px; padding:0; border:0; background:transparent; }
 .api-panel-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:12px; }
 .api-panel-head strong { display:block; color:#111827; font-size:18px; line-height:1.2; }
@@ -2025,17 +2120,28 @@ onMounted(async () => {
 .col-channel { width:31%; }
 .col-status { width:10%; }
 .col-check { width:56px; }
-th,td { border-bottom:1px solid #e5e7eb; padding:10px; vertical-align:top; text-align:left; }
+th,td { border-bottom:1px solid #e5e7eb; padding:8px 10px; vertical-align:top; text-align:left; }
 thead th { position:sticky; top:0; background:#1f2937; color:#fff; z-index:1; }
 tbody:last-child tr:last-child td { border-bottom:0; }
-td small { color:#64748b; display:block; margin-top:3px; }
+td small { color:#64748b; display:block; margin-top:2px; line-height:1.15; }
+.product-row { background:#f8fafc; }
+.product-row td { padding:10px 12px; }
+.product-row-inner { display:flex; align-items:center; gap:10px; min-width:0; cursor:pointer; }
+.group-toggle { width:28px; height:28px; padding:0; display:grid; place-items:center; background:#e2e8f0; color:#0f172a; font-weight:800; flex:0 0 auto; }
+.thumb.small { width:42px; height:42px; flex:0 0 auto; }
+.group-copy { min-width:0; flex:1; }
+.group-copy strong { display:block; color:#111827; font-size:14px; line-height:1.25; margin-bottom:2px; }
+.group-copy small { color:#64748b; display:block; margin-top:2px; line-height:1.15; }
+.group-meta { display:flex; flex-direction:column; align-items:flex-end; gap:6px; text-align:right; flex:0 0 auto; }
+.group-meta strong { display:block; color:#111827; font-size:12px; line-height:1.2; }
 .variant-row { cursor:pointer; }
 .variant-row:hover,.variant-row.active { background:#eff6ff; }
 .check-col { text-align:center; vertical-align:middle; }
 .check-col input { width:18px; height:18px; accent-color:#0f5fc7; cursor:pointer; }
-.variant-title strong { display:block; margin-bottom:4px; }
-.channel-cell { display:grid; grid-template-columns:58px minmax(0,1fr); gap:10px; align-items:start; min-width:0; }
-.channel-cell strong { display:block; line-height:1.25; margin-bottom:4px; }
+.variant-title strong { display:block; margin-bottom:2px; font-size:12px; line-height:1.2; }
+.variant-title small { font-size:10px; }
+.channel-cell { display:grid; grid-template-columns:44px minmax(0,1fr); gap:8px; align-items:start; min-width:0; }
+.channel-cell strong { display:block; line-height:1.2; margin-bottom:2px; font-size:12px; }
 .channel-cell small,.variant-title small { overflow-wrap:anywhere; }
 .channel-cell.muted { color:#64748b; }
 .channel-title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; min-width:0; }
@@ -2043,12 +2149,14 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .channel-badge { flex:0 0 auto; border-radius:999px; padding:3px 7px; font-size:11px; font-weight:800; line-height:1.2; }
 .channel-badge.mapped { color:#047857; background:#d1fae5; }
 .channel-badge.suggested { color:#b45309; background:#fef3c7; }
-.thumb { width:58px; height:58px; border-radius:6px; object-fit:cover; background:#eef2f7; border:1px solid #e2e8f0; }
+.thumb { width:44px; height:44px; border-radius:6px; object-fit:cover; background:#eef2f7; border:1px solid #e2e8f0; }
 .thumb.large { width:82px; height:82px; }
 .fallback { display:grid; place-items:center; color:#64748b; font-weight:800; font-size:12px; }
 .mini { display:block; margin-top:8px; padding:6px 9px; background:#e2e8f0; color:#334155; font-size:12px; }
 .badge { display:inline-block; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; }
 .badge.ready_to_sync { background:#d1fae5; color:#047857; }
+.badge.shopee_missing { background:#fff7ed; color:#c2410c; }
+.badge.tiktok_missing { background:#eff6ff; color:#1d4ed8; }
 .badge.belum_ada_variant { background:#eef2f7; color:#475569; }
 .detail-panel label { display:block; margin-bottom:10px; }
 .detail-panel span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
@@ -2069,6 +2177,6 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .dialog-meta dd { margin:0; color:#0f172a; font-size:13px; overflow-wrap:anywhere; }
 .dialog-actions { display:flex; justify-content:flex-end; gap:10px; }
 @media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } .api-testing-tool, .variant-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
-@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } .dialog-meta { grid-template-columns:1fr; } .dialog-actions { flex-direction:column; } .dialog-actions .ghost, .dialog-actions .primary { width:100%; } }
+@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } .dialog-meta { grid-template-columns:1fr; } .dialog-actions { flex-direction:column; } .dialog-actions .ghost, .dialog-actions .primary { width:100%; } .table-wrap { height: auto; max-height: none; overflow: visible; } }
 </style>
 
