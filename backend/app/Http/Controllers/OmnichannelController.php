@@ -2015,6 +2015,7 @@ class OmnichannelController extends Controller
     {
         $this->ensureSkuMappingTables();
 
+        $flow = (string) $request->query('flow', '');
         $search = trim((string) $request->query('search', ''));
         $status = (string) $request->query('status', 'all');
         $sort = (string) $request->query('sort', 'updated_desc');
@@ -2100,16 +2101,16 @@ class OmnichannelController extends Controller
         }
         $matchedTiktokVariantKeys = [];
         $items = [];
-        $resolveItemStatus = static function (string $statusShopee, string $statusTikTok): string {
-            if ($statusShopee === 'mapped' && $statusTikTok === 'mapped') {
+        $resolveItemStatus = static function (bool $hasShopeeActual, bool $hasTiktokActual): string {
+            if ($hasShopeeActual && $hasTiktokActual) {
                 return 'ready_to_sync';
             }
 
-            if ($statusShopee === 'mapped') {
+            if ($hasShopeeActual) {
                 return 'tiktok_missing';
             }
 
-            if ($statusTikTok === 'mapped') {
+            if ($hasTiktokActual) {
                 return 'shopee_missing';
             }
 
@@ -2120,7 +2121,6 @@ class OmnichannelController extends Controller
             $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
             $shopeeModelId = $row->shopee_model_id ?: $row->stock_shopee_model_id;
             $shopeeSellerSku = $row->mapped_seller_sku ?: $row->stock_shopee_seller_sku;
-            $statusShopee = $shopeeModelId ? 'mapped' : ($shopeeItemId ? 'partial' : 'unmapped');
             $stockGroupKey = $this->stockMappingGroupKey($row);
             $matchedProductId = $stockGroupTiktokMatches[$stockGroupKey] ?? null;
             $canonicalGroupKey = $matchedProductId && isset($matchedTiktokToStockGroup[$matchedProductId])
@@ -2137,14 +2137,18 @@ class OmnichannelController extends Controller
             $tiktokSkuId = $row->tiktok_sku_id ?: $row->stock_tiktok_sku_id;
             $tiktokSkuName = $row->tiktok_sku_name ?: null;
             $tiktokSellerSku = $row->mapped_seller_sku ?: $row->stock_tiktok_seller_sku ?: ($tiktokMatch->seller_sku ?? null);
-            $hasSavedTiktokMapping = $this->filledString($tiktokProductId)
-                || $this->filledString($tiktokSkuId)
-                || $this->filledString($tiktokSkuName)
-                || $this->filledString($tiktokSellerSku);
-            $statusTikTok = $hasSavedTiktokMapping
-                ? 'mapped'
-                : ($tiktokMatch ? 'suggested' : 'unmapped');
             $variantActionStatus = trim((string) ($row->variant_action_status ?? ''));
+            $hasShopeeActual = $this->filledString($shopeeItemId)
+                || $this->filledString($shopeeModelId)
+                || $this->filledString($row->shopee_model_image_url ?? null)
+                || $this->filledString($row->shopee_product_image_url ?? null)
+                || $this->filledString($row->shopee_image_url ?? null)
+                || ($row->shopee_variant_stock ?? $row->stock_qty ?? null) !== null;
+            $hasTiktokActual = $this->filledString($tiktokProductId)
+                || $this->filledString($tiktokSkuId)
+                || $this->filledString($tiktokMatch->image_url ?? null)
+                || $this->filledString($tiktokMatch->product_image_url ?? null)
+                || ($tiktokMatch !== null && (($tiktokMatch->stock_qty ?? null) !== null));
 
             $shopeeImageUrl = $row->shopee_model_image_url
                 ?: $row->internal_image_url
@@ -2180,7 +2184,7 @@ class OmnichannelController extends Controller
                     'price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                     'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
                     'image_url' => $shopeeImageUrl,
-                    'status' => $statusShopee,
+                    'status' => $hasShopeeActual ? 'mapped' : 'unmapped',
                 ],
                 'shopee_variant_price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                 'tiktok' => [
@@ -2193,10 +2197,10 @@ class OmnichannelController extends Controller
                     'variant_name' => $tiktokMatch->sku_name ?? $tiktokSkuName,
                     'stock_qty' => $tiktokMatch ? (int) ($tiktokMatch->stock_qty ?? 0) : null,
                     'image_url' => $tiktokImageUrl,
-                    'status' => $statusTikTok,
+                    'status' => $hasTiktokActual ? 'mapped' : ($tiktokMatch ? 'suggested' : 'unmapped'),
                     'source' => $tiktokMatchSource,
                 ],
-                'status' => $resolveItemStatus($statusShopee, $statusTikTok),
+                'status' => $resolveItemStatus($hasShopeeActual, $hasTiktokActual),
                 'updated_at' => $row->updated_at,
             ];
         }
@@ -2253,16 +2257,21 @@ class OmnichannelController extends Controller
                         'status' => 'mapped',
                         'source' => 'actual',
                     ],
-                    'status' => $resolveItemStatus('unmapped', 'mapped'),
+                    'status' => $resolveItemStatus(false, true),
                     'updated_at' => $skuRow->updated_at,
                 ];
             }
         }
 
         $items = collect($items)
-            ->filter(function (array $item) use ($search, $status) {
+            ->filter(function (array $item) use ($search, $status, $flow) {
                 $matchesStatus = match ($status) {
                     'ready_to_sync', 'shopee_missing', 'tiktok_missing', 'belum_ada_variant' => $item['status'] === $status,
+                    'all' => match ($flow) {
+                        'shopee-to-tiktok' => in_array($item['status'], ['ready_to_sync', 'tiktok_missing'], true),
+                        'tiktok-to-shopee' => in_array($item['status'], ['ready_to_sync', 'shopee_missing'], true),
+                        default => true,
+                    },
                     default => true,
                 };
 
@@ -2501,8 +2510,10 @@ class OmnichannelController extends Controller
                 }
 
                 $variantOverlap = count(array_intersect($variantNames, $tiktokGroup['sku_names']));
+                $exactNameMatch = $stockGroup['product_name_key'] !== ''
+                    && $stockGroup['product_name_key'] === $tiktokGroup['product_name_key'];
 
-                if ($variantOverlap === 0) {
+                if ($variantOverlap === 0 && ! $exactNameMatch) {
                     continue;
                 }
 
@@ -2514,11 +2525,11 @@ class OmnichannelController extends Controller
                         || str_contains($tiktokGroup['product_name_key'], $stockGroup['product_name_key'])
                     );
 
-                if ($variantOverlap < 2 && $tokenOverlap < 2 && ! $nameContains) {
+                if (! $exactNameMatch && $variantOverlap < 2 && $tokenOverlap < 2 && ! $nameContains) {
                     continue;
                 }
 
-                $score = ($variantOverlap * 1000) + ($tokenOverlap * 50) + ($nameContains ? 25 : 0);
+                $score = ($exactNameMatch ? 100000 : 0) + ($variantOverlap * 1000) + ($tokenOverlap * 50) + ($nameContains ? 25 : 0);
 
                 if ($score > $bestScore) {
                     $bestScore = $score;
@@ -2593,6 +2604,22 @@ class OmnichannelController extends Controller
             $match = $lookup['product_groups'][$suggestedProductId]['rows_by_sku_name'][$variantKey] ?? null;
             if ($match) {
                 return [$match, $hasSavedMapping ? 'saved' : 'suggested'];
+            }
+        }
+
+        if ($suggestedProductId && isset($lookup['rows_by_product_id'][$suggestedProductId])) {
+            $groupFirst = $lookup['rows_by_product_id'][$suggestedProductId]->first();
+            if ($groupFirst) {
+                return [(object) [
+                    'product_id' => (string) ($groupFirst->product_id ?? $suggestedProductId),
+                    'product_name' => $groupFirst->product_name ?? null,
+                    'product_image_url' => $groupFirst->product_image_url ?? $groupFirst->image_url ?? null,
+                    'image_url' => $groupFirst->image_url ?? $groupFirst->product_image_url ?? null,
+                    'sku_id' => null,
+                    'sku_name' => null,
+                    'seller_sku' => null,
+                    'stock_qty' => null,
+                ], $hasSavedMapping ? 'saved' : 'suggested_product'];
             }
         }
 
