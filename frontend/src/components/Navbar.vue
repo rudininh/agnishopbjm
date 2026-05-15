@@ -14,7 +14,8 @@
       <RouterLink to="/stok-tiktok">Stok TikTok</RouterLink>
       <RouterLink to="/stock-master">Stock Master</RouterLink>
       <RouterLink to="/sku-mapping">SKU Mapping</RouterLink>
-      <RouterLink to="/tambah-varian">Tambah Varian</RouterLink>
+      <RouterLink to="/tambah-varian-tiktok">Tambah Varian TikTok</RouterLink>
+      <RouterLink to="/tambah-varian-shopee">Tambah Varian Shopee</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
       <RouterLink to="/dokumentasi-tiktok">Dokumentasi TikTok</RouterLink>
