@@ -79,27 +79,28 @@
         <div class="table-wrap">
           <table class="mapping-table">
             <colgroup>
-              <col class="col-check" />
               <col class="col-product" />
               <col class="col-channel" />
               <col class="col-channel" />
               <col class="col-status" />
+              <col class="col-check" />
             </colgroup>
             <thead>
               <tr>
+                <th>Varian</th>
+                <th>Shopee</th>
+                <th>TikTok</th>
+                <th>Status</th>
                 <th class="check-col">
                   <input
                     type="checkbox"
                     :checked="allDisplayedVariantsSelected"
                     :indeterminate="someDisplayedVariantsSelected && !allDisplayedVariantsSelected"
+                    aria-label="Pilih semua varian"
                     @click.stop
                     @change="toggleDisplayedVariantsSelection($event.target.checked)"
                   />
                 </th>
-                <th>Varian</th>
-                <th>Shopee</th>
-                <th>TikTok</th>
-                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -112,14 +113,6 @@
                 :class="['variant-row', { active: selectedItem?.id === item.id }]"
                 @click="selectItem(item)"
               >
-                <td class="check-col">
-                  <input
-                    type="checkbox"
-                    :checked="isVariantSelected(item)"
-                    @click.stop
-                    @change="toggleVariantSelection(item, $event.target.checked)"
-                  />
-                </td>
                 <td>
                   <div class="variant-title">
                     <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
@@ -169,6 +162,15 @@
                 </td>
                 <td>
                   <span :class="['badge', item.status]">{{ labelStatus(item.status) }}</span>
+                </td>
+                <td class="check-col">
+                  <input
+                    type="checkbox"
+                    :checked="isVariantSelected(item)"
+                    aria-label="Pilih varian ini"
+                    @click.stop
+                    @change="toggleVariantSelection(item, $event.target.checked)"
+                  />
                 </td>
               </tr>
             </tbody>
@@ -409,6 +411,9 @@
                   <strong>Response Generate Payload</strong>
                   <button class="ghost mini" type="button" @click="copyAddVariantResponse">Copy</button>
                 </div>
+                <p v-if="selectedVariantPayloadLabels.length" class="api-response-hint payload-summary-hint">
+                  SKU baru yang di-append: {{ selectedVariantPayloadLabels.join(', ') }}
+                </p>
                 <div class="api-status-line">
                   <span>Status:</span>
                   <span class="status-dot">{{ addVariantResponseStatus }}</span>
@@ -646,10 +651,26 @@ const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : 
 const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
 const normalizeSelectionId = (value) => String(value ?? '').trim()
 const isVariantSelected = (item) => selectedVariantIds.value.includes(normalizeSelectionId(item?.id))
+const resolveSelectedVariantSource = (value) => {
+  const key = normalizeSelectionId(value)
+  if (!key) return null
+
+  return selectedVariantSnapshots[key]
+    || displayVariants.value.find((item) => normalizeSelectionId(item?.id) === key)
+    || items.value.find((item) => normalizeSelectionId(item?.id) === key)
+    || (selectedItem.value && normalizeSelectionId(selectedItem.value?.id) === key ? selectedItem.value : null)
+}
 const selectedVariantItems = computed(() => {
   return selectedVariantIds.value
-    .map((value) => selectedVariantSnapshots[normalizeSelectionId(value)])
+    .map((value) => resolveSelectedVariantSource(value))
     .filter(Boolean)
+})
+const selectedVariantPayloadLabels = computed(() => {
+  return selectedVariantItems.value.map((variant) => {
+    const variantName = String(variant?.variant_name || 'Tanpa Varian').trim() || 'Tanpa Varian'
+    const sellerSku = String(variant?.seller_sku || variant?.internal_sku || '-').trim() || '-'
+    return `${variantName} (${sellerSku})`
+  })
 })
 const allDisplayedVariantsSelected = computed(() => displayVariants.value.length > 0 && displayVariants.value.every((item) => isVariantSelected(item)))
 const someDisplayedVariantsSelected = computed(() => displayVariants.value.some((item) => isVariantSelected(item)))
@@ -738,6 +759,9 @@ const syncSelectedVariantSnapshots = (currentItems = []) => {
     selectedVariantSnapshots[key] = cloneJson(item) || item
   })
 }
+const getSelectedVariantSources = () => selectedVariantItems.value.length
+  ? selectedVariantItems.value
+  : (selectedItem.value ? [selectedItem.value] : [])
 const buildTiktokSubmitMeta = () => ({
   product_id: resolveAddVariantProductId(),
   version: resolveAddVariantVersion(),
@@ -1161,7 +1185,7 @@ const buildAddVariantRequestPreview = () => {
   const existingSkus = Array.isArray(productBody.skus)
     ? productBody.skus.map((sku) => cloneJson(sku) || {})
     : []
-  const selectedSources = selectedVariantItems.value.length ? selectedVariantItems.value : []
+  const selectedSources = getSelectedVariantSources()
   const titleSource = selectedSources[0] || selectedItem.value || {}
 
   const productTitle = String(
@@ -1191,22 +1215,7 @@ const buildAddVariantRequestPreview = () => {
     stock_qty: Number(addVariantTool.quantity ?? 0)
   }]
 
-  const usedSkuIndices = new Set()
-  const resolveNextPlaceholderIndex = () => {
-    for (let index = existingSkus.length - 1; index >= 0; index -= 1) {
-      if (usedSkuIndices.has(index)) continue
-      const sku = existingSkus[index]
-      const skuId = String(sku?.id || sku?.sku_id || '').trim()
-      const valueId = String(sku?.sales_attributes?.[0]?.value_id || '').trim()
-      const warehouseId = String(sku?.inventory?.[0]?.warehouse_id || '').trim()
-
-      if (skuId === '' && (valueId === '' || warehouseId === '')) {
-        return index
-      }
-    }
-
-    return -1
-  }
+  const generatedSkus = []
 
   skuDrafts.forEach((source, sourceIndex) => {
     const colorName = String(source?.variant_name || source?.tiktok?.variant_name || source?.tiktok?.sku_name || 'Variant Baru').trim() || 'Variant Baru'
@@ -1252,46 +1261,14 @@ const buildAddVariantRequestPreview = () => {
         warehouse_id: TIKTOK_VARIANT_WAREHOUSE_ID
       }]
     }
-
-    const matchingSellerSkuIndex = existingSkus.findIndex((sku, index) => {
-      if (usedSkuIndices.has(index)) return false
-      return normalizeText(sku?.seller_sku) === normalizeText(generatedSku.seller_sku)
-    })
-
-    if (matchingSellerSkuIndex >= 0) {
-      usedSkuIndices.add(matchingSellerSkuIndex)
-      existingSkus[matchingSellerSkuIndex] = {
-        ...existingSkus[matchingSellerSkuIndex],
-        ...generatedSku,
-        sales_attributes: generatedSku.sales_attributes,
-        inventory: generatedSku.inventory
-      }
-      return
-    }
-
-    const placeholderIndex = resolveNextPlaceholderIndex()
-    if (placeholderIndex >= 0) {
-      usedSkuIndices.add(placeholderIndex)
-      const replacementSku = {
-        ...existingSkus[placeholderIndex],
-        ...generatedSku,
-        sales_attributes: generatedSku.sales_attributes,
-        inventory: generatedSku.inventory
-      }
-      delete replacementSku.id
-      delete replacementSku.sku_id
-      existingSkus[placeholderIndex] = replacementSku
-      return
-    }
-
-    existingSkus.push(generatedSku)
+    generatedSkus.push(generatedSku)
   })
 
   productBody.save_mode = 'LISTING'
   productBody.category_id = '601307'
   productBody.category_version = 'v2'
   productBody.title = productTitle
-  productBody.skus = existingSkus
+  productBody.skus = [...existingSkus, ...generatedSkus]
 
   if (!Array.isArray(productBody.category_chains) || productBody.category_chains.length === 0) {
     productBody.category_chains = [
@@ -2032,6 +2009,7 @@ onMounted(async () => {
 .variant-tool .tiktok-response-block .api-response-viewer { max-height:280px; min-height:280px; }
 .variant-tool .tiktok-response-block pre { max-height:none; min-height:280px; }
 .api-response-hint { margin:8px 0 10px; color:#b45309; font-size:12px; line-height:1.45; background:#fffbeb; border:1px solid #fcd34d; border-radius:4px; padding:8px 10px; }
+.payload-summary-hint { margin-top:10px; }
 .api-response-viewer { display:grid; grid-template-columns:44px minmax(0,1fr); border:1px solid #e5e7eb; background:#fff; max-height:460px; overflow:auto; }
 .variant-tool .api-response-viewer { max-height:280px; min-height:280px; }
 .api-response-lines { background:#f8fafc; border-right:1px solid #e5e7eb; color:#94a3b8; font-size:12px; line-height:1.55; text-align:right; padding:12px 8px 12px 0; user-select:none; }
@@ -2044,12 +2022,15 @@ onMounted(async () => {
 .col-product { width:28%; }
 .col-channel { width:31%; }
 .col-status { width:10%; }
+.col-check { width:56px; }
 th,td { border-bottom:1px solid #e5e7eb; padding:10px; vertical-align:top; text-align:left; }
 thead th { position:sticky; top:0; background:#1f2937; color:#fff; z-index:1; }
 tbody:last-child tr:last-child td { border-bottom:0; }
 td small { color:#64748b; display:block; margin-top:3px; }
 .variant-row { cursor:pointer; }
 .variant-row:hover,.variant-row.active { background:#eff6ff; }
+.check-col { text-align:center; vertical-align:middle; }
+.check-col input { width:18px; height:18px; accent-color:#0f5fc7; cursor:pointer; }
 .variant-title strong { display:block; margin-bottom:4px; }
 .channel-cell { display:grid; grid-template-columns:58px minmax(0,1fr); gap:10px; align-items:start; min-width:0; }
 .channel-cell strong { display:block; line-height:1.25; margin-bottom:4px; }
