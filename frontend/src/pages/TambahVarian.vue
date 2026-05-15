@@ -37,7 +37,7 @@
       </article>
       <article class="metric">
         <span>Product ID TikTok</span>
-        <strong>{{ summaryItem.mapped_tiktok_product_id || summaryItem.tiktok?.product_id || summaryItem.stock_tiktok_product_id || '-' }}</strong>
+        <strong>{{ resolveSelectedTiktokProductId() || '-' }}</strong>
         <small>{{ summaryItem.tiktok?.variant_name || summaryItem.variant_name || '-' }}</small>
       </article>
     </div>
@@ -630,6 +630,7 @@ const filters = reactive({
   status: isShopeeFlow.value ? 'shopee_missing' : 'tiktok_missing'
 })
 const pageCache = new Map()
+const flowKey = computed(() => route.meta?.flow || '')
 const form = reactive({
   stock_master_id: null,
   shopee_item_id: '',
@@ -716,6 +717,28 @@ const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : 
 const getGroupKey = (item) => item?.group_key || item?.shopee?.item_id || item?.tiktok?.product_id || item?.product_name || item?.internal_sku || ''
 const normalizeSelectionId = (value) => String(value ?? '').trim()
 const isVariantSelected = (item) => selectedVariantIds.value.includes(normalizeSelectionId(item?.id))
+const resolveGroupTiktokProductId = (group) => {
+  if (!group?.variants?.length) return ''
+
+  for (const variant of group.variants) {
+    const productId = resolveTiktokProductId(variant)
+    if (productId) return productId
+  }
+
+  return ''
+}
+const resolveGroupTiktokSkuId = (group) => {
+  if (!group?.variants?.length) return ''
+
+  for (const variant of group.variants) {
+    const skuId = resolveTiktokSkuId(variant)
+    if (skuId) return skuId
+  }
+
+  return ''
+}
+const resolveSelectedTiktokProductId = () => resolveTiktokProductId(selectedItem.value) || resolveGroupTiktokProductId(activeGroup.value) || ''
+const resolveSelectedTiktokSkuId = () => resolveTiktokSkuId(selectedItem.value) || resolveGroupTiktokSkuId(activeGroup.value) || ''
 const sortGroupVariants = (group) => ({
   ...group,
   variants: [...group.variants].sort((a, b) => {
@@ -778,7 +801,7 @@ const resolveAddVariantProductId = () => {
   return String(
     addVariantTool.product_id ||
     getProductTool.product_id ||
-    resolveTiktokProductId(selectedItem.value) ||
+    resolveSelectedTiktokProductId() ||
     ''
   ).trim()
 }
@@ -882,10 +905,10 @@ const shopeeDetailHint = (item) => hasShopeeActual(item)
     ? 'Yang cocok baru kode variasinya, belum ada varian Shopee aktif.'
     : 'Varian ini memang belum ada di Shopee.'
 
-const fillAddVariantToolFromItem = (item) => {
+const fillAddVariantToolFromItem = (item, contextProductId = '') => {
   if (!item) return
 
-  addVariantTool.product_id = resolveTiktokProductId(item)
+  addVariantTool.product_id = contextProductId || resolveTiktokProductId(item)
 
   const sellerSku = String(
     item.shopee?.seller_sku ||
@@ -938,7 +961,7 @@ const mapProductPayloadToVariantDefaults = (payload) => {
   const quantity = inventory?.quantity ?? 0
 
   return {
-    product_id: normalizeTextForSku(payload?.product_id || getProductTool.product_id || resolveTiktokProductId(selectedItem.value) || ''),
+    product_id: normalizeTextForSku(payload?.product_id || getProductTool.product_id || resolveSelectedTiktokProductId() || ''),
     seller_sku: normalizeTextForSku(firstSku?.seller_sku || ''),
     color_name: normalizeTextForSku(firstAttribute?.value_name || firstAttribute?.name || ''),
     image_uri: normalizeTextForSku(skuImage || mainImage?.uri || ''),
@@ -1054,7 +1077,7 @@ const buildGetProductQuery = () => {
 }
 
 const apiGetProductCurl = computed(() => {
-  const productId = String(getProductTool.product_id || resolveTiktokProductId(selectedItem.value) || '').trim()
+  const productId = String(getProductTool.product_id || resolveSelectedTiktokProductId() || '').trim()
   const url = `https://open-api.tiktokglobalshop.com/product/${getProductTool.version || TIKTOK_GET_PRODUCT_VERSION}/products/${productId}`
   const query = buildGetProductQuery()
   const querySuffix = query ? `?${query}` : ''
@@ -1484,7 +1507,7 @@ const addVariantRequestPreview = computed(() => {
     return buildAddVariantRequestPreview()
   } catch (error) {
     return JSON.stringify({
-      product_id: addVariantTool.product_id || resolveTiktokProductId(selectedItem.value) || '',
+      product_id: addVariantTool.product_id || resolveSelectedTiktokProductId() || '',
       shop_cipher: addVariantTool.shop_cipher,
       seller_sku: addVariantTool.seller_sku,
       color_name: addVariantTool.color_name,
@@ -1766,8 +1789,8 @@ const submitGetProductDemo = async () => {
   getProductResponseStatus.value = '0'
 
   try {
-    if (resolveTiktokProductId(selectedItem.value) && !String(getProductTool.product_id || '').trim()) {
-      getProductTool.product_id = resolveTiktokProductId(selectedItem.value)
+    if (resolveSelectedTiktokProductId() && !String(getProductTool.product_id || '').trim()) {
+      getProductTool.product_id = resolveSelectedTiktokProductId()
     }
 
     const response = await fetch('/api/tiktok/get-product', {
@@ -1777,7 +1800,7 @@ const submitGetProductDemo = async () => {
         Accept: 'application/json'
       },
       body: JSON.stringify({
-      product_id: getProductTool.product_id || resolveTiktokProductId(selectedItem.value) || '',
+      product_id: getProductTool.product_id || resolveSelectedTiktokProductId() || '',
       version: getProductTool.version,
       shop_id: getProductTool.shop_id,
       shop_cipher: getProductTool.shop_cipher,
@@ -1823,6 +1846,7 @@ const loadData = async (resetPage = false, options = {}) => {
   loadError.value = ''
   if (resetPage) pagination.page = 1
   const cacheKey = JSON.stringify({
+    flow: flowKey.value,
     search: filters.search,
     status: filters.status,
     sort: 'updated_desc',
@@ -1854,6 +1878,7 @@ const loadData = async (resetPage = false, options = {}) => {
     }
 
     const response = await omnichannelService.skuMapping({
+      flow: flowKey.value,
       search: filters.search,
       status: filters.status,
       sort: 'updated_desc',
@@ -1907,21 +1932,25 @@ const changePage = async (nextPage) => {
 }
 
 const selectItem = (item) => {
+  const group = groupedItems.value.find((candidate) => candidate.key === getGroupKey(item)) || null
+  const resolvedProductId = resolveTiktokProductId(item) || resolveGroupTiktokProductId(group)
+  const resolvedSkuId = resolveTiktokSkuId(item) || resolveGroupTiktokSkuId(group)
+
   selectedItem.value = item
   form.stock_master_id = item.stock_master_id || (typeof item.id === 'number' ? item.id : null)
   form.shopee_item_id = item.shopee?.item_id || ''
   form.shopee_model_id = item.shopee?.model_id || ''
   form.seller_sku = item.seller_sku || item.shopee?.seller_sku || item.tiktok?.seller_sku || ''
-  form.tiktok_product_id = resolveTiktokProductId(item)
-  form.tiktok_sku_id = resolveTiktokSkuId(item)
+  form.tiktok_product_id = resolvedProductId
+  form.tiktok_sku_id = resolvedSkuId
   form.tiktok_sku_name = item.tiktok?.variant_name || item.tiktok?.sku_name || item.variant_name || ''
   form.warehouse_id = item.tiktok?.warehouse_id || form.warehouse_id || ''
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
-  getProductTool.product_id = resolveTiktokProductId(item)
+  getProductTool.product_id = resolvedProductId
   getProductResponseText.value = ''
   getProductResponseStatus.value = '0'
-  fillAddVariantToolFromItem(item)
+  fillAddVariantToolFromItem(item, resolvedProductId)
 }
 
 const fillFromSelected = () => {
