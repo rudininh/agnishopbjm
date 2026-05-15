@@ -1284,7 +1284,7 @@ class OmnichannelController extends Controller
             'app_key' => $config['app_key'],
             'timestamp' => time(),
         ];
-        $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $bodyString = null;
         $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $bodyString);
 
         $absolutePath = $this->resolveUploadImagePath($sourceImageUrl);
@@ -2131,8 +2131,9 @@ class OmnichannelController extends Controller
                 : ($tiktokMatch ? 'suggested' : 'unmapped');
             $variantActionStatus = trim((string) ($row->variant_action_status ?? ''));
 
-            $shopeeImageUrl = $row->shopee_image_url
-                ?: $row->shopee_model_image_url
+            $shopeeImageUrl = $row->shopee_model_image_url
+                ?: $row->internal_image_url
+                ?: $row->shopee_image_url
                 ?: $row->shopee_product_image_url;
             $tiktokImageUrl = $row->tiktok_image_url
                 ?: ($tiktokMatch->image_url ?? null)
@@ -2150,7 +2151,7 @@ class OmnichannelController extends Controller
                 'product_name' => $row->product_name,
                 'variant_name' => $row->variant_name,
                 'stock_qty' => (int) ($row->stock_qty ?? 0),
-                'image_url' => $row->internal_image_url ?: $shopeeImageUrl ?: $tiktokImageUrl ?: $row->shopee_product_image_url,
+                'image_url' => $shopeeImageUrl ?: $tiktokImageUrl ?: $row->shopee_product_image_url,
                 'mapping_id' => $row->mapping_id,
                 'seller_sku' => $shopeeSellerSku ?: $tiktokSellerSku,
                 'variant_action_status' => $variantActionStatus !== '' ? $variantActionStatus : null,
@@ -2802,7 +2803,7 @@ class OmnichannelController extends Controller
             $sourceModelId = trim((string) ($stock->shopee_sku ?? ''));
             $sourceVariantName = trim((string) ($stock->shopee_variant_name ?? $stock->variant_name ?? ''));
             $sourceSellerSku = trim((string) ($stock->mapped_seller_sku ?? $stock->shopee_seller_sku ?? ''));
-            $sourceImageUrl = $stock->internal_image_url ?: $stock->shopee_image_url ?: $stock->shopee_model_image_url ?: $stock->shopee_product_image_url;
+            $sourceImageUrl = $stock->shopee_model_image_url ?: $stock->internal_image_url ?: $stock->shopee_image_url ?: $stock->shopee_product_image_url;
 
             abort_if($sourceProductId === '' && $sourceModelId === '' && $sourceVariantName === '', 422, 'Data Shopee belum cukup untuk membuat draft TikTok.');
 
@@ -2977,7 +2978,7 @@ class OmnichannelController extends Controller
         $sourceModelId = trim((string) ($stock->shopee_sku ?? ''));
         $sourceVariantName = trim((string) ($stock->shopee_variant_name ?? $stock->variant_name ?? ''));
         $sourceSellerSku = trim((string) ($stock->mapped_seller_sku ?? $stock->shopee_seller_sku ?? ''));
-        $sourceImageUrl = $stock->internal_image_url ?: $stock->shopee_image_url ?: $stock->shopee_model_image_url ?: $stock->shopee_product_image_url;
+        $sourceImageUrl = $stock->shopee_model_image_url ?: $stock->internal_image_url ?: $stock->shopee_image_url ?: $stock->shopee_product_image_url;
 
         abort_if($sourceProductId === '' && $sourceModelId === '' && $sourceVariantName === '', 422, 'Data Shopee belum cukup untuk menyiapkan payload TikTok.');
 
@@ -3309,6 +3310,15 @@ class OmnichannelController extends Controller
             ], 422);
         }
 
+        try {
+            $decodedPayload = $this->normalizeTiktokGeneratedPayloadImages($decodedPayload, $accessToken);
+        } catch (\Throwable $exception) {
+            return response()->json([
+                'message' => 'Gagal menyiapkan gambar varian untuk submit TikTok.',
+                'error' => $exception->getMessage(),
+            ], 422);
+        }
+
         $payloadBody = json_encode($decodedPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($payloadBody === false) {
             return response()->json([
@@ -3361,6 +3371,66 @@ class OmnichannelController extends Controller
 
         return response($body, $responseStatus)
             ->header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    private function normalizeTiktokGeneratedPayloadImages(array $payload, string $accessToken): array
+    {
+        $uploadCache = [];
+
+        if (! is_array($payload['skus'] ?? null)) {
+            return $payload;
+        }
+
+        foreach ($payload['skus'] as $skuIndex => $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $attributes = $sku['sales_attributes'] ?? [];
+            if (! is_array($attributes)) {
+                continue;
+            }
+
+            foreach ($attributes as $attributeIndex => $attribute) {
+                $sourceUri = trim((string) data_get($attribute, 'sku_img.uri', ''));
+
+                if ($sourceUri === '' || $this->isTiktokImageUri($sourceUri)) {
+                    continue;
+                }
+
+                if (! array_key_exists($sourceUri, $uploadCache)) {
+                    $uploadResult = $this->uploadTiktokProductImage((object) [], $accessToken, $sourceUri, 'MAIN_IMAGE');
+                    $uploadedUri = trim((string) ($uploadResult['uri'] ?? ''));
+
+                    if (($uploadResult['ok'] ?? false) !== true || $uploadedUri === '') {
+                        $message = (string) ($uploadResult['message'] ?? 'Gagal upload gambar ke TikTok.');
+                        throw new \RuntimeException($message);
+                    }
+
+                    $uploadCache[$sourceUri] = $uploadedUri;
+                }
+
+                $payload['skus'][$skuIndex]['sales_attributes'][$attributeIndex]['sku_img']['uri'] = $uploadCache[$sourceUri];
+            }
+        }
+
+        return $payload;
+    }
+
+    private function isTiktokImageUri(string $value): bool
+    {
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return false;
+        }
+
+        if (preg_match('#^tos-[^/]+/.+#i', $trimmed) === 1) {
+            return true;
+        }
+
+        return (str_starts_with($trimmed, 'http://') || str_starts_with($trimmed, 'https://'))
+            && str_contains($trimmed, '/tos-');
     }
 
     private function executeTiktokSubmitPayloadRequest(string $submitUrl, string $payloadBody, string $accessToken): array

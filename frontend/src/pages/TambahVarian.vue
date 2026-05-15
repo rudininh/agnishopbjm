@@ -1224,7 +1224,13 @@ const buildAddVariantRequestPreview = () => {
       `${productTitle}|${colorName}|${sourceIndex}`,
       '65536'
     ).slice(-6)}`).trim()
-    const imageUri = String(source?.image_url || source?.tiktok?.image_url || '').trim()
+    const imageUri = String(
+      source?.image_url ||
+      source?.shopee?.image_url ||
+      source?.tiktok?.image_url ||
+      findExistingTiktokImageUri(productBody, existingSkus, colorName) ||
+      ''
+    ).trim()
     const quantityValue = Number(
       source?.shopee?.stock_qty ??
       source?.shopee_variant_stock ??
@@ -1233,22 +1239,18 @@ const buildAddVariantRequestPreview = () => {
       0
     )
     const priceValue = String(
+      addVariantTool.price ??
+      source?.price ??
       source?.shopee?.price ??
       source?.shopee_variant_price ??
-      source?.price ??
-      addVariantTool.price ??
       '50000'
     ).trim() || '50000'
-    const tiktokImageUri = firstTiktokUploadedImageUri(
-      imageUri,
-      findExistingTiktokImageUri(productBody, existingSkus, colorName)
-    )
     const generatedSku = {
       seller_sku: sellerSku,
       sales_attributes: [{
         ...baseAttribute,
         value_name: colorName,
-        ...(tiktokImageUri ? { sku_img: { uri: tiktokImageUri } } : {})
+        ...(imageUri ? { sku_img: { uri: imageUri } } : {})
       }],
       price: {
         currency: 'IDR',
