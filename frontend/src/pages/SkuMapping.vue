@@ -250,12 +250,20 @@ const channelStatusLabel = (status, source = '') => source === 'suggested_produc
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
 const tiktokMatchSource = (item) => String(item?.tiktok?.source || '').trim()
 const hasTiktokActual = (item) => {
-  const source = tiktokMatchSource(item)
-  if (source) {
-    return source !== 'suggested_product'
+  const status = String(item?.tiktok?.status || '').trim()
+  if (status === 'mapped') {
+    return true
   }
 
-  return Boolean(item?.tiktok?.sku_id || item?.tiktok?.status === 'mapped')
+  const source = tiktokMatchSource(item)
+  if (source === 'suggested_product') {
+    return false
+  }
+
+  const skuId = String(item?.tiktok?.sku_id || '').trim()
+  const skuName = String(item?.tiktok?.sku_name || item?.tiktok?.variant_name || '').trim()
+
+  return Boolean(skuId && skuName)
 }
 const hasTiktokProductCandidate = (item) => tiktokMatchSource(item) === 'suggested_product'
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
