@@ -157,7 +157,7 @@
                       <div v-else class="thumb fallback">TT</div>
                       <div>
                         <small>{{ tiktokPresenceLabel(item) }}</small>
-                        <small>Product/SKU: {{ hasTiktokActual(item) ? `${item.tiktok?.product_id || '-'} / ${item.tiktok?.sku_id || '-'}` : '-' }} | Kode/Stok: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }} / {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
+                        <small>Product/SKU: {{ hasTiktokActual(item) ? `${item.tiktok?.product_id || '-'} / ${item.tiktok?.sku_id || '-'}` : hasTiktokProductCandidate(item) ? `${item.tiktok?.product_id || '-'} / -` : '-' }} | Kode/Stok: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }} / {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
                         <small v-if="hasPrice(item.tiktok?.price)">Harga: {{ displayPrice(item.tiktok?.price) }}</small>
                       </div>
                     </div>
@@ -342,6 +342,12 @@
                   <span>price</span>
                   <input v-model.trim="addVariantTool.price" placeholder="50000" />
                 </label>
+                <label>
+                  <span>discount (%)</span>
+                  <input v-model.number="addVariantTool.discount" type="number" min="0" max="100" step="0.01" placeholder="10" />
+                </label>
+                <p class="field-hint">Diskon ini akan diterapkan ke semua SKU yang dipilih.</p>
+                <p class="field-hint">Harga final per SKU: {{ displayPrice(applyDiscountToPrice(addVariantTool.price, addVariantTool.discount)) }}</p>
                 <label>
                   <span>quantity</span>
                   <input v-model.number="addVariantTool.quantity" type="number" min="0" />
@@ -651,6 +657,7 @@ const addVariantTool = reactive({
   color_name: '',
   image_uri: '',
   price: '50000',
+  discount: 0,
   quantity: 1,
   dry_run: true
 })
@@ -706,14 +713,28 @@ const resolveTiktokSkuId = (item) => String(
   item?.stock_tiktok_sku_id ||
   ''
 ).trim()
-const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
+const tiktokMatchSource = (item) => String(item?.tiktok?.source || '').trim()
+const hasTiktokActual = (item) => {
+  const source = tiktokMatchSource(item)
+  if (source) {
+    return source !== 'suggested_product'
+  }
+
+  return Boolean(item?.tiktok?.sku_id || item?.tiktok?.status === 'mapped')
+}
+const hasTiktokProductCandidate = (item) => tiktokMatchSource(item) === 'suggested_product'
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
 const hasShopeeActual = (item) => Boolean(item?.shopee?.item_id || item?.shopee?.model_id || item?.shopee?.image_url || item?.shopee?.stock_qty !== null && item?.shopee?.stock_qty !== undefined)
 const hasShopeeCandidate = (item) => Boolean(item?.shopee?.seller_sku || item?.seller_sku)
-const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
+const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokProductCandidate(item) || hasTiktokCandidate(item)
 const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
 const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
-const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
+const tiktokPresenceLabel = (item) => {
+  if (hasTiktokActual(item)) return 'Ada di TikTok'
+  if (hasTiktokProductCandidate(item)) return 'Produk TikTok ada, varian belum cocok'
+  if (hasTiktokCandidate(item)) return 'Kode variasi cocok, varian TikTok belum ada'
+  return 'Varian ini tidak ada di TikTok'
+}
 const getGroupKey = (item) => item?.group_key || item?.shopee?.item_id || item?.tiktok?.product_id || item?.product_name || item?.internal_sku || ''
 const normalizeSelectionId = (value) => String(value ?? '').trim()
 const isVariantSelected = (item) => selectedVariantIds.value.includes(normalizeSelectionId(item?.id))
@@ -738,7 +759,7 @@ const resolveGroupTiktokSkuId = (group) => {
   return ''
 }
 const resolveSelectedTiktokProductId = () => resolveTiktokProductId(selectedItem.value) || resolveGroupTiktokProductId(activeGroup.value) || ''
-const resolveSelectedTiktokSkuId = () => resolveTiktokSkuId(selectedItem.value) || resolveGroupTiktokSkuId(activeGroup.value) || ''
+const resolveSelectedTiktokSkuId = () => resolveTiktokSkuId(selectedItem.value) || ''
 const sortGroupVariants = (group) => ({
   ...group,
   variants: [...group.variants].sort((a, b) => {
@@ -792,11 +813,21 @@ const canPrepareMissingVariant = (item) => Boolean(missingTargetChannel(item))
 const variantSortRank = (item) => {
   return item?.status === 'ready_to_sync' ? 0 : 1
 }
-const tiktokDetailHint = (item) => hasTiktokActual(item)
-  ? 'Data TikTok aktif sudah tersedia.'
-  : hasTiktokCandidate(item)
-    ? 'Yang cocok baru kode variasinya, belum ada varian TikTok aktif.'
-    : 'Varian ini memang belum ada di TikTok.'
+const tiktokDetailHint = (item) => {
+  if (hasTiktokActual(item)) {
+    return 'Data TikTok aktif sudah tersedia.'
+  }
+
+  if (hasTiktokProductCandidate(item)) {
+    return 'Produk TikTok sudah ada, tetapi varian ini belum cocok ke SKU aktif.'
+  }
+
+  if (hasTiktokCandidate(item)) {
+    return 'Yang cocok baru kode variasinya, belum ada varian TikTok aktif.'
+  }
+
+  return 'Varian ini memang belum ada di TikTok.'
+}
 const resolveAddVariantProductId = () => {
   return String(
     addVariantTool.product_id ||
@@ -945,23 +976,68 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
 
 const normalizeTextForSku = (value) => String(value || '').trim()
 
+const pickFirstArray = (...candidates) => {
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length) {
+      return candidate
+    }
+  }
+
+  return []
+}
+
+const resolveTiktokProductPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return null
+
+  if (payload.data && typeof payload.data === 'object') {
+    if (payload.data.product && typeof payload.data.product === 'object') {
+      return payload.data.product
+    }
+
+    return payload.data
+  }
+
+  if (payload.product && typeof payload.product === 'object') {
+    return payload.product
+  }
+
+  return payload
+}
+
+const resolveTiktokPayloadSkus = (payload) => {
+  if (!payload || typeof payload !== 'object') return []
+
+  return pickFirstArray(
+    payload.skus,
+    payload.sku_list,
+    payload.sku_info_list,
+    payload.sku_infos,
+    payload.skus_info,
+    payload.variants,
+    payload.model_list,
+    payload.product_skus
+  )
+}
+
 const getFirstSkuFromProductPayload = (payload) => {
-  const skus = Array.isArray(payload?.skus) ? payload.skus : []
+  const normalizedPayload = resolveTiktokProductPayload(payload)
+  const skus = resolveTiktokPayloadSkus(normalizedPayload)
   return skus.length ? skus[0] : null
 }
 
 const mapProductPayloadToVariantDefaults = (payload) => {
-  const firstSku = getFirstSkuFromProductPayload(payload)
+  const normalizedPayload = resolveTiktokProductPayload(payload) || {}
+  const firstSku = getFirstSkuFromProductPayload(normalizedPayload)
   const salesAttributes = Array.isArray(firstSku?.sales_attributes) ? firstSku.sales_attributes : []
   const firstAttribute = salesAttributes[0] || {}
   const inventory = Array.isArray(firstSku?.inventory) ? firstSku.inventory[0] : null
-  const mainImage = Array.isArray(payload?.main_images) ? payload.main_images[0] : null
+  const mainImage = Array.isArray(normalizedPayload?.main_images) ? normalizedPayload.main_images[0] : null
   const skuImage = firstAttribute?.sku_img?.uri || ''
   const salePrice = firstSku?.price?.sale_price || firstSku?.price?.amount || firstSku?.price?.tax_exclusive_price || '50000'
   const quantity = inventory?.quantity ?? 0
 
   return {
-    product_id: normalizeTextForSku(payload?.product_id || getProductTool.product_id || resolveSelectedTiktokProductId() || ''),
+    product_id: normalizeTextForSku(normalizedPayload?.product_id || normalizedPayload?.id || getProductTool.product_id || resolveSelectedTiktokProductId() || ''),
     seller_sku: normalizeTextForSku(firstSku?.seller_sku || ''),
     color_name: normalizeTextForSku(firstAttribute?.value_name || firstAttribute?.name || ''),
     image_uri: normalizeTextForSku(skuImage || mainImage?.uri || ''),
@@ -1108,13 +1184,7 @@ const apiGetProductResponsePayload = computed(() => {
   }
 })
 
-const apiGetProductResponseProduct = computed(() => {
-  const payload = apiGetProductResponsePayload.value
-  if (!payload) return null
-
-  if (payload?.data && typeof payload.data === 'object') return payload.data
-  return payload
-})
+const apiGetProductResponseProduct = computed(() => resolveTiktokProductPayload(apiGetProductResponsePayload.value))
 
 const cloneJson = (value) => {
   if (value === null || value === undefined) return value
@@ -1135,6 +1205,15 @@ const compareNumericStrings = (left, right) => {
   if (b === null) return 1
   if (a.length !== b.length) return a.length - b.length
   return a.localeCompare(b)
+}
+
+const extractTiktokProductIdFromPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') return ''
+
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload
+  const product = data?.product && typeof data.product === 'object' ? data.product : data
+  const candidate = product?.product_id ?? product?.id ?? product?.product?.id ?? data?.product_id ?? data?.id ?? ''
+  return String(candidate ?? '').trim()
 }
 
 const addNumericStrings = (value, step) => {
@@ -1238,18 +1317,46 @@ const buildNextNumericValue = (values, seed, preferredStep = null) => {
   return addNumericStrings(maxValue, step)
 }
 
+const normalizeDiscountPercent = (value) => {
+  const text = String(value ?? '').trim().replace(',', '.')
+  if (!text) return 0
+
+  const numeric = Number(text)
+  if (!Number.isFinite(numeric)) return 0
+
+  return Math.min(100, Math.max(0, numeric))
+}
+
+const applyDiscountToPrice = (priceValue, discountValue) => {
+  const basePrice = Number(String(priceValue ?? '').trim())
+  if (!Number.isFinite(basePrice) || basePrice <= 0) {
+    return 0
+  }
+
+  const discountPercent = normalizeDiscountPercent(discountValue)
+  if (discountPercent <= 0) {
+    return Math.max(0, Math.round(basePrice))
+  }
+
+  const discounted = Math.round(basePrice * (1 - (discountPercent / 100)))
+  return Math.max(1, discounted)
+}
+
 const extractTiktokProductBody = (payload) => {
   if (!payload || typeof payload !== 'object') return null
 
-  if (Array.isArray(payload.skus) || Array.isArray(payload.main_images) || String(payload.title || '').trim() !== '') {
-    return payload
+  const normalizedPayload = resolveTiktokProductPayload(payload)
+  if (!normalizedPayload || typeof normalizedPayload !== 'object') {
+    return null
   }
 
-  if (payload.data && typeof payload.data === 'object') {
-    const data = payload.data
-    if (Array.isArray(data.skus) || Array.isArray(data.main_images) || String(data.title || '').trim() !== '') {
-      return data
-    }
+  const skus = resolveTiktokPayloadSkus(normalizedPayload)
+  if (!Array.isArray(normalizedPayload.skus) && skus.length) {
+    normalizedPayload.skus = skus
+  }
+
+  if (Array.isArray(normalizedPayload.skus) || Array.isArray(normalizedPayload.main_images) || String(normalizedPayload.title || '').trim() !== '') {
+    return normalizedPayload
   }
 
   return null
@@ -1323,15 +1430,41 @@ const buildAddVariantRequestPreview = () => {
     stock_qty: Number(addVariantTool.quantity ?? 0)
   }]
 
+  const discountPercent = normalizeDiscountPercent(addVariantTool.discount)
   const generatedSkus = []
+  const existingVariantValueKeys = new Set(
+    existingSkus
+      .map((sku) => normalizeText(sku?.sales_attributes?.[0]?.value_name || sku?.sales_attributes?.[0]?.name || ''))
+      .filter(Boolean)
+  )
+  const generatedVariantValueKeys = new Set()
+  const existingSellerSkuKeys = new Set(
+    existingSkus
+      .map((sku) => normalizeTextForSku(sku?.seller_sku || '').toLowerCase())
+      .filter(Boolean)
+  )
+  const generatedSellerSkuKeys = new Set()
 
   skuDrafts.forEach((source, sourceIndex) => {
     const colorName = String(source?.variant_name || source?.tiktok?.variant_name || source?.tiktok?.sku_name || 'Variant Baru').trim() || 'Variant Baru'
-    const sellerSku = String(source?.seller_sku || source?.tiktok?.seller_sku || `SKU-${buildNextNumericValue(
+    const colorKey = normalizeText(colorName)
+    if (!colorKey) {
+      return
+    }
+
+    if (existingVariantValueKeys.has(colorKey) || generatedVariantValueKeys.has(colorKey)) {
+      return
+    }
+
+    let sellerSku = String(source?.seller_sku || source?.internal_sku || source?.tiktok?.seller_sku || `SKU-${buildNextNumericValue(
       existingSkus.map((sku) => sku.id || sku.sku_id),
       `${productTitle}|${colorName}|${sourceIndex}`,
       '65536'
     ).slice(-6)}`).trim()
+    const sellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
+    if (sellerSkuKey && (existingSellerSkuKeys.has(sellerSkuKey) || generatedSellerSkuKeys.has(sellerSkuKey))) {
+      sellerSku = ''
+    }
     const imageUri = String(
       source?.image_url ||
       source?.shopee?.image_url ||
@@ -1346,13 +1479,14 @@ const buildAddVariantRequestPreview = () => {
       addVariantTool.quantity ??
       0
     )
-    const priceValue = String(
+    const basePriceValue = String(
       addVariantTool.price ??
       source?.price ??
       source?.shopee?.price ??
       source?.shopee_variant_price ??
       '50000'
     ).trim() || '50000'
+    const discountedPriceValue = String(applyDiscountToPrice(basePriceValue, discountPercent))
     const generatedSku = {
       seller_sku: sellerSku,
       sales_attributes: [{
@@ -1362,9 +1496,9 @@ const buildAddVariantRequestPreview = () => {
       }],
       price: {
         currency: 'IDR',
-        sale_price: priceValue,
-        tax_exclusive_price: priceValue,
-        amount: priceValue
+        sale_price: discountedPriceValue,
+        tax_exclusive_price: discountedPriceValue,
+        amount: discountedPriceValue
       },
       inventory: [{
         quantity: quantityValue,
@@ -1372,6 +1506,11 @@ const buildAddVariantRequestPreview = () => {
       }]
     }
     generatedSkus.push(generatedSku)
+    generatedVariantValueKeys.add(colorKey)
+    const generatedSellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
+    if (generatedSellerSkuKey) {
+      generatedSellerSkuKeys.add(generatedSellerSkuKey)
+    }
   })
 
   productBody.save_mode = 'LISTING'
@@ -1513,6 +1652,7 @@ const addVariantRequestPreview = computed(() => {
       color_name: addVariantTool.color_name,
       image_uri: addVariantTool.image_uri,
       price: addVariantTool.price,
+      discount: addVariantTool.discount,
       quantity: addVariantTool.quantity,
       dry_run: addVariantTool.dry_run,
       preview_error: error?.message || 'Request demo gagal digenerate.'
@@ -1813,19 +1953,20 @@ const submitGetProductDemo = async () => {
 
     const responseText = await extractResponseText(response)
     getProductResponseText.value = responseText
-    try {
-      const parsed = responseText ? JSON.parse(responseText) : null
-      getProductResponseStatus.value = String(parsed?.code ?? response.status ?? 0)
+    const parsed = parseResponseJson(responseText)
+    getProductResponseStatus.value = String(parsed?.code ?? response.status ?? 0)
 
-      if (Number(parsed?.code ?? -1) === 0) {
-        try {
-          await refreshMappingTableAfterGetProduct()
-        } catch (refreshError) {
-          loadError.value = refreshError?.message || 'Data tabel gagal di-refresh setelah Get Product.'
-        }
+    if (Number(parsed?.code ?? -1) === 0) {
+      const returnedProductId = extractTiktokProductIdFromPayload(parsed)
+      if (returnedProductId) {
+        getProductTool.product_id = returnedProductId
       }
-    } catch {
-      getProductResponseStatus.value = String(response.status ?? 0)
+
+      try {
+        await refreshMappingTableAfterGetProduct(returnedProductId)
+      } catch (refreshError) {
+        loadError.value = refreshError?.message || 'Data tabel gagal di-refresh setelah Get Product.'
+      }
     }
   } catch (error) {
     getProductResponseText.value = error?.message ? String(error.message) : ''
@@ -1917,11 +2058,23 @@ const loadData = async (resetPage = false, options = {}) => {
   }
 }
 
-const refreshMappingTableAfterGetProduct = async () => {
+const refreshMappingTableAfterGetProduct = async (focusProductId = '') => {
   await loadData(false, {
     bypassCache: true,
     preserveSelection: true
   })
+
+  const targetProductId = String(focusProductId || getProductTool.product_id || '').trim()
+  if (!targetProductId) return
+
+  const refreshed = items.value.find((item) => resolveTiktokProductId(item) === targetProductId)
+    || groupedItems.value.find((group) => group.variants.some((item) => resolveTiktokProductId(item) === targetProductId))
+      ?.variants?.[0]
+    || null
+
+  if (refreshed) {
+    selectItem(refreshed, { resetGetProductResponse: false })
+  }
 }
 
 const changePage = async (nextPage) => {
@@ -1931,10 +2084,11 @@ const changePage = async (nextPage) => {
   await loadData()
 }
 
-const selectItem = (item) => {
+const selectItem = (item, options = {}) => {
+  const { resetGetProductResponse = true } = options
   const group = groupedItems.value.find((candidate) => candidate.key === getGroupKey(item)) || null
   const resolvedProductId = resolveTiktokProductId(item) || resolveGroupTiktokProductId(group)
-  const resolvedSkuId = resolveTiktokSkuId(item) || resolveGroupTiktokSkuId(group)
+  const resolvedSkuId = resolveTiktokSkuId(item)
 
   selectedItem.value = item
   form.stock_master_id = item.stock_master_id || (typeof item.id === 'number' ? item.id : null)
@@ -1948,8 +2102,10 @@ const selectItem = (item) => {
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
   getProductTool.product_id = resolvedProductId
-  getProductResponseText.value = ''
-  getProductResponseStatus.value = '0'
+  if (resetGetProductResponse) {
+    getProductResponseText.value = ''
+    getProductResponseStatus.value = '0'
+  }
   fillAddVariantToolFromItem(item, resolvedProductId)
 }
 
@@ -2116,6 +2272,7 @@ onMounted(async () => {
 .api-shop-auth label, .api-path-params label, .api-query-params label { display:block; margin-bottom:12px; }
 .api-shop-auth span, .api-path-params span, .api-query-params span { display:block; color:#6b7280; font-size:12px; margin-bottom:6px; }
 .api-shop-auth em, .api-path-params em, .api-query-params em { font-style:normal; color:#9ca3af; }
+.field-hint { margin:-6px 0 12px; color:#64748b; font-size:12px; line-height:1.45; }
 .api-bool-row { margin-bottom:12px; }
 .api-bool-row > span { display:block; color:#6b7280; font-size:12px; margin-bottom:6px; }
 .api-radio-group { display:flex; align-items:center; gap:18px; color:#111827; font-size:13px; }

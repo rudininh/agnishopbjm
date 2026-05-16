@@ -2085,6 +2085,7 @@ class OmnichannelController extends Controller
             'spm.name as shopee_variant_name',
             'spm.price as shopee_variant_price',
             'spm.stock as shopee_variant_stock',
+            'sp.status as shopee_status',
             'spmi.image_url as shopee_model_image_url',
             'spi.image_url as shopee_product_image_url'
         );
@@ -2121,6 +2122,8 @@ class OmnichannelController extends Controller
             $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
             $shopeeModelId = $row->shopee_model_id ?: $row->stock_shopee_model_id;
             $shopeeSellerSku = $row->mapped_seller_sku ?: $row->stock_shopee_seller_sku;
+            $shopeeStatus = trim((string) ($row->shopee_status ?? ''));
+            $shopeeIsLive = $this->isLiveShopeeStatus($shopeeStatus);
             $stockGroupKey = $this->stockMappingGroupKey($row);
             $matchedProductId = $stockGroupTiktokMatches[$stockGroupKey] ?? null;
             $canonicalGroupKey = $matchedProductId && isset($matchedTiktokToStockGroup[$matchedProductId])
@@ -2144,11 +2147,15 @@ class OmnichannelController extends Controller
                 || $this->filledString($row->shopee_product_image_url ?? null)
                 || $this->filledString($row->shopee_image_url ?? null)
                 || ($row->shopee_variant_stock ?? $row->stock_qty ?? null) !== null;
-            $hasTiktokActual = $this->filledString($tiktokProductId)
-                || $this->filledString($tiktokSkuId)
-                || $this->filledString($tiktokMatch->image_url ?? null)
-                || $this->filledString($tiktokMatch->product_image_url ?? null)
-                || ($tiktokMatch !== null && (($tiktokMatch->stock_qty ?? null) !== null));
+            $hasTiktokActual = $tiktokMatchSource === 'suggested_product'
+                ? false
+                : ($tiktokMatchSource !== null
+                    ? true
+                    : $this->filledString($tiktokProductId)
+                        || $this->filledString($tiktokSkuId)
+                        || $this->filledString($tiktokMatch->image_url ?? null)
+                        || $this->filledString($tiktokMatch->product_image_url ?? null)
+                        || ($tiktokMatch !== null && (($tiktokMatch->stock_qty ?? null) !== null)));
 
             $shopeeImageUrl = $row->shopee_model_image_url
                 ?: $row->internal_image_url
@@ -2178,6 +2185,8 @@ class OmnichannelController extends Controller
                 'shopee' => [
                     'item_id' => $shopeeItemId,
                     'model_id' => $shopeeModelId,
+                    'status' => $shopeeStatus !== '' ? $shopeeStatus : null,
+                    'is_live' => $shopeeIsLive,
                     'product_name' => $row->shopee_name ?: $row->product_name,
                     'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
                     'seller_sku' => $shopeeSellerSku,
@@ -2265,6 +2274,10 @@ class OmnichannelController extends Controller
 
         $items = collect($items)
             ->filter(function (array $item) use ($search, $status, $flow) {
+                if ($flow === 'shopee-to-tiktok' && ! ($item['shopee']['is_live'] ?? false)) {
+                    return false;
+                }
+
                 $matchesStatus = match ($status) {
                     'ready_to_sync', 'shopee_missing', 'tiktok_missing', 'belum_ada_variant' => $item['status'] === $status,
                     'all' => match ($flow) {
@@ -2554,6 +2567,7 @@ class OmnichannelController extends Controller
             $row->mapped_seller_sku ?? null,
             $row->stock_tiktok_seller_sku ?? null,
             $row->stock_shopee_seller_sku ?? null,
+            $row->internal_sku ?? null,
         ] as $candidate) {
             if (is_string($candidate) && trim($candidate) !== '') {
                 $sellerSku = trim($candidate);
