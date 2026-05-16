@@ -107,7 +107,7 @@
             <template v-for="group in groupedItems" :key="group.key">
               <tbody>
                 <tr class="product-row">
-                  <td colspan="5">
+                  <td colspan="4">
                     <div class="product-row-inner" @click="toggleGroup(group.key)">
                       <button type="button" class="expand group-toggle" @click.stop="toggleGroup(group.key)">
                         {{ isExpanded(group.key) ? '−' : '+' }}
@@ -124,6 +124,16 @@
                         <span :class="['badge', group.status]">{{ labelStatus(group.status) }}</span>
                       </div>
                     </div>
+                  </td>
+                  <td class="check-col group-check-col">
+                    <input
+                      type="checkbox"
+                      :checked="isGroupVariantsSelected(group)"
+                      :indeterminate="isGroupVariantsPartiallySelected(group) && !isGroupVariantsSelected(group)"
+                      aria-label="Pilih semua varian pada produk ini"
+                      @click.stop
+                      @change="toggleGroupVariantSelection(group, $event.target.checked)"
+                    />
                   </td>
                 </tr>
                 <tr
@@ -715,12 +725,20 @@ const resolveTiktokSkuId = (item) => String(
 ).trim()
 const tiktokMatchSource = (item) => String(item?.tiktok?.source || '').trim()
 const hasTiktokActual = (item) => {
-  const source = tiktokMatchSource(item)
-  if (source) {
-    return source !== 'suggested_product'
+  const status = String(item?.tiktok?.status || '').trim()
+  if (status === 'mapped') {
+    return true
   }
 
-  return Boolean(item?.tiktok?.sku_id || item?.tiktok?.status === 'mapped')
+  const source = tiktokMatchSource(item)
+  if (source === 'suggested_product') {
+    return false
+  }
+
+  const skuId = String(item?.tiktok?.sku_id || '').trim()
+  const skuName = normalizeText(item?.tiktok?.sku_name || item?.tiktok?.variant_name || '')
+
+  return Boolean(skuId && skuName)
 }
 const hasTiktokProductCandidate = (item) => tiktokMatchSource(item) === 'suggested_product'
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
@@ -804,6 +822,26 @@ const selectedVariantPayloadLabels = computed(() => {
 })
 const allDisplayedVariantsSelected = computed(() => displayVariants.value.length > 0 && displayVariants.value.every((item) => isVariantSelected(item)))
 const someDisplayedVariantsSelected = computed(() => displayVariants.value.some((item) => isVariantSelected(item)))
+const groupVariantIds = (group) => {
+  return (group?.variants || [])
+    .map((item) => normalizeSelectionId(item?.id))
+    .filter(Boolean)
+}
+const isGroupVariantsSelected = (group) => {
+  const ids = groupVariantIds(group)
+  if (!ids.length) return false
+
+  const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
+  return ids.every((id) => selected.has(id))
+}
+const isGroupVariantsPartiallySelected = (group) => {
+  const ids = groupVariantIds(group)
+  if (!ids.length) return false
+
+  const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
+  const selectedCount = ids.filter((id) => selected.has(id)).length
+  return selectedCount > 0 && selectedCount < ids.length
+}
 const missingTargetChannel = (item) => {
   if (hasShopeeActual(item) && !hasTiktokActual(item)) return 'tiktok'
   if (hasTiktokActual(item) && !hasShopeeActual(item)) return 'shopee'
@@ -878,6 +916,28 @@ const toggleDisplayedVariantsSelection = (checked) => {
     visibleIds.forEach((id) => {
       selected.delete(id)
       delete selectedVariantSnapshots[id]
+    })
+  }
+
+  selectedVariantIds.value = Array.from(selected)
+}
+const toggleGroupVariantSelection = (group, checked) => {
+  const variants = group?.variants || []
+  const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
+
+  if (checked) {
+    variants.forEach((item) => {
+      const key = normalizeSelectionId(item?.id)
+      if (!key) return
+      selected.add(key)
+      selectedVariantSnapshots[key] = cloneJson(item) || item
+    })
+  } else {
+    variants.forEach((item) => {
+      const key = normalizeSelectionId(item?.id)
+      if (!key) return
+      selected.delete(key)
+      delete selectedVariantSnapshots[key]
     })
   }
 
@@ -1986,6 +2046,7 @@ const loadData = async (resetPage = false, options = {}) => {
   loading.value = true
   loadError.value = ''
   if (resetPage) pagination.page = 1
+  const effectiveBypassCache = bypassCache || resetPage
   const cacheKey = JSON.stringify({
     flow: flowKey.value,
     search: filters.search,
@@ -1996,7 +2057,7 @@ const loadData = async (resetPage = false, options = {}) => {
   })
   const selectedIdBeforeRefresh = preserveSelection ? selectedItem.value?.id || null : null
   try {
-    if (!bypassCache && pageCache.has(cacheKey)) {
+    if (!effectiveBypassCache && pageCache.has(cacheKey)) {
       const cached = pageCache.get(cacheKey)
       items.value = cached.items
       Object.assign(pagination, cached.pagination)

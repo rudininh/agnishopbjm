@@ -1776,7 +1776,6 @@ class OmnichannelController extends Controller
             data_get($sku, 'sku_name'),
             data_get($sku, 'name'),
             data_get($sku, 'sku_title'),
-            data_get($sku, 'seller_sku'),
         ] as $candidate) {
             if (is_string($candidate) && trim($candidate) !== '') {
                 $trimmed = trim($candidate);
@@ -1807,6 +1806,11 @@ class OmnichannelController extends Controller
             if ($parts !== []) {
                 return implode(' / ', $parts);
             }
+        }
+
+        $sellerSku = data_get($sku, 'seller_sku');
+        if (is_string($sellerSku) && trim($sellerSku) !== '') {
+            return trim($sellerSku);
         }
 
         return 'Default';
@@ -2147,15 +2151,14 @@ class OmnichannelController extends Controller
                 || $this->filledString($row->shopee_product_image_url ?? null)
                 || $this->filledString($row->shopee_image_url ?? null)
                 || ($row->shopee_variant_stock ?? $row->stock_qty ?? null) !== null;
+            $hasTiktokVariantIdentity = $tiktokMatch !== null && (
+                $this->filledString($tiktokMatch->sku_id ?? null)
+                || $this->normalizeSkuMatchValue($tiktokMatch->sku_name ?? '') !== ''
+                || $this->normalizeSkuMatchValue($tiktokMatch->seller_sku ?? '') !== ''
+            );
             $hasTiktokActual = $tiktokMatchSource === 'suggested_product'
                 ? false
-                : ($tiktokMatchSource !== null
-                    ? true
-                    : $this->filledString($tiktokProductId)
-                        || $this->filledString($tiktokSkuId)
-                        || $this->filledString($tiktokMatch->image_url ?? null)
-                        || $this->filledString($tiktokMatch->product_image_url ?? null)
-                        || ($tiktokMatch !== null && (($tiktokMatch->stock_qty ?? null) !== null)));
+                : $hasTiktokVariantIdentity;
 
             $shopeeImageUrl = $row->shopee_model_image_url
                 ?: $row->internal_image_url
@@ -2201,10 +2204,10 @@ class OmnichannelController extends Controller
                     'sku_id' => $tiktokSkuId ?: ($tiktokMatch->sku_id ?? null),
                     'sku_name' => $tiktokSkuName ?: ($tiktokMatch->sku_name ?? null),
                     'seller_sku' => $tiktokSellerSku ?: ($tiktokMatch->seller_sku ?? null),
-                    'price' => isset($tiktokMatch->price) ? (int) $tiktokMatch->price : null,
+                    'price' => $hasTiktokVariantIdentity && isset($tiktokMatch->price) ? (int) $tiktokMatch->price : null,
                     'product_name' => $tiktokMatch->product_name ?? null,
                     'variant_name' => $tiktokMatch->sku_name ?? $tiktokSkuName,
-                    'stock_qty' => $tiktokMatch ? (int) ($tiktokMatch->stock_qty ?? 0) : null,
+                    'stock_qty' => $hasTiktokVariantIdentity ? (int) ($tiktokMatch->stock_qty ?? 0) : null,
                     'image_url' => $tiktokImageUrl,
                     'status' => $hasTiktokActual ? 'mapped' : ($tiktokMatch ? 'suggested' : 'unmapped'),
                     'source' => $tiktokMatchSource,
@@ -2633,11 +2636,11 @@ class OmnichannelController extends Controller
                     'sku_name' => null,
                     'seller_sku' => null,
                     'stock_qty' => null,
-                ], $hasSavedMapping ? 'saved' : 'suggested_product'];
+                ], 'suggested_product'];
             }
         }
 
-        return [null, $hasSavedMapping ? 'saved' : null];
+        return [null, null];
     }
 
     private function bestTiktokVariantCandidateForStockRow(object $row, array $candidates, array $tiktokProductGroups): ?object
