@@ -129,16 +129,17 @@
                           v-if="item.tiktok?.status && item.tiktok.status !== 'unmapped'"
                           :class="['channel-badge', item.tiktok.status]"
                         >
-                          {{ channelStatusLabel(item.tiktok.status) }}
+                          {{ channelStatusLabel(item.tiktok.status, item.tiktok?.source) }}
                         </span>
                       </div>
                       <small>{{ tiktokPresenceLabel(item) }}</small>
                       <small>{{ item.tiktok?.product_name || '-' }}</small>
-                      <small>Product ID: {{ hasTiktokActual(item) ? (item.tiktok?.product_id || '-') : '-' }}</small>
+                      <small>Product ID: {{ hasTiktokActual(item) ? (item.tiktok?.product_id || '-') : hasTiktokProductCandidate(item) ? `${item.tiktok?.product_id || '-'} (kandidat produk)` : '-' }}</small>
                       <small>SKU ID: {{ hasTiktokActual(item) ? (item.tiktok?.sku_id || '-') : '-' }}</small>
                       <small>Nama Varian: {{ item.variant_name || item.tiktok?.variant_name || '-' }}</small>
                       <small>Kode Variasi: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }}</small>
                       <small v-if="hasTiktokActual(item)">Kode SKU TikTok: {{ item.tiktok?.sku_name || '-' }}</small>
+                      <small v-else-if="hasTiktokProductCandidate(item)">Produk TikTok sudah ada, tetapi varian ini belum aktif.</small>
                       <small v-else>Kode ini belum menunjuk ke varian TikTok yang aktif.</small>
                       <small>Stok: {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
                     </div>
@@ -239,27 +240,57 @@ const form = reactive({
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
 const labelStatus = (status) => status === 'ready_to_sync' ? 'Siap disinkronkan' : status === 'submitted' ? 'Dikirim ke TikTok' : status === 'failed' ? 'Gagal kirim' : status === 'ready_to_create' ? 'Siap dibuat' : status === 'needs_creation' ? 'Perlu dibuat' : status === 'both' ? 'Shopee + TikTok' : status === 'shopee_only' ? 'Hanya Shopee' : status === 'tiktok_only' ? 'Hanya TikTok' : 'Belum dipasangkan'
-const channelStatusLabel = (status) => status === 'mapped' ? 'Tersimpan' : status === 'suggested' ? 'Kandidat kode variasi' : 'Belum'
+const channelStatusLabel = (status, source = '') => source === 'suggested_product'
+  ? 'Kandidat produk'
+  : status === 'mapped'
+    ? (source === 'saved' ? 'Tersimpan' : 'Ada di TikTok')
+    : status === 'suggested'
+      ? 'Kandidat kode variasi'
+      : 'Belum'
 const displayStock = (value) => value === null || value === undefined || value === '' ? '-' : Number(value)
-const hasTiktokActual = (item) => Boolean(item?.tiktok?.product_id || item?.tiktok?.sku_id || item?.tiktok?.image_url || item?.tiktok?.stock_qty !== null && item?.tiktok?.stock_qty !== undefined)
+const tiktokMatchSource = (item) => String(item?.tiktok?.source || '').trim()
+const hasTiktokActual = (item) => {
+  const source = tiktokMatchSource(item)
+  if (source) {
+    return source !== 'suggested_product'
+  }
+
+  return Boolean(item?.tiktok?.sku_id || item?.tiktok?.status === 'mapped')
+}
+const hasTiktokProductCandidate = (item) => tiktokMatchSource(item) === 'suggested_product'
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
 const hasShopeeActual = (item) => Boolean(item?.shopee?.item_id || item?.shopee?.model_id || item?.shopee?.image_url || item?.shopee?.stock_qty !== null && item?.shopee?.stock_qty !== undefined)
 const hasShopeeCandidate = (item) => Boolean(item?.shopee?.seller_sku || item?.seller_sku)
-const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokCandidate(item)
+const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokProductCandidate(item) || hasTiktokCandidate(item)
 const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
 const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
-const tiktokPresenceLabel = (item) => hasTiktokActual(item) ? 'Ada di TikTok' : hasTiktokCandidate(item) ? 'Kode variasi cocok, varian TikTok belum ada' : 'Varian ini tidak ada di TikTok'
+const tiktokPresenceLabel = (item) => {
+  if (hasTiktokActual(item)) return 'Ada di TikTok'
+  if (hasTiktokProductCandidate(item)) return 'Produk TikTok ada, varian belum cocok'
+  if (hasTiktokCandidate(item)) return 'Kode variasi cocok, varian TikTok belum ada'
+  return 'Varian ini tidak ada di TikTok'
+}
 const missingTargetChannel = (item) => {
   if (hasShopeeActual(item) && !hasTiktokActual(item)) return 'tiktok'
   if (hasTiktokActual(item) && !hasShopeeActual(item)) return 'shopee'
   return null
 }
 const canPrepareMissingVariant = (item) => Boolean(missingTargetChannel(item))
-const tiktokDetailHint = (item) => hasTiktokActual(item)
-  ? 'Data TikTok aktif sudah tersedia.'
-  : hasTiktokCandidate(item)
-    ? 'Yang cocok baru kode variasinya, belum ada varian TikTok aktif.'
-    : 'Varian ini memang belum ada di TikTok.'
+const tiktokDetailHint = (item) => {
+  if (hasTiktokActual(item)) {
+    return 'Data TikTok aktif sudah tersedia.'
+  }
+
+  if (hasTiktokProductCandidate(item)) {
+    return 'Produk TikTok sudah ada, tetapi varian ini belum cocok ke SKU aktif.'
+  }
+
+  if (hasTiktokCandidate(item)) {
+    return 'Yang cocok baru kode variasinya, belum ada varian TikTok aktif.'
+  }
+
+  return 'Varian ini memang belum ada di TikTok.'
+}
 const shopeeDetailHint = (item) => hasShopeeActual(item)
   ? 'Data Shopee aktif sudah tersedia.'
   : hasShopeeCandidate(item)
