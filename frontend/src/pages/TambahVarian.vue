@@ -1026,11 +1026,15 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
   ).trim()
   const priceValue = item.shopee_variant_price ?? item.shopee?.price ?? item.price ?? addVariantTool.price
   const quantityValue = item.shopee_variant_stock ?? item.shopee?.stock_qty ?? item.stock_qty ?? 0
+  const normalizedPrice = normalizePriceInput(
+    priceValue,
+    normalizePriceInput(addVariantTool.price, '50000')
+  )
 
   addVariantTool.seller_sku = sellerSku
   addVariantTool.color_name = colorName
   addVariantTool.image_uri = imageUri
-  addVariantTool.price = String(priceValue ?? '').trim() || '50000'
+  addVariantTool.price = normalizedPrice || '50000'
   addVariantTool.quantity = Number(quantityValue ?? 0)
 }
 
@@ -1257,6 +1261,16 @@ const normalizeNumericString = (value) => {
   return text.replace(/^0+/, '') || '0'
 }
 
+const normalizePriceInput = (value, fallback = null) => {
+  const text = String(value ?? '').trim()
+  if (!text) return fallback
+
+  const digitsOnly = text.replace(/[^\d]/g, '')
+  if (!digitsOnly) return fallback
+
+  return digitsOnly.replace(/^0+/, '') || '0'
+}
+
 const compareNumericStrings = (left, right) => {
   const a = normalizeNumericString(left)
   const b = normalizeNumericString(right)
@@ -1388,7 +1402,8 @@ const normalizeDiscountPercent = (value) => {
 }
 
 const applyDiscountToPrice = (priceValue, discountValue) => {
-  const basePrice = Number(String(priceValue ?? '').trim())
+  const normalizedPrice = normalizePriceInput(priceValue)
+  const basePrice = Number(normalizedPrice ?? String(priceValue ?? '').trim().replace(',', '.'))
   if (!Number.isFinite(basePrice) || basePrice <= 0) {
     return 0
   }
@@ -1492,18 +1507,20 @@ const buildAddVariantRequestPreview = () => {
 
   const discountPercent = normalizeDiscountPercent(addVariantTool.discount)
   const generatedSkus = []
-  const existingVariantValueKeys = new Set(
-    existingSkus
-      .map((sku) => normalizeText(sku?.sales_attributes?.[0]?.value_name || sku?.sales_attributes?.[0]?.name || ''))
-      .filter(Boolean)
-  )
-  const generatedVariantValueKeys = new Set()
+  const existingVariantIndexByKey = new Map()
+  existingSkus.forEach((sku, index) => {
+    const key = normalizeText(sku?.sales_attributes?.[0]?.value_name || sku?.sales_attributes?.[0]?.name || '')
+    if (!key || existingVariantIndexByKey.has(key)) return
+    existingVariantIndexByKey.set(key, index)
+  })
+  const processedVariantValueKeys = new Set()
   const existingSellerSkuKeys = new Set(
     existingSkus
       .map((sku) => normalizeTextForSku(sku?.seller_sku || '').toLowerCase())
       .filter(Boolean)
   )
   const generatedSellerSkuKeys = new Set()
+  const manualPriceInput = normalizePriceInput(addVariantTool.price)
 
   skuDrafts.forEach((source, sourceIndex) => {
     const colorName = String(source?.variant_name || source?.tiktok?.variant_name || source?.tiktok?.sku_name || 'Variant Baru').trim() || 'Variant Baru'
@@ -1512,19 +1529,18 @@ const buildAddVariantRequestPreview = () => {
       return
     }
 
-    if (existingVariantValueKeys.has(colorKey) || generatedVariantValueKeys.has(colorKey)) {
+    if (processedVariantValueKeys.has(colorKey)) {
       return
     }
+    processedVariantValueKeys.add(colorKey)
+
+    const existingVariantIndex = existingVariantIndexByKey.get(colorKey)
 
     let sellerSku = String(source?.seller_sku || source?.internal_sku || source?.tiktok?.seller_sku || `SKU-${buildNextNumericValue(
       existingSkus.map((sku) => sku.id || sku.sku_id),
       `${productTitle}|${colorName}|${sourceIndex}`,
       '65536'
     ).slice(-6)}`).trim()
-    const sellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
-    if (sellerSkuKey && (existingSellerSkuKeys.has(sellerSkuKey) || generatedSellerSkuKeys.has(sellerSkuKey))) {
-      sellerSku = ''
-    }
     const imageUri = String(
       source?.image_url ||
       source?.shopee?.image_url ||
@@ -1539,14 +1555,71 @@ const buildAddVariantRequestPreview = () => {
       addVariantTool.quantity ??
       0
     )
-    const basePriceValue = String(
-      addVariantTool.price ??
+    const sourcePriceValue =
+      source?.price?.sale_price ??
+      source?.price?.amount ??
+      source?.price?.tax_exclusive_price ??
       source?.price ??
       source?.shopee?.price ??
       source?.shopee_variant_price ??
       '50000'
-    ).trim() || '50000'
+    const basePriceValue = manualPriceInput || normalizePriceInput(sourcePriceValue, '50000') || '50000'
     const discountedPriceValue = String(applyDiscountToPrice(basePriceValue, discountPercent))
+
+    if (existingVariantIndex !== undefined) {
+      const existingSku = cloneJson(existingSkus[existingVariantIndex]) || {}
+      const existingSellerSkuKey = normalizeTextForSku(existingSku?.seller_sku || '').toLowerCase()
+      const requestedSellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
+      if (requestedSellerSkuKey && requestedSellerSkuKey !== existingSellerSkuKey) {
+        if (existingSellerSkuKeys.has(requestedSellerSkuKey) || generatedSellerSkuKeys.has(requestedSellerSkuKey)) {
+          sellerSku = existingSku?.seller_sku || sellerSku
+        }
+      }
+
+      if (sellerSku) {
+        existingSku.seller_sku = sellerSku
+      }
+
+      const currentAttribute = Array.isArray(existingSku.sales_attributes) ? existingSku.sales_attributes[0] || {} : {}
+      existingSku.sales_attributes = [{
+        ...baseAttribute,
+        ...currentAttribute,
+        value_name: colorName,
+        ...(imageUri ? { sku_img: { uri: imageUri } } : {})
+      }]
+
+      const currentPrice = existingSku.price && typeof existingSku.price === 'object' && !Array.isArray(existingSku.price)
+        ? existingSku.price
+        : {}
+      existingSku.price = {
+        ...currentPrice,
+        currency: 'IDR',
+        sale_price: discountedPriceValue,
+        tax_exclusive_price: discountedPriceValue,
+        amount: discountedPriceValue
+      }
+
+      const currentInventory = Array.isArray(existingSku.inventory) ? existingSku.inventory[0] || {} : {}
+      existingSku.inventory = [{
+        ...currentInventory,
+        quantity: quantityValue,
+        warehouse_id: String(currentInventory.warehouse_id || TIKTOK_VARIANT_WAREHOUSE_ID)
+      }]
+
+      existingSkus[existingVariantIndex] = existingSku
+
+      const updatedSellerSkuKey = normalizeTextForSku(existingSku?.seller_sku || '').toLowerCase()
+      if (updatedSellerSkuKey) {
+        generatedSellerSkuKeys.add(updatedSellerSkuKey)
+      }
+      return
+    }
+
+    const sellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
+    if (sellerSkuKey && (existingSellerSkuKeys.has(sellerSkuKey) || generatedSellerSkuKeys.has(sellerSkuKey))) {
+      sellerSku = ''
+    }
+
     const generatedSku = {
       seller_sku: sellerSku,
       sales_attributes: [{
@@ -1566,7 +1639,6 @@ const buildAddVariantRequestPreview = () => {
       }]
     }
     generatedSkus.push(generatedSku)
-    generatedVariantValueKeys.add(colorKey)
     const generatedSellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
     if (generatedSellerSkuKey) {
       generatedSellerSkuKeys.add(generatedSellerSkuKey)
