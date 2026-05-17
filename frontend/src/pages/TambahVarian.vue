@@ -751,7 +751,7 @@ const tiktokPresenceLabel = (item) => {
   if (hasTiktokActual(item)) return 'Ada di TikTok'
   if (hasTiktokProductCandidate(item)) return 'Produk TikTok ada, varian belum cocok'
   if (hasTiktokCandidate(item)) return 'Kode variasi cocok, varian TikTok belum ada'
-  return 'Varian ini tidak ada di TikTok'
+  return 'Produk tidak ada dan variant tidak ada'
 }
 const getGroupKey = (item) => item?.group_key || item?.shopee?.item_id || item?.tiktok?.product_id || item?.product_name || item?.internal_sku || ''
 const normalizeSelectionId = (value) => String(value ?? '').trim()
@@ -1470,11 +1470,46 @@ const findExistingTiktokImageUri = (productBody, existingSkus, preferredValueNam
   )
 }
 
+const normalizeTiktokSkuPreSaleType = (value) => String(value || '').trim()
+
+const resolveDefaultTiktokSkuPreSale = (skus) => {
+  const existingPreSale = skus
+    .map((sku) => sku?.pre_sale)
+    .find((preSale) => {
+      return preSale &&
+        typeof preSale === 'object' &&
+        !Array.isArray(preSale) &&
+        normalizeTiktokSkuPreSaleType(preSale.type)
+    })
+
+  return cloneJson(existingPreSale) || { type: 'NONE' }
+}
+
+const applyDefaultTiktokSkuPreSale = (sku, defaultPreSale) => {
+  if (!sku || typeof sku !== 'object') return sku
+
+  const currentPreSale = sku.pre_sale && typeof sku.pre_sale === 'object' && !Array.isArray(sku.pre_sale)
+    ? sku.pre_sale
+    : null
+
+  if (!currentPreSale || !normalizeTiktokSkuPreSaleType(currentPreSale.type)) {
+    sku.pre_sale = cloneJson(defaultPreSale) || { type: 'NONE' }
+  }
+
+  if (normalizeTiktokSkuPreSaleType(sku.pre_sale?.type) === 'NONE') {
+    delete sku.pre_sale.fulfillment_type
+  }
+
+  return sku
+}
+
 const buildAddVariantRequestPreview = () => {
   const productBody = cloneJson(extractTiktokProductBody(apiGetProductResponsePayload.value)) || {}
   const existingSkus = Array.isArray(productBody.skus)
     ? productBody.skus.map((sku) => cloneJson(sku) || {})
     : []
+  const defaultSkuPreSale = resolveDefaultTiktokSkuPreSale(existingSkus)
+  existingSkus.forEach((sku) => applyDefaultTiktokSkuPreSale(sku, defaultSkuPreSale))
   const selectedSources = getSelectedVariantSources()
   const titleSource = selectedSources[0] || selectedItem.value || {}
 
@@ -1605,6 +1640,7 @@ const buildAddVariantRequestPreview = () => {
         quantity: quantityValue,
         warehouse_id: String(currentInventory.warehouse_id || TIKTOK_VARIANT_WAREHOUSE_ID)
       }]
+      applyDefaultTiktokSkuPreSale(existingSku, defaultSkuPreSale)
 
       existingSkus[existingVariantIndex] = existingSku
 
@@ -1636,8 +1672,10 @@ const buildAddVariantRequestPreview = () => {
       inventory: [{
         quantity: quantityValue,
         warehouse_id: TIKTOK_VARIANT_WAREHOUSE_ID
-      }]
+      }],
+      pre_sale: cloneJson(defaultSkuPreSale) || { type: 'NONE' }
     }
+    applyDefaultTiktokSkuPreSale(generatedSku, defaultSkuPreSale)
     generatedSkus.push(generatedSku)
     const generatedSellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
     if (generatedSellerSkuKey) {

@@ -3370,6 +3370,7 @@ class OmnichannelController extends Controller
         }
 
         try {
+            $decodedPayload = $this->normalizeTiktokGeneratedPayloadDefaults($decodedPayload);
             $decodedPayload = $this->normalizeTiktokGeneratedPayloadImages($decodedPayload, $accessToken);
         } catch (\Throwable $exception) {
             return response()->json([
@@ -3430,6 +3431,55 @@ class OmnichannelController extends Controller
 
         return response($body, $responseStatus)
             ->header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    private function normalizeTiktokGeneratedPayloadDefaults(array $payload): array
+    {
+        if (! is_array($payload['skus'] ?? null)) {
+            return $payload;
+        }
+
+        $defaultPreSale = $this->resolveTiktokDefaultSkuPreSale($payload['skus']);
+
+        foreach ($payload['skus'] as $skuIndex => $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $preSale = $sku['pre_sale'] ?? null;
+            $preSaleType = is_array($preSale) ? trim((string) ($preSale['type'] ?? '')) : '';
+
+            if (! is_array($preSale) || $preSaleType === '') {
+                $payload['skus'][$skuIndex]['pre_sale'] = $defaultPreSale;
+            }
+
+            $normalizedType = trim((string) data_get($payload, 'skus.'.$skuIndex.'.pre_sale.type', ''));
+            if ($normalizedType === 'NONE') {
+                unset($payload['skus'][$skuIndex]['pre_sale']['fulfillment_type']);
+            }
+        }
+
+        return $payload;
+    }
+
+    private function resolveTiktokDefaultSkuPreSale(array $skus): array
+    {
+        foreach ($skus as $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $preSale = $sku['pre_sale'] ?? null;
+            if (! is_array($preSale)) {
+                continue;
+            }
+
+            if (trim((string) ($preSale['type'] ?? '')) !== '') {
+                return $preSale;
+            }
+        }
+
+        return ['type' => 'NONE'];
     }
 
     private function normalizeTiktokGeneratedPayloadImages(array $payload, string $accessToken): array
