@@ -42,7 +42,7 @@
       </article>
     </div>
 
-    <div class="layout" :class="{ 'list-only': !isShopeeFlow }">
+    <div class="layout list-only">
       <div class="panel list-panel">
         <div class="group-head" v-if="activeGroup">
           <div class="group-title">
@@ -62,6 +62,14 @@
 
         <div class="table-filters">
           <label>
+            <span>Arah tabel</span>
+            <select v-model="filters.flow" @change="loadData(true)">
+              <option v-for="option in tableFlowOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label>
             <span>Status</span>
             <select v-model="filters.status" @change="loadData(true)">
               <option v-for="option in statusOptions" :key="option.value" :value="option.value">
@@ -69,7 +77,7 @@
               </option>
             </select>
           </label>
-          <div class="filter-hint">Filter ini berlaku untuk data tabel dan pagination di bawahnya.</div>
+          <div class="filter-hint">{{ tableFlowHint }} Filter ini berlaku untuk data tabel dan pagination di bawahnya.</div>
         </div>
 
         <div class="table-wrap">
@@ -466,68 +474,6 @@
         </div>
       </div>
 
-      <aside class="panel detail-panel" v-if="isShopeeFlow && selectedItem">
-        <div class="detail-head">
-          <div>
-            <span>Nama Varian Asli</span>
-            <strong>{{ selectedItem.variant_name || 'Tanpa Varian' }}</strong>
-            <small>{{ selectedItem.product_name }}</small>
-          </div>
-          <img v-if="selectedItem.image_url" :src="selectedItem.image_url" class="thumb large" :alt="selectedItem.product_name" />
-          <div v-else class="thumb large fallback">{{ initials(selectedItem.product_name) }}</div>
-        </div>
-
-        <label>
-          <span>Shopee Item ID</span>
-          <input v-model="form.shopee_item_id" />
-        </label>
-        <label>
-          <span>Shopee Model ID</span>
-          <input v-model="form.shopee_model_id" />
-        </label>
-        <label>
-          <span>Kode Variasi</span>
-          <input v-model="form.seller_sku" />
-        </label>
-        <label>
-          <span>TikTok Product ID</span>
-          <input v-model="form.tiktok_product_id" />
-        </label>
-        <label>
-          <span>TikTok SKU ID</span>
-          <input v-model="form.tiktok_sku_id" />
-        </label>
-        <label>
-          <span>Nama Varian TikTok</span>
-          <input v-model="form.tiktok_sku_name" />
-        </label>
-        <label>
-          <span>Warehouse ID TikTok</span>
-          <input v-model="form.warehouse_id" placeholder="7068517275539719942" />
-        </label>
-        <label>
-          <span>Stok TikTok</span>
-          <input v-model="form.inventory_qty" type="number" min="0" />
-        </label>
-        <label>
-          <span>Notes</span>
-          <textarea v-model="form.notes" rows="4"></textarea>
-        </label>
-        <p class="notice">{{ shopeeDetailHint(selectedItem) }} {{ tiktokDetailHint(selectedItem) }}</p>
-
-        <div class="actions stacked">
-          <button type="button" class="ghost" @click="fillFromSelected">Reset</button>
-          <button type="button" class="primary" @click="save" :disabled="saving || !form.stock_master_id">{{ saving ? 'Saving...' : 'Save Mapping' }}</button>
-        </div>
-        <div class="action-grid">
-          <button type="button" class="ghost" @click="runTiktokAction('upload_image')" :disabled="actionBusy || !selectedItem">Upload Gambar</button>
-          <button type="button" class="ghost" @click="runTiktokAction('save_product')" :disabled="actionBusy || !selectedItem">Simpan Produk</button>
-          <button type="button" class="ghost" @click="runTiktokAction('update_inventory')" :disabled="actionBusy || !selectedItem">Update Stok</button>
-          <button type="button" class="primary" @click="runTiktokAction('full_sync')" :disabled="actionBusy || !selectedItem">{{ actionBusy ? 'Memproses...' : 'Full Sync TikTok' }}</button>
-        </div>
-        <p v-if="actionLog" class="notice">{{ actionLog }}</p>
-        <p v-if="!form.stock_master_id" class="notice">Baris ini hanya ada di TikTok. Save Mapping aktif setelah dipasangkan ke varian Shopee.</p>
-      </aside>
     </div>
 
     <div v-if="tiktokSubmitDialogOpen" class="dialog-backdrop" @click.self="closeTiktokSubmitDialog">
@@ -641,12 +587,19 @@ const statusOptions = computed(() => {
     { value: 'belum_ada_variant', label: 'Belum Ada Variant' }
   ]
 })
+const tableFlowOptions = computed(() => [
+  isShopeeFlow.value
+    ? { value: 'tiktok-to-shopee', label: 'TikTok ke Shopee' }
+    : { value: 'shopee-to-tiktok', label: 'Shopee ke TikTok' }
+])
+const tableFlowHint = computed(() => `Mode tabel: ${tableFlowOptions.value[0].label}.`)
 const filters = reactive({
   search: '',
-  status: isShopeeFlow.value ? 'shopee_missing' : 'tiktok_missing'
+  status: isShopeeFlow.value ? 'shopee_missing' : 'tiktok_missing',
+  flow: isShopeeFlow.value ? 'tiktok-to-shopee' : 'shopee-to-tiktok'
 })
 const pageCache = new Map()
-const flowKey = computed(() => route.meta?.flow || '')
+const flowKey = computed(() => filters.flow || route.meta?.flow || tableFlowOptions.value[0].value)
 const form = reactive({
   stock_master_id: null,
   shopee_item_id: '',
@@ -2515,13 +2468,6 @@ td small { color:#64748b; display:block; margin-top:2px; line-height:1.15; }
 .badge.shopee_missing { background:#fff7ed; color:#c2410c; }
 .badge.tiktok_missing { background:#eff6ff; color:#1d4ed8; }
 .badge.belum_ada_variant { background:#eef2f7; color:#475569; }
-.detail-panel label { display:block; margin-bottom:10px; }
-.detail-panel span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
-.detail-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
-.detail-head strong { display:block; color:#111827; line-height:1.25; }
-.actions { display:flex; gap:10px; margin-top:12px; }
-.actions.stacked { margin-top: 10px; }
-.action-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
 .dialog-backdrop { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.58); display:grid; place-items:center; padding:20px; }
 .dialog-card { width:min(560px, 100%); background:#fff; border:1px solid #e2e8f0; border-radius:16px; box-shadow:0 30px 80px rgba(15,23,42,.28); padding:20px; }
 .dialog-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:12px; }
@@ -2533,7 +2479,7 @@ td small { color:#64748b; display:block; margin-top:2px; line-height:1.15; }
 .dialog-meta dt { color:#64748b; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
 .dialog-meta dd { margin:0; color:#0f172a; font-size:13px; overflow-wrap:anywhere; }
 .dialog-actions { display:flex; justify-content:flex-end; gap:10px; }
-@media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .detail-panel { order:-1; } .api-testing-tool, .variant-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
-@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .action-grid { grid-template-columns:1fr; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } .dialog-meta { grid-template-columns:1fr; } .dialog-actions { flex-direction:column; } .dialog-actions .ghost, .dialog-actions .primary { width:100%; } .table-wrap { height: auto; max-height: none; overflow: visible; } }
+@media (max-width: 1180px) { .layout { grid-template-columns:1fr; } .api-testing-tool, .variant-tool { grid-template-columns:1fr; } .api-left { border-right:0; border-bottom:1px solid #e5e7eb; } }
+@media (max-width: 820px) { .page-shell { margin-left:0; padding:16px; } .summary-grid,.control-band { grid-template-columns:1fr; flex-direction:column; align-items:stretch; } .page-header { align-items:flex-start; flex-direction:column; } .api-version-row { flex-direction:column; align-items:stretch; } .api-shop-link { position:static; display:block; margin-bottom:10px; } .api-left, .api-right { padding:14px; } .dialog-meta { grid-template-columns:1fr; } .dialog-actions { flex-direction:column; } .dialog-actions .ghost, .dialog-actions .primary { width:100%; } .table-wrap { height: auto; max-height: none; overflow: visible; } }
 </style>
 
