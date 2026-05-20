@@ -7,6 +7,7 @@ import StockMaster from '@/pages/StockMaster.vue'
 import SkuMapping from '@/pages/SkuMapping.vue'
 import TambahVarian from '@/pages/TambahVarian.vue'
 import TambahVarianShopee from '@/pages/TambahVarianShopee.vue'
+import DetailProdukMarketplace from '@/pages/DetailProdukMarketplace.vue'
 import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
 import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
@@ -61,6 +62,11 @@ const routes = [
     name: 'tambah-varian-shopee',
     component: TambahVarianShopee,
     meta: { flow: 'tiktok-to-shopee' }
+  },
+  {
+    path: '/detail-produk-marketplace',
+    name: 'detail-produk-marketplace',
+    component: DetailProdukMarketplace
   },
   {
     path: '/sync-shopee-to-tiktok',
