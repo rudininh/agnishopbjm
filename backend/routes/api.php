@@ -49,6 +49,9 @@ Route::post('tiktok-variant/action', [OmnichannelController::class, 'tiktokVaria
 Route::post('tiktok/submit-generated-payload', [OmnichannelController::class, 'tiktokSubmitGeneratedPayload']);
 Route::post('tiktok/get-product', [OmnichannelController::class, 'tiktokGetProduct']);
 Route::get('tiktok/get-product-context', [OmnichannelController::class, 'tiktokGetProductContext']);
+Route::post('shopee/api-test', [OmnichannelController::class, 'shopeeApiTest']);
+Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiTestContext']);
+Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::match(['get', 'post'], 'sync-shopee-to-tiktok', [OmnichannelController::class, 'syncShopeeToTiktok']);
 
 Route::prefix('auth')->group(function () {

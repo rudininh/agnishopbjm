@@ -141,6 +141,24 @@ export const omnichannelService = {
     return api.get('/tiktok/get-product-context')
   },
 
+  shopeeApiTest(data) {
+    return api.post('/shopee/api-test', data, {
+      responseType: 'text',
+      validateStatus: () => true
+    })
+  },
+
+  shopeeApiTestContext() {
+    return api.get('/shopee/api-test-context')
+  },
+
+  shopeeAddVariant(data) {
+    return api.post('/shopee/add-variant', data, {
+      responseType: 'text',
+      validateStatus: () => true
+    })
+  },
+
   syncShopeeToTiktok() {
     return api.post('/sync-shopee-to-tiktok')
   },
