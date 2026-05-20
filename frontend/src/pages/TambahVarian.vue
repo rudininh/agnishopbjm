@@ -217,14 +217,24 @@
                 <div class="api-label">API name</div>
                 <div class="api-apiname">
                   <div>
-                    <strong>Get Product</strong>
-                    <small>/product/{version}/products/{product_id}</small>
+                    <strong>{{ apiTestingTitle }}</strong>
+                    <small>{{ apiTestingPath }}</small>
                   </div>
                   <span class="api-chip">GET</span>
                 </div>
               </div>
 
-              <div class="api-version-row">
+              <div v-if="isShopeeFlow" class="api-version-row">
+                <label class="api-inline">
+                  <span>Endpoint</span>
+                  <select v-model="shopeeProductTool.api_name">
+                    <option value="get_item_base_info">get_item_base_info</option>
+                    <option value="get_model_list">get_model_list</option>
+                  </select>
+                </label>
+                <a href="#" class="api-doc-link" @click.prevent>View API doc</a>
+              </div>
+              <div v-else class="api-version-row">
                 <label class="api-inline">
                   <span>Version</span>
                   <select v-model="getProductTool.version">
@@ -235,8 +245,23 @@
               </div>
 
               <div class="api-section-title">Authorized shop info</div>
-              <div class="api-shop-auth">
-                <a href="#" class="api-shop-link" @click.prevent>Get shop authorization</a>
+              <div v-if="isShopeeFlow" class="api-shop-auth">
+                <a href="#" class="api-shop-link" @click.prevent="loadShopeeApiTestContext">Pakai token Shopee aktif</a>
+                <label>
+                  <span>account_key (string) (Optional)</span>
+                  <input v-model.trim="shopeeProductTool.account_key" placeholder="shopee-agnishopbjm" />
+                </label>
+                <label>
+                  <span>shop_id (int)</span>
+                  <input v-model.trim="shopeeProductTool.shop_id" placeholder="7495811028690242494" />
+                </label>
+                <label>
+                  <span>access_token (string)</span>
+                  <input v-model.trim="shopeeProductTool.access_token" placeholder="Token Shopee aktif dari database" />
+                </label>
+              </div>
+              <div v-else class="api-shop-auth">
+                <a href="#" class="api-shop-link" @click.prevent="loadGetProductContext">Get shop authorization</a>
                 <label>
                   <span>shop_id (string) (Optional)</span>
                   <input v-model.trim="getProductTool.shop_id" placeholder="7495811028690242494" />
@@ -257,14 +282,39 @@
 
               <div class="api-section-title">Path parameters</div>
               <div class="api-path-params">
-                <label>
+                <label v-if="isShopeeFlow">
+                  <span>{{ shopeeProductTool.api_name === 'get_item_base_info' ? 'item_id_list (int64, comma separated)' : 'item_id (int64)' }}</span>
+                  <input v-model.trim="shopeeProductTool.item_id" />
+                </label>
+                <label v-else>
                   <span>product_id (string)</span>
                   <input v-model.trim="getProductTool.product_id" />
                 </label>
               </div>
 
-              <div class="api-section-title">Query request parameters</div>
-              <div class="api-query-params">
+              <div v-if="isShopeeFlow" class="api-section-title">Query request parameters</div>
+              <div v-if="isShopeeFlow" class="api-query-params">
+                <template v-if="shopeeProductTool.api_name === 'get_item_base_info'">
+                  <div class="api-bool-row">
+                    <span>need_tax_info (boolean) (Optional)</span>
+                    <div class="api-radio-group">
+                      <label><input type="radio" value="true" v-model="shopeeProductTool.need_tax_info" /> true</label>
+                      <label><input type="radio" value="false" v-model="shopeeProductTool.need_tax_info" /> false</label>
+                    </div>
+                  </div>
+                  <div class="api-bool-row">
+                    <span>need_complaint_policy (boolean) (Optional)</span>
+                    <div class="api-radio-group">
+                      <label><input type="radio" value="true" v-model="shopeeProductTool.need_complaint_policy" /> true</label>
+                      <label><input type="radio" value="false" v-model="shopeeProductTool.need_complaint_policy" /> false</label>
+                    </div>
+                  </div>
+                </template>
+                <p v-else class="field-hint">Endpoint ini hanya butuh item_id.</p>
+              </div>
+
+              <div v-if="!isShopeeFlow" class="api-section-title">Query request parameters</div>
+              <div v-if="!isShopeeFlow" class="api-query-params">
                 <div class="api-bool-row">
                   <span>return_under_review_version (boolean) (Optional)</span>
                   <div class="api-radio-group">
@@ -333,10 +383,10 @@
               <div class="api-section-title">Target product</div>
               <div class="api-path-params">
                 <label>
-                  <span>product_id (string)</span>
+                  <span>{{ isShopeeFlow ? 'item_id Shopee (int64)' : 'product_id (string)' }}</span>
                   <input v-model.trim="addVariantTool.product_id" />
                 </label>
-                <label>
+                <label v-if="!isShopeeFlow">
                   <span>shop_cipher (string)</span>
                   <input v-model.trim="addVariantTool.shop_cipher" placeholder="ROW_AfAcCgAAAA..." />
                 </label>
@@ -360,19 +410,19 @@
                   <span>price</span>
                   <input v-model.trim="addVariantTool.price" placeholder="50000" />
                 </label>
-                <label>
+                <label v-if="!isShopeeFlow">
                   <span>discount (%)</span>
                   <input v-model.number="addVariantTool.discount" type="number" min="0" max="100" step="0.01" placeholder="10" />
                 </label>
-                <p class="field-hint">Diskon ini akan diterapkan ke semua SKU yang dipilih.</p>
-                <p class="field-hint">Harga final per SKU: {{ displayPrice(applyDiscountToPrice(addVariantTool.price, addVariantTool.discount)) }}</p>
+                <p v-if="!isShopeeFlow" class="field-hint">Diskon ini akan diterapkan ke semua SKU yang dipilih.</p>
+                <p class="field-hint">{{ variantPriceHint }}</p>
                 <label>
                   <span>quantity</span>
                   <input v-model.number="addVariantTool.quantity" type="number" min="0" />
                 </label>
                 <label class="dry-run-row">
                   <input type="checkbox" v-model="addVariantTool.dry_run" />
-                  <span>Dry run saja, jangan PUT ke TikTok</span>
+                  <span>{{ isShopeeFlow ? 'Dry run saja, jangan kirim ke Shopee' : 'Dry run saja, jangan PUT ke TikTok' }}</span>
                 </label>
               </div>
 
@@ -390,7 +440,8 @@
                     <div class="variant-selection-copy">
                       <strong>{{ variant.variant_name || 'Tanpa Varian' }}</strong>
                       <small>SKU: {{ variant.seller_sku || variant.internal_sku || '-' }}</small>
-                      <small>Stok: {{ displayStock(variant.shopee?.stock_qty ?? variant.stock_qty) }}</small>
+                      <small>Stok: {{ displayStock(isShopeeFlow ? (variant.tiktok?.stock_qty ?? variant.stock_qty) : (variant.shopee?.stock_qty ?? variant.stock_qty)) }}</small>
+                      <small v-if="isShopeeFlow && hasPrice(variant.tiktok?.price)">Harga: {{ displayPrice(variant.tiktok.price) }}</small>
                     </div>
                     <button type="button" class="ghost mini" @click="toggleVariantSelection(variant, false)">Hapus</button>
                   </div>
@@ -400,9 +451,9 @@
               <div class="api-submit-row">
                 <button type="button" class="ghost" @click="loadAddVariantContext" :disabled="addVariantBusy">Ambil Context</button>
                 <button type="button" class="primary" @click="submitAddVariant" :disabled="addVariantBusy">
-                  {{ addVariantBusy ? 'Generating...' : 'Generate Payload' }}
+                  {{ addVariantBusy ? 'Processing...' : addVariantSubmitLabel }}
                 </button>
-                <button type="button" class="ghost" @click="openTiktokSubmitDialog" :disabled="addVariantBusy || tiktokSubmitBusy || !resolveAddVariantProductId()">
+                <button v-if="!isShopeeFlow" type="button" class="ghost" @click="openTiktokSubmitDialog" :disabled="addVariantBusy || tiktokSubmitBusy || !resolveAddVariantProductId()">
                   {{ tiktokSubmitBusy ? 'Mengirim...' : 'Submit ke TikTok' }}
                 </button>
               </div>
@@ -435,7 +486,7 @@
               </div>
               <div class="api-right-block">
                 <div class="api-right-head">
-                  <strong>Response Generate Payload</strong>
+                  <strong>{{ isShopeeFlow ? 'Response Shopee' : 'Response Generate Payload' }}</strong>
                   <button class="ghost mini" type="button" @click="copyAddVariantResponse">Copy</button>
                 </div>
                 <p v-if="selectedVariantPayloadLabels.length" class="api-response-hint payload-summary-hint">
@@ -452,7 +503,7 @@
                   <pre>{{ addVariantResponseText || ' ' }}</pre>
                 </div>
               </div>
-              <div class="api-right-block tiktok-response-block">
+              <div v-if="!isShopeeFlow" class="api-right-block tiktok-response-block">
                 <div class="api-right-head">
                   <strong>Response TikTok</strong>
                   <button class="ghost mini" type="button" @click="copyTiktokSubmitResponse">Copy</button>
@@ -569,8 +620,18 @@ const pageSubtitle = computed(() => isShopeeFlow.value
   : 'Halaman uji TikTok untuk satu etalase: create / update / mapping varian.')
 const addVariantPanelTitle = computed(() => isShopeeFlow.value ? 'Tambah Variant/SKU Shopee' : 'Tambah Variant/SKU TikTok')
 const addVariantPanelSubtitle = computed(() => isShopeeFlow.value
-  ? 'Workflow sementara: klik baris berstatus belum ada variant untuk menyiapkan draft Shopee dari data TikTok, lalu simpan mapping bila perlu.'
+  ? 'Klik baris/checkbox varian TikTok yang belum ada di Shopee, lalu kirim sebagai model Shopee baru.'
   : 'Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu copy payload untuk PUT.')
+const variantPriceHint = computed(() => isShopeeFlow.value
+  ? `Harga Shopee diambil dari harga TikTok per SKU. Fallback manual: ${displayPrice(addVariantTool.price)}.`
+  : `Harga final per SKU: ${displayPrice(applyDiscountToPrice(addVariantTool.price, addVariantTool.discount))}`)
+const addVariantSubmitLabel = computed(() => {
+  if (isShopeeFlow.value) {
+    return addVariantTool.dry_run ? 'Cek Payload Shopee' : 'Tambah ke Shopee'
+  }
+
+  return 'Generate Payload'
+})
 const statusOptions = computed(() => {
   const primaryMissingStatus = isShopeeFlow.value
     ? { value: 'shopee_missing', label: 'Belum Ada Variant Shopee' }
@@ -676,6 +737,13 @@ const resolveTiktokSkuId = (item) => String(
   item?.stock_tiktok_sku_id ||
   ''
 ).trim()
+const resolveShopeeItemId = (item) => String(
+  item?.shopee?.item_id ||
+  item?.shopee_item_id ||
+  item?.shopee_product_id ||
+  item?.stock_shopee_product_id ||
+  ''
+).trim()
 const tiktokMatchSource = (item) => String(item?.tiktok?.source || '').trim()
 const hasTiktokActual = (item) => {
   const status = String(item?.tiktok?.status || '').trim()
@@ -729,8 +797,19 @@ const resolveGroupTiktokSkuId = (group) => {
 
   return ''
 }
+const resolveGroupShopeeItemId = (group) => {
+  if (!group?.variants?.length) return ''
+
+  for (const variant of group.variants) {
+    const itemId = resolveShopeeItemId(variant)
+    if (itemId) return itemId
+  }
+
+  return ''
+}
 const resolveSelectedTiktokProductId = () => resolveTiktokProductId(selectedItem.value) || resolveGroupTiktokProductId(activeGroup.value) || ''
 const resolveSelectedTiktokSkuId = () => resolveTiktokSkuId(selectedItem.value) || ''
+const resolveSelectedShopeeItemId = () => resolveShopeeItemId(selectedItem.value) || resolveGroupShopeeItemId(activeGroup.value) || ''
 const sortGroupVariants = (group) => ({
   ...group,
   variants: [...group.variants].sort((a, b) => {
@@ -820,6 +899,15 @@ const tiktokDetailHint = (item) => {
   return 'Varian ini memang belum ada di TikTok.'
 }
 const resolveAddVariantProductId = () => {
+  if (isShopeeFlow.value) {
+    return String(
+      addVariantTool.product_id ||
+      shopeeProductTool.item_id ||
+      resolveSelectedShopeeItemId() ||
+      ''
+    ).trim()
+  }
+
   return String(
     addVariantTool.product_id ||
     getProductTool.product_id ||
@@ -920,6 +1008,70 @@ const buildTiktokSubmitMeta = () => ({
   version: resolveAddVariantVersion(),
   shop_cipher: resolveAddVariantShopCipher()
 })
+const buildShopeeAddVariantPayload = () => {
+  const selectedSources = getSelectedVariantSources()
+  const fallbackVariant = {
+    id: 'manual',
+    stock_master_id: form.stock_master_id,
+    variant_name: String(addVariantTool.color_name || 'Variant Baru').trim() || 'Variant Baru',
+    seller_sku: String(addVariantTool.seller_sku || '').trim(),
+    image_url: String(addVariantTool.image_uri || '').trim(),
+    tiktok: {
+      product_id: resolveSelectedTiktokProductId(),
+      sku_id: resolveSelectedTiktokSkuId(),
+      price: normalizePriceInput(addVariantTool.price, '50000'),
+      stock_qty: Number(addVariantTool.quantity ?? 0),
+      image_url: String(addVariantTool.image_uri || '').trim()
+    },
+    stock_qty: Number(addVariantTool.quantity ?? 0)
+  }
+  const sources = selectedSources.length ? selectedSources : [fallbackVariant]
+  const variants = []
+  const seen = new Set()
+
+  sources.forEach((source) => {
+    const variantName = String(source?.tiktok?.variant_name || source?.tiktok?.sku_name || source?.variant_name || addVariantTool.color_name || '').trim()
+    const variantKey = normalizeText(variantName)
+    if (!variantName || seen.has(variantKey)) return
+    seen.add(variantKey)
+
+    const tiktokPrice = source?.tiktok?.price ?? source?.price ?? addVariantTool.price
+    const tiktokStock = source?.tiktok?.stock_qty ?? source?.stock_qty ?? addVariantTool.quantity ?? 0
+    const sellerSku = String(
+      source?.tiktok?.seller_sku ||
+      source?.seller_sku ||
+      source?.internal_sku ||
+      addVariantTool.seller_sku ||
+      ''
+    ).trim()
+    const imageUrl = String(
+      source?.tiktok?.image_url ||
+      source?.image_url ||
+      addVariantTool.image_uri ||
+      ''
+    ).trim()
+
+    variants.push({
+      stock_master_id: typeof source?.stock_master_id === 'number' ? source.stock_master_id : null,
+      variant_name: variantName,
+      seller_sku: sellerSku,
+      price: normalizePriceInput(tiktokPrice, normalizePriceInput(addVariantTool.price, '50000') || '50000'),
+      stock: Number(tiktokStock ?? 0),
+      image_url: imageUrl,
+      tiktok_product_id: String(source?.tiktok?.product_id || resolveSelectedTiktokProductId() || '').trim(),
+      tiktok_sku_id: String(source?.tiktok?.sku_id || resolveSelectedTiktokSkuId() || '').trim()
+    })
+  })
+
+  return {
+    item_id: resolveAddVariantProductId(),
+    account_key: shopeeProductTool.account_key,
+    shop_id: shopeeProductTool.shop_id,
+    access_token: shopeeProductTool.access_token,
+    dry_run: Boolean(addVariantTool.dry_run),
+    variants
+  }
+}
 const formatResponseText = (value) => {
   if (typeof value === 'string') return value
   if (value === null || value === undefined) return ''
@@ -952,10 +1104,12 @@ const shopeeDetailHint = (item) => hasShopeeActual(item)
 const fillAddVariantToolFromItem = (item, contextProductId = '') => {
   if (!item) return
 
-  addVariantTool.product_id = contextProductId || resolveTiktokProductId(item)
+  addVariantTool.product_id = isShopeeFlow.value
+    ? (contextProductId || resolveShopeeItemId(item) || '')
+    : (contextProductId || resolveTiktokProductId(item))
 
   const sellerSku = String(
-    item.shopee?.seller_sku ||
+    (isShopeeFlow.value ? item.tiktok?.seller_sku : item.shopee?.seller_sku) ||
     item.seller_sku ||
     item.stock_shopee_seller_sku ||
     item.internal_sku ||
@@ -963,22 +1117,26 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
     ''
   ).trim()
   const colorName = String(
-    item.shopee?.variant_name ||
+    (isShopeeFlow.value ? item.tiktok?.variant_name : item.shopee?.variant_name) ||
     item.variant_name ||
     item.tiktok?.variant_name ||
     item.tiktok?.sku_name ||
     ''
   ).trim()
   const imageUri = String(
-    item.shopee?.image_url ||
+    (isShopeeFlow.value ? item.tiktok?.image_url : item.shopee?.image_url) ||
     item.image_url ||
     item.shopee_model_image_url ||
     item.shopee_product_image_url ||
     item.tiktok?.image_url ||
     ''
   ).trim()
-  const priceValue = item.shopee_variant_price ?? item.shopee?.price ?? item.price ?? addVariantTool.price
-  const quantityValue = item.shopee_variant_stock ?? item.shopee?.stock_qty ?? item.stock_qty ?? 0
+  const priceValue = isShopeeFlow.value
+    ? (item.tiktok?.price ?? item.price ?? addVariantTool.price)
+    : (item.shopee_variant_price ?? item.shopee?.price ?? item.price ?? addVariantTool.price)
+  const quantityValue = isShopeeFlow.value
+    ? (item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
+    : (item.shopee_variant_stock ?? item.shopee?.stock_qty ?? item.stock_qty ?? 0)
   const normalizedPrice = normalizePriceInput(
     priceValue,
     normalizePriceInput(addVariantTool.price, '50000')
@@ -1149,6 +1307,26 @@ const getProductTool = reactive({
   locale: ''
 })
 
+const shopeeProductTool = reactive({
+  api_name: 'get_item_base_info',
+  account_key: '',
+  shop_id: '',
+  access_token: '',
+  item_id: '',
+  need_tax_info: 'false',
+  need_complaint_policy: 'false'
+})
+
+const shopeeApiPath = computed(() => shopeeProductTool.api_name === 'get_model_list'
+  ? '/api/v2/product/get_model_list'
+  : '/api/v2/product/get_item_base_info')
+const apiTestingTitle = computed(() => isShopeeFlow.value
+  ? shopeeProductTool.api_name
+  : 'Get Product')
+const apiTestingPath = computed(() => isShopeeFlow.value
+  ? shopeeApiPath.value
+  : '/product/{version}/products/{product_id}')
+
 const buildGetProductQuery = () => {
   const params = new URLSearchParams()
   const pushIfValue = (key, value) => {
@@ -1169,7 +1347,30 @@ const buildGetProductQuery = () => {
   return params.toString()
 }
 
+const buildShopeeApiTestPayload = () => ({
+  api_name: shopeeProductTool.api_name,
+  account_key: shopeeProductTool.account_key,
+  shop_id: shopeeProductTool.shop_id,
+  access_token: shopeeProductTool.access_token,
+  item_id: shopeeProductTool.item_id || resolveSelectedShopeeItemId(),
+  need_tax_info: shopeeProductTool.need_tax_info,
+  need_complaint_policy: shopeeProductTool.need_complaint_policy
+})
+
 const apiGetProductCurl = computed(() => {
+  if (isShopeeFlow.value) {
+    const url = `${window.location.origin}/api/shopee/api-test`
+    const body = JSON.stringify(buildShopeeApiTestPayload())
+      .replace(/'/g, "'\\''")
+
+    return [
+      "curl -X 'POST' \\",
+      "  -H 'Content-Type: application/json' \\",
+      `  --data-raw '${body}' \\`,
+      `  '${url}'`
+    ].join('\n')
+  }
+
   const productId = String(getProductTool.product_id || resolveSelectedTiktokProductId() || '').trim()
   const url = `https://open-api.tiktokglobalshop.com/product/${getProductTool.version || TIKTOK_GET_PRODUCT_VERSION}/products/${productId}`
   const query = buildGetProductQuery()
@@ -1457,6 +1658,10 @@ const applyDefaultTiktokSkuPreSale = (sku, defaultPreSale) => {
 }
 
 const buildAddVariantRequestPreview = () => {
+  if (isShopeeFlow.value) {
+    return JSON.stringify(buildShopeeAddVariantPayload(), null, 2)
+  }
+
   const productBody = cloneJson(extractTiktokProductBody(apiGetProductResponsePayload.value)) || {}
   const existingSkus = Array.isArray(productBody.skus)
     ? productBody.skus.map((sku) => cloneJson(sku) || {})
@@ -1750,6 +1955,14 @@ const apiGetProductResponseHint = computed(() => {
   const payload = apiGetProductResponsePayload.value
   if (!payload) return ''
 
+  if (isShopeeFlow.value) {
+    if (String(payload.error || '') === '') {
+      return 'Response berhasil diambil langsung dari Shopee Open Platform.'
+    }
+
+    return String(payload.message || payload.error || '')
+  }
+
   const code = String(payload.code ?? '')
   const message = String(payload.message ?? '').toLowerCase()
 
@@ -1861,6 +2074,15 @@ const copyTiktokSubmitResponse = async () => {
 }
 
 const loadAddVariantContext = async () => {
+  if (isShopeeFlow.value) {
+    await loadShopeeApiTestContext()
+    const itemId = resolveSelectedShopeeItemId()
+    if (itemId && !String(addVariantTool.product_id || '').trim()) {
+      addVariantTool.product_id = itemId
+    }
+    return
+  }
+
   try {
     const response = await omnichannelService.tiktokGetProductContext()
     const data = response.data?.data || {}
@@ -1985,15 +2207,46 @@ const submitAddVariant = async () => {
   addVariantResponseStatus.value = '0'
 
   try {
+    if (isShopeeFlow.value) {
+      const payload = buildShopeeAddVariantPayload()
+      if (!String(payload.item_id || '').trim()) {
+        throw new Error('Item ID Shopee target belum diisi.')
+      }
+      if (!payload.variants.length) {
+        throw new Error('Belum ada varian TikTok yang valid untuk dikirim ke Shopee.')
+      }
+
+      const response = await omnichannelService.shopeeAddVariant(payload)
+      const responseText = formatResponseText(response.data)
+      const parsed = parseResponseJson(responseText)
+      addVariantResponseText.value = responseText
+      addVariantResponseStatus.value = String(parsed?.status || parsed?.error || response.status || 'OK')
+
+      if (response.status >= 200 && response.status < 300 && parsed?.status !== 'error') {
+        if (!payload.dry_run) {
+          await loadData(false, {
+            bypassCache: true,
+            preserveSelection: true
+          })
+        }
+        return
+      }
+
+      loadError.value = parsed?.message || 'Request Shopee gagal diproses.'
+      return
+    }
+
     addVariantResponseText.value = buildAddVariantRequestPreview()
     addVariantResponseStatus.value = 'READY'
   } catch (error) {
     addVariantResponseText.value = JSON.stringify({
-      message: 'Payload tambah variant gagal digenerate dari response GET Product.',
+      message: isShopeeFlow.value
+        ? 'Request tambah varian Shopee gagal diproses.'
+        : 'Payload tambah variant gagal digenerate dari response GET Product.',
       error: error?.message || 'Request demo gagal digenerate.'
     }, null, 2)
     addVariantResponseStatus.value = 'ERROR'
-    loadError.value = error?.message || 'Payload tambah variant gagal digenerate.'
+    loadError.value = error?.message || (isShopeeFlow.value ? 'Request Shopee gagal diproses.' : 'Payload tambah variant gagal digenerate.')
   } finally {
     addVariantBusy.value = false
   }
@@ -2017,7 +2270,25 @@ const copyGetProductResponse = async () => {
   }
 }
 
+const loadShopeeApiTestContext = async () => {
+  try {
+    const response = await omnichannelService.shopeeApiTestContext()
+    const data = response.data?.data || {}
+
+    if (data.account_key) shopeeProductTool.account_key = data.account_key
+    if (data.shop_id) shopeeProductTool.shop_id = data.shop_id
+    if (data.access_token) shopeeProductTool.access_token = data.access_token
+  } catch {
+    // Kalau context Shopee belum tersedia, user tetap bisa isi manual.
+  }
+}
+
 const loadGetProductContext = async () => {
+  if (isShopeeFlow.value) {
+    await loadShopeeApiTestContext()
+    return
+  }
+
   try {
     const response = await omnichannelService.tiktokGetProductContext()
     const data = response.data?.data || {}
@@ -2045,6 +2316,23 @@ const extractResponseText = async (response) => {
   return await response.text()
 }
 
+const submitShopeeApiTestDemo = async () => {
+  if (resolveSelectedShopeeItemId() && !String(shopeeProductTool.item_id || '').trim()) {
+    shopeeProductTool.item_id = resolveSelectedShopeeItemId()
+  }
+
+  const response = await omnichannelService.shopeeApiTest(buildShopeeApiTestPayload())
+  const responseText = formatResponseText(response.data)
+  const parsed = parseResponseJson(responseText)
+
+  getProductResponseText.value = responseText
+  getProductResponseStatus.value = String(
+    parsed?.error
+      ? parsed.error
+      : (response.status || 'OK')
+  )
+}
+
 const submitGetProductDemo = async () => {
   getProductRequestBusy.value = true
   loadError.value = ''
@@ -2052,6 +2340,11 @@ const submitGetProductDemo = async () => {
   getProductResponseStatus.value = '0'
 
   try {
+    if (isShopeeFlow.value) {
+      await submitShopeeApiTestDemo()
+      return
+    }
+
     if (resolveSelectedTiktokProductId() && !String(getProductTool.product_id || '').trim()) {
       getProductTool.product_id = resolveSelectedTiktokProductId()
     }
@@ -2213,6 +2506,7 @@ const selectItem = (item, options = {}) => {
   const group = groupedItems.value.find((candidate) => candidate.key === getGroupKey(item)) || null
   const resolvedProductId = resolveTiktokProductId(item) || resolveGroupTiktokProductId(group)
   const resolvedSkuId = resolveTiktokSkuId(item)
+  const resolvedShopeeItemId = resolveShopeeItemId(item) || resolveGroupShopeeItemId(group)
 
   selectedItem.value = item
   form.stock_master_id = item.stock_master_id || (typeof item.id === 'number' ? item.id : null)
@@ -2226,11 +2520,12 @@ const selectItem = (item, options = {}) => {
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
   getProductTool.product_id = resolvedProductId
+  shopeeProductTool.item_id = resolvedShopeeItemId
   if (resetGetProductResponse) {
     getProductResponseText.value = ''
     getProductResponseStatus.value = '0'
   }
-  fillAddVariantToolFromItem(item, resolvedProductId)
+  fillAddVariantToolFromItem(item, isShopeeFlow.value ? resolvedShopeeItemId : resolvedProductId)
 }
 
 const fillFromSelected = () => {
@@ -2315,6 +2610,10 @@ const runTiktokAction = async (action) => {
 }
 
 onMounted(async () => {
+  if (isShopeeFlow.value) {
+    addVariantTool.product_id = ''
+  }
+
   await Promise.all([
     loadData(true),
     loadGetProductContext(),

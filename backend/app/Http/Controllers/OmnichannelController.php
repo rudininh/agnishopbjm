@@ -381,6 +381,248 @@ class OmnichannelController extends Controller
         return $data;
     }
 
+    private function shopeeSignedPost(array $config, string $path, int $shopId, string $accessToken, array $payload): array
+    {
+        $timestamp = time();
+        $query = [
+            'partner_id' => $config['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+            'sign' => $this->generateShopeeApiSign($config['partner_id'], $config['partner_key'], $path, $timestamp, $accessToken, $shopId),
+        ];
+
+        $response = Http::timeout(45)
+            ->acceptJson()
+            ->post($config['host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), $payload);
+        $data = $response->json();
+
+        if (! is_array($data)) {
+            throw new \RuntimeException('Shopee tidak mengembalikan JSON valid untuk '.$path.'.');
+        }
+
+        return [
+            ...$data,
+            '_http_status' => $response->status(),
+            '_request' => [
+                'method' => 'POST',
+                'path' => $path,
+                'query' => [
+                    ...$query,
+                    'access_token' => $accessToken !== '' ? '[hidden]' : '',
+                    'sign' => '[hidden]',
+                ],
+                'body' => $payload,
+            ],
+        ];
+    }
+
+    private function uploadShopeeProductImage(array $config, string $sourceImageUrl): array
+    {
+        $absolutePath = $this->resolveUploadImagePath($sourceImageUrl);
+        if ($absolutePath === null) {
+            return [
+                'ok' => false,
+                'message' => 'Gambar sumber belum bisa dibaca untuk diupload ke Shopee.',
+                'source_image' => $sourceImageUrl,
+            ];
+        }
+
+        $path = '/api/v2/media_space/upload_image';
+        $timestamp = time();
+        $query = [
+            'partner_id' => $config['partner_id'],
+            'timestamp' => $timestamp,
+            'sign' => $this->generateShopeeSign($config['partner_id'], $config['partner_key'], $path, $timestamp),
+        ];
+
+        $response = Http::timeout(45)
+            ->attach('image', file_get_contents($absolutePath), basename($absolutePath))
+            ->post($config['host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), [
+                'scene' => 'normal',
+            ]);
+
+        $payload = $response->json();
+        if (! is_array($payload)) {
+            return [
+                'ok' => false,
+                'message' => 'Shopee tidak mengembalikan JSON valid saat upload gambar.',
+                'http_status' => $response->status(),
+                'response_body' => $response->body(),
+                'source_image' => $sourceImageUrl,
+            ];
+        }
+
+        if (($payload['error'] ?? '') !== '') {
+            return [
+                'ok' => false,
+                'message' => $payload['message'] ?? 'Gagal upload gambar ke Shopee.',
+                'response' => $payload,
+                'source_image' => $sourceImageUrl,
+            ];
+        }
+
+        $imageId = trim((string) (
+            data_get($payload, 'response.image_info.image_id')
+            ?: data_get($payload, 'response.image_info_list.0.image_info.image_id')
+            ?: data_get($payload, 'response.image_info_list.0.image_id')
+            ?: ''
+        ));
+        $imageUrl = trim((string) (
+            data_get($payload, 'response.image_info.image_url_list.0.image_url')
+            ?: data_get($payload, 'response.image_info_list.0.image_info.image_url_list.0.image_url')
+            ?: ''
+        ));
+
+        if ($imageId === '') {
+            return [
+                'ok' => false,
+                'message' => 'Upload gambar Shopee berhasil dipanggil, tetapi image_id tidak ditemukan.',
+                'response' => $payload,
+                'source_image' => $sourceImageUrl,
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Gambar berhasil diupload ke Shopee.',
+            'image_id' => $imageId,
+            'image_url' => $imageUrl ?: null,
+            'response' => $payload,
+            'source_image' => $sourceImageUrl,
+        ];
+    }
+
+    private function normalizeShopeeAddVariantRows(array $rows): array
+    {
+        $variants = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $variantName = trim((string) ($row['variant_name'] ?? ''));
+            if ($variantName === '') {
+                continue;
+            }
+
+            $price = $this->normalizePositiveInt($row['price'] ?? 0);
+            $stock = $this->normalizeNonNegativeInt($row['stock'] ?? 0);
+            $sellerSku = trim((string) ($row['seller_sku'] ?? ''));
+
+            if ($sellerSku === '') {
+                $tiktokSkuId = trim((string) ($row['tiktok_sku_id'] ?? ''));
+                $sellerSku = $tiktokSkuId !== '' ? 'TT-'.$tiktokSkuId : '';
+            }
+
+            $variants[] = [
+                'stock_master_id' => isset($row['stock_master_id']) && is_numeric($row['stock_master_id'])
+                    ? (int) $row['stock_master_id']
+                    : null,
+                'variant_name' => $variantName,
+                'seller_sku' => $sellerSku,
+                'price' => $price > 0 ? $price : 1,
+                'stock' => $stock,
+                'image_url' => trim((string) ($row['image_url'] ?? '')),
+                'tiktok_product_id' => trim((string) ($row['tiktok_product_id'] ?? '')),
+                'tiktok_sku_id' => trim((string) ($row['tiktok_sku_id'] ?? '')),
+            ];
+        }
+
+        return $variants;
+    }
+
+    private function buildShopeeTierOption(string $variantName, bool $useStandardiseTier, string $imageId = '', string $sourceImageUrl = ''): array
+    {
+        if ($useStandardiseTier) {
+            return array_filter([
+                'variation_option_id' => 0,
+                'variation_option_name' => $variantName,
+                'image_id' => $imageId !== '' ? $imageId : null,
+                '_source_image_url' => $imageId === '' && $sourceImageUrl !== '' ? $sourceImageUrl : null,
+            ], fn ($value) => $value !== null);
+        }
+
+        return array_filter([
+            'option' => $variantName,
+            'image' => $imageId !== '' ? ['image_id' => $imageId] : null,
+            '_source_image_url' => $imageId === '' && $sourceImageUrl !== '' ? $sourceImageUrl : null,
+        ], fn ($value) => $value !== null);
+    }
+
+    private function normalizePositiveInt(mixed $value): int
+    {
+        if (is_numeric($value)) {
+            return max(0, (int) round((float) $value));
+        }
+
+        $numeric = (int) preg_replace('/[^\d]/', '', (string) $value);
+        return max(0, $numeric);
+    }
+
+    private function normalizeNonNegativeInt(mixed $value): int
+    {
+        if (is_numeric($value)) {
+            return max(0, (int) $value);
+        }
+
+        return max(0, (int) preg_replace('/[^\d]/', '', (string) $value));
+    }
+
+    private function resolveShopeeApiTestContext(array $data = []): array
+    {
+        $this->ensureShopeeAuthColumns();
+        $this->normalizeActiveMarketplaceTokens();
+
+        $shopId = trim((string) ($data['shop_id'] ?? ''));
+        $accessToken = trim((string) ($data['access_token'] ?? ''));
+        $accountKey = trim((string) ($data['account_key'] ?? ''));
+        $accountName = '';
+
+        if ($shopId === '' || $accessToken === '' || $accountKey !== '') {
+            $tokens = $this->activeShopeeTokensForSync();
+            $token = null;
+
+            if ($accountKey !== '') {
+                $token = $tokens->first(fn ($row) => trim((string) ($row->account_key ?? '')) === $accountKey);
+            }
+
+            if (! $token && $shopId !== '') {
+                $token = $tokens->first(fn ($row) => trim((string) ($row->shop_id ?? '')) === $shopId);
+            }
+
+            if (! $token) {
+                $token = $tokens->first();
+            }
+
+            if ($token) {
+                $shopId = $shopId !== '' ? $shopId : trim((string) ($token->shop_id ?? ''));
+                $accessToken = $accessToken !== '' ? $accessToken : trim((string) ($token->access_token ?? ''));
+                $accountKey = trim((string) ($token->account_key ?? $accountKey));
+                $accountName = trim((string) ($token->account_name ?? ''));
+            }
+        }
+
+        return [
+            'account_key' => $accountKey ?: null,
+            'account_name' => $accountName ?: null,
+            'shop_id' => $shopId,
+            'access_token' => $accessToken,
+        ];
+    }
+
+    private function boolString(mixed $value): string
+    {
+        $normalized = filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+
+        if ($normalized === null) {
+            return trim((string) $value) === '1' ? 'true' : 'false';
+        }
+
+        return $normalized ? 'true' : 'false';
+    }
+
     private function storeShopeeProductPayload(array $item, array $models, array $tierVariations, int $shopId): void
     {
         $itemId = (int) ($item['item_id'] ?? 0);
@@ -3206,6 +3448,407 @@ class OmnichannelController extends Controller
             'upload' => $uploadResult,
             'mutation' => $mutationResult,
             'inventory' => $inventoryResult,
+        ]);
+    }
+
+    public function shopeeApiTest(Request $request): Response|JsonResponse
+    {
+        $data = $request->validate([
+            'api_name' => ['required', 'in:get_item_base_info,get_model_list'],
+            'item_id' => ['required', 'string'],
+            'shop_id' => ['nullable', 'string'],
+            'access_token' => ['nullable', 'string'],
+            'account_key' => ['nullable', 'string'],
+            'need_tax_info' => ['nullable'],
+            'need_complaint_policy' => ['nullable'],
+        ]);
+
+        $config = $this->shopeeConfig();
+        $context = $this->resolveShopeeApiTestContext($data);
+        $shopId = (int) ($context['shop_id'] ?? 0);
+        $accessToken = trim((string) ($context['access_token'] ?? ''));
+
+        abort_if($shopId <= 0 || $accessToken === '', 422, 'Token Shopee aktif belum lengkap. Jalankan AUTH / REFRESH Shopee dulu.');
+
+        $itemIds = collect(preg_split('/[\s,]+/', trim((string) $data['item_id']), -1, PREG_SPLIT_NO_EMPTY))
+            ->map(fn ($value) => trim((string) $value))
+            ->filter(fn ($value) => preg_match('/^\d+$/', $value) === 1)
+            ->values()
+            ->all();
+
+        abort_if($itemIds === [], 422, 'Item ID Shopee wajib diisi dengan angka.');
+
+        $apiName = (string) $data['api_name'];
+        $path = $apiName === 'get_model_list'
+            ? '/api/v2/product/get_model_list'
+            : '/api/v2/product/get_item_base_info';
+
+        $params = $apiName === 'get_model_list'
+            ? ['item_id' => $itemIds[0]]
+            : [
+                'item_id_list' => implode(',', $itemIds),
+                'need_tax_info' => $this->boolString($data['need_tax_info'] ?? 'false'),
+                'need_complaint_policy' => $this->boolString($data['need_complaint_policy'] ?? 'false'),
+            ];
+
+        $timestamp = time();
+        $query = [
+            'partner_id' => $config['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+            'sign' => $this->generateShopeeApiSign($config['partner_id'], $config['partner_key'], $path, $timestamp, $accessToken, $shopId),
+            ...$params,
+        ];
+
+        try {
+            $response = Http::timeout(45)
+                ->acceptJson()
+                ->get($config['host'].$path, $query);
+        } catch (\Throwable $exception) {
+            logger()->warning('Shopee API testing request exception', [
+                'api_name' => $apiName,
+                'item_id' => $data['item_id'],
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Shopee API testing request gagal dipanggil.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        $body = $response->body();
+        $decoded = json_decode($body, true);
+        if (! is_array($decoded)) {
+            logger()->warning('Shopee API testing returned invalid JSON', [
+                'api_name' => $apiName,
+                'item_id' => $data['item_id'],
+                'http_status' => $response->status(),
+                'body' => $body,
+            ]);
+
+            return response()->json([
+                'message' => 'Shopee tidak mengembalikan JSON valid.',
+                'raw' => $body,
+            ], 502);
+        }
+
+        return response($body, $response->status())
+            ->header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    public function shopeeApiTestContext(): JsonResponse
+    {
+        $context = $this->resolveShopeeApiTestContext([]);
+
+        abort_if(trim((string) ($context['access_token'] ?? '')) === '', 422, 'Token Shopee aktif belum tersedia.');
+        abort_if((int) ($context['shop_id'] ?? 0) <= 0, 422, 'Shop ID Shopee aktif belum tersedia.');
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => 'Context Shopee aktif berhasil diambil.',
+            'data' => [
+                'account_key' => $context['account_key'] ?? null,
+                'account_name' => $context['account_name'] ?? null,
+                'shop_id' => (string) ($context['shop_id'] ?? ''),
+                'access_token' => $context['access_token'] ?? null,
+            ],
+        ]);
+    }
+
+    public function shopeeAddVariant(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'item_id' => ['required', 'string'],
+            'shop_id' => ['nullable', 'string'],
+            'access_token' => ['nullable', 'string'],
+            'account_key' => ['nullable', 'string'],
+            'dry_run' => ['nullable'],
+            'variants' => ['required', 'array', 'min:1'],
+            'variants.*.stock_master_id' => ['nullable'],
+            'variants.*.variant_name' => ['required', 'string'],
+            'variants.*.seller_sku' => ['nullable', 'string'],
+            'variants.*.price' => ['nullable'],
+            'variants.*.stock' => ['nullable'],
+            'variants.*.image_url' => ['nullable', 'string'],
+            'variants.*.tiktok_product_id' => ['nullable', 'string'],
+            'variants.*.tiktok_sku_id' => ['nullable', 'string'],
+        ]);
+
+        $config = $this->shopeeConfig();
+        $context = $this->resolveShopeeApiTestContext($data);
+        $shopId = (int) ($context['shop_id'] ?? 0);
+        $accessToken = trim((string) ($context['access_token'] ?? ''));
+        $itemId = (int) trim((string) $data['item_id']);
+        $dryRun = $this->boolString($data['dry_run'] ?? true) === 'true';
+
+        abort_if($itemId <= 0, 422, 'Item ID Shopee wajib diisi.');
+        abort_if($shopId <= 0 || $accessToken === '', 422, 'Token Shopee aktif belum lengkap. Jalankan AUTH / REFRESH Shopee dulu.');
+
+        $modelPayload = $this->fetchShopeeModelList($config, $shopId, $accessToken, $itemId);
+        $models = data_get($modelPayload, 'model', []);
+        $standardiseTierVariation = data_get($modelPayload, 'standardise_tier_variation', []);
+        $tierVariation = data_get($modelPayload, 'tier_variation', []);
+        $useStandardiseTier = is_array($standardiseTierVariation) && $standardiseTierVariation !== [];
+        $activeTierVariation = $useStandardiseTier ? $standardiseTierVariation : $tierVariation;
+
+        abort_if(! is_array($activeTierVariation) || $activeTierVariation === [], 422, 'Produk Shopee belum punya tier variation. Untuk produk tanpa varian perlu init_tier_variation dulu.');
+        abort_if(count($activeTierVariation) !== 1, 422, 'Tool ini sementara hanya menangani produk Shopee 1 level varian.');
+
+        $tierOptions = $useStandardiseTier
+            ? data_get($activeTierVariation, '0.variation_option_list', [])
+            : data_get($activeTierVariation, '0.option_list', []);
+        abort_if(! is_array($tierOptions), 422, 'Struktur opsi varian Shopee tidak terbaca.');
+
+        $optionIndexByName = [];
+        foreach ($tierOptions as $index => $option) {
+            $name = $useStandardiseTier
+                ? data_get($option, 'variation_option_name')
+                : data_get($option, 'option');
+            $key = $this->normalizeSkuMatchValue($name ?? '');
+            if ($key !== '') {
+                $optionIndexByName[$key] = (int) $index;
+            }
+        }
+
+        $existingModelTierKeys = [];
+        $existingModelList = [];
+        $sellerStockLocationId = '';
+        $modelWeight = null;
+
+        foreach (is_array($models) ? $models : [] as $model) {
+            if (! is_array($model)) {
+                continue;
+            }
+
+            $tierIndex = array_map('intval', $this->normalizeShopeeIndexList($model['tier_index'] ?? []));
+            if ($tierIndex !== []) {
+                $existingModelTierKeys[implode('|', $tierIndex)] = true;
+            }
+
+            if (! empty($model['model_id'])) {
+                $existingModelList[] = [
+                    'model_id' => (int) $model['model_id'],
+                    'tier_index' => $tierIndex,
+                ];
+            }
+
+            if ($sellerStockLocationId === '') {
+                $sellerStockLocationId = trim((string) data_get($model, 'stock_info_v2.seller_stock.0.location_id', ''));
+            }
+
+            if ($modelWeight === null && isset($model['weight']) && is_numeric($model['weight'])) {
+                $modelWeight = (float) $model['weight'];
+            }
+        }
+
+        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants']);
+        abort_if($requestedVariants === [], 422, 'Tidak ada varian valid untuk ditambahkan ke Shopee.');
+
+        $newOptionCount = 0;
+        $addModels = [];
+        $plannedVariants = [];
+        $skippedVariants = [];
+        $seenVariantNames = [];
+
+        foreach ($requestedVariants as $variant) {
+            $variantName = $variant['variant_name'];
+            $variantKey = $this->normalizeSkuMatchValue($variantName);
+            if ($variantKey === '' || isset($seenVariantNames[$variantKey])) {
+                continue;
+            }
+            $seenVariantNames[$variantKey] = true;
+
+            $optionAlreadyExists = array_key_exists($variantKey, $optionIndexByName);
+            $optionIndex = $optionAlreadyExists ? $optionIndexByName[$variantKey] : count($tierOptions);
+            $imageUpload = null;
+            $imageId = '';
+
+            if (! $optionAlreadyExists) {
+                if (! $dryRun && $variant['image_url'] !== '') {
+                    $imageUpload = $this->uploadShopeeProductImage($config, $variant['image_url']);
+                    if (($imageUpload['ok'] ?? false) !== true) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => $imageUpload['message'] ?? 'Upload gambar Shopee gagal.',
+                            'variant' => $variantName,
+                            'upload' => $imageUpload,
+                        ], 422);
+                    }
+
+                    $imageId = trim((string) ($imageUpload['image_id'] ?? ''));
+                }
+
+                $tierOptions[] = $this->buildShopeeTierOption($variantName, $useStandardiseTier, $imageId, $variant['image_url']);
+                $optionIndexByName[$variantKey] = $optionIndex;
+                $newOptionCount += 1;
+            }
+
+            $tierKey = (string) $optionIndex;
+            if (isset($existingModelTierKeys[$tierKey])) {
+                $skippedVariants[] = [
+                    'variant_name' => $variantName,
+                    'reason' => 'Model Shopee untuk opsi ini sudah ada.',
+                    'tier_index' => [$optionIndex],
+                ];
+                continue;
+            }
+
+            $sellerStock = [
+                'stock' => $variant['stock'],
+            ];
+            if ($sellerStockLocationId !== '') {
+                $sellerStock['location_id'] = $sellerStockLocationId;
+            }
+
+            $model = [
+                'tier_index' => [$optionIndex],
+                'original_price' => $variant['price'],
+                'seller_stock' => [$sellerStock],
+            ];
+
+            if ($variant['seller_sku'] !== '') {
+                $model['model_sku'] = mb_substr($variant['seller_sku'], 0, 100);
+            }
+
+            if ($modelWeight !== null && $modelWeight > 0) {
+                $model['weight'] = $modelWeight;
+            }
+
+            $addModels[] = $model;
+            $plannedVariants[] = [
+                ...$variant,
+                'tier_index' => [$optionIndex],
+                'image_upload' => $imageUpload,
+                'image_id' => $imageId ?: null,
+                'option_already_exists' => $optionAlreadyExists,
+            ];
+        }
+
+        $updateTierPayload = null;
+        if ($newOptionCount > 0) {
+            $updatedTierVariation = $activeTierVariation;
+
+            if ($useStandardiseTier) {
+                $updatedTierVariation[0]['variation_option_list'] = $tierOptions;
+                $updateTierPayload = [
+                    'item_id' => $itemId,
+                    'model_list' => $existingModelList,
+                    'standardise_tier_variation' => $updatedTierVariation,
+                ];
+            } else {
+                $updatedTierVariation[0]['option_list'] = $tierOptions;
+                $updateTierPayload = [
+                    'item_id' => $itemId,
+                    'model_list' => $existingModelList,
+                    'tier_variation' => $updatedTierVariation,
+                ];
+            }
+        }
+
+        $addModelPayload = [
+            'item_id' => $itemId,
+            'model_list' => $addModels,
+        ];
+
+        $plan = [
+            'item_id' => (string) $itemId,
+            'shop_id' => (string) $shopId,
+            'dry_run' => $dryRun,
+            'new_option_count' => $newOptionCount,
+            'new_model_count' => count($addModels),
+            'skipped' => $skippedVariants,
+            'planned_variants' => $plannedVariants,
+            'requests' => [
+                'update_tier_variation' => $updateTierPayload,
+                'add_model' => $addModelPayload,
+            ],
+        ];
+
+        if ($dryRun) {
+            return response()->json([
+                'status' => 'ok',
+                'message' => 'Dry run Shopee berhasil. Belum ada perubahan dikirim ke Shopee.',
+                'plan' => $plan,
+            ]);
+        }
+
+        if ($addModels === []) {
+            return response()->json([
+                'status' => 'ok',
+                'message' => 'Tidak ada model baru yang perlu dikirim ke Shopee.',
+                'plan' => $plan,
+            ]);
+        }
+
+        $responses = [];
+
+        if ($updateTierPayload !== null) {
+            $responses['update_tier_variation'] = $this->shopeeSignedPost($config, '/api/v2/product/update_tier_variation', $shopId, $accessToken, $updateTierPayload);
+            if (($responses['update_tier_variation']['error'] ?? '') !== '') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $responses['update_tier_variation']['message'] ?? 'Shopee menolak update_tier_variation.',
+                    'plan' => $plan,
+                    'responses' => $responses,
+                ], 422);
+            }
+        }
+
+        $responses['add_model'] = $this->shopeeSignedPost($config, '/api/v2/product/add_model', $shopId, $accessToken, $addModelPayload);
+        if (($responses['add_model']['error'] ?? '') !== '') {
+            return response()->json([
+                'status' => 'error',
+                'message' => $responses['add_model']['message'] ?? 'Shopee menolak add_model.',
+                'plan' => $plan,
+                'responses' => $responses,
+            ], 422);
+        }
+
+        $freshBaseItems = $this->fetchShopeeBaseInfo($config, $shopId, $accessToken, [$itemId]);
+        $freshModelPayload = $this->fetchShopeeModelList($config, $shopId, $accessToken, $itemId);
+        foreach ($freshBaseItems as $freshBaseItem) {
+            $this->storeShopeeProductPayload(
+                $freshBaseItem,
+                data_get($freshModelPayload, 'model', []),
+                data_get($freshModelPayload, 'tier_variation', []),
+                $shopId
+            );
+        }
+
+        foreach ($plannedVariants as $variant) {
+            $stockMasterId = (int) ($variant['stock_master_id'] ?? 0);
+            if ($stockMasterId <= 0) {
+                continue;
+            }
+
+            DB::table('sku_variant_actions')->updateOrInsert(
+                [
+                    'stock_master_id' => $stockMasterId,
+                    'target_channel' => 'shopee',
+                    'action_type' => 'create_variant',
+                ],
+                [
+                    'source_channel' => 'tiktok',
+                    'payload' => json_encode([
+                        'plan' => $plan,
+                        'responses' => $responses,
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'status' => 'submitted',
+                    'updated_at' => now(),
+                    'created_at' => now(),
+                ]
+            );
+        }
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => count($addModels).' varian Shopee berhasil dikirim.',
+            'plan' => $plan,
+            'responses' => $responses,
         ]);
     }
 
