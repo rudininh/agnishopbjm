@@ -16,6 +16,7 @@
       <RouterLink to="/sku-mapping">SKU Mapping</RouterLink>
       <RouterLink to="/tambah-varian-tiktok">Tambah Varian TikTok</RouterLink>
       <RouterLink to="/tambah-varian-shopee">Tambah Varian Shopee</RouterLink>
+      <RouterLink to="/detail-produk-marketplace">Detail Produk</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
       <RouterLink to="/dokumentasi-tiktok">Dokumentasi TikTok</RouterLink>
@@ -38,6 +39,7 @@ import { RouterLink } from 'vue-router'
   flex-direction: column;
   padding: 18px;
   z-index: 10;
+  overflow-y: auto;
 }
 
 .brand {

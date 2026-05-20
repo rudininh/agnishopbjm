@@ -32,8 +32,8 @@
     <div class="summary-grid" v-if="summaryItem">
       <article class="metric">
         <span>Item id dan Model id Shopee</span>
-        <strong>{{ summaryItem.shopee?.item_id || '-' }}</strong>
-        <small>Model ID: {{ summaryItem.shopee?.model_id || '-' }}</small>
+        <strong>{{ resolveSelectedShopeeItemId() || '-' }}</strong>
+        <small>Model ID: {{ resolveSelectedShopeeModelId() || '-' }}</small>
       </article>
       <article class="metric">
         <span>Product ID TikTok</span>
@@ -162,8 +162,8 @@
                       <img v-if="item.shopee?.image_url" :src="item.shopee.image_url" class="thumb" :alt="item.shopee.variant_name" />
                       <div v-else class="thumb fallback">SP</div>
                       <div>
-                        <small>{{ shopeePresenceLabel(item) }}</small>
-                        <small>Item/Model: {{ item.shopee?.item_id || '-' }} / {{ item.shopee?.model_id || '-' }}</small>
+                        <small>{{ shopeePresenceLabel(item, group) }}</small>
+                        <small>Item/Model: {{ resolveContextShopeeItemId(item, group) || '-' }} / {{ item.shopee?.model_id || '-' }}</small>
                         <small>Kode/Stok: {{ item.shopee?.seller_sku || item.seller_sku || '-' }} / {{ displayStock(item.shopee?.stock_qty) }}</small>
                         <small v-if="hasPrice(item.shopee?.price ?? item.shopee_variant_price)">Harga: {{ displayPrice(item.shopee?.price ?? item.shopee_variant_price) }}</small>
                       </div>
@@ -565,7 +565,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { omnichannelService } from '@/services'
 
@@ -661,6 +661,12 @@ const filters = reactive({
 })
 const pageCache = new Map()
 const flowKey = computed(() => filters.flow || route.meta?.flow || tableFlowOptions.value[0].value)
+const defaultFlowStatus = computed(() => isShopeeFlow.value ? 'shopee_missing' : 'tiktok_missing')
+const defaultFlowValue = computed(() => isShopeeFlow.value ? 'tiktok-to-shopee' : 'shopee-to-tiktok')
+const applyDefaultFlowFilters = () => {
+  filters.flow = defaultFlowValue.value
+  filters.status = defaultFlowStatus.value
+}
 const form = reactive({
   stock_master_id: null,
   shopee_item_id: '',
@@ -744,6 +750,12 @@ const resolveShopeeItemId = (item) => String(
   item?.stock_shopee_product_id ||
   ''
 ).trim()
+const resolveShopeeModelId = (item) => String(
+  item?.shopee?.model_id ||
+  item?.shopee_model_id ||
+  item?.stock_shopee_model_id ||
+  ''
+).trim()
 const tiktokMatchSource = (item) => String(item?.tiktok?.source || '').trim()
 const hasTiktokActual = (item) => {
   const status = String(item?.tiktok?.status || '').trim()
@@ -763,11 +775,52 @@ const hasTiktokActual = (item) => {
 }
 const hasTiktokProductCandidate = (item) => tiktokMatchSource(item) === 'suggested_product'
 const hasTiktokCandidate = (item) => Boolean(item?.tiktok?.seller_sku || item?.seller_sku)
-const hasShopeeActual = (item) => Boolean(item?.shopee?.item_id || item?.shopee?.model_id || item?.shopee?.image_url || item?.shopee?.stock_qty !== null && item?.shopee?.stock_qty !== undefined)
+const shopeeMatchSource = (item) => String(item?.shopee?.source || '').trim()
+const hasShopeeProductCandidate = (item) => shopeeMatchSource(item) === 'suggested_product'
+const hasShopeeActual = (item) => {
+  if (hasShopeeProductCandidate(item)) return false
+  return Boolean(item?.shopee?.item_id || item?.shopee?.model_id || item?.shopee?.image_url || item?.shopee?.stock_qty !== null && item?.shopee?.stock_qty !== undefined)
+}
 const hasShopeeCandidate = (item) => Boolean(item?.shopee?.seller_sku || item?.seller_sku)
 const hasTiktok = (item) => hasTiktokActual(item) || hasTiktokProductCandidate(item) || hasTiktokCandidate(item)
-const hasShopee = (item) => hasShopeeActual(item) || hasShopeeCandidate(item)
-const shopeePresenceLabel = (item) => hasShopeeActual(item) ? 'Ada di Shopee' : hasShopeeCandidate(item) ? 'Kode variasi cocok, varian Shopee belum ada' : 'Varian ini tidak ada di Shopee'
+const hasShopee = (item) => hasShopeeActual(item) || hasShopeeProductCandidate(item) || hasShopeeCandidate(item)
+const firstNumericToken = (value) => String(value || '').match(/\d+/)?.[0] || ''
+const resolveShopeeApiResponseItemId = () => {
+  const parsed = parseResponseJson(getProductResponseText.value)
+  const candidate = parsed?.response?.item_list?.[0]?.item_id
+    || parsed?.response?.item_id
+    || parsed?.item_id
+    || ''
+
+  return String(candidate || '').trim()
+}
+const resolveManualShopeeItemId = () => firstNumericToken(shopeeProductTool.item_id) || resolveShopeeApiResponseItemId()
+const isCurrentShopeeContextGroup = (item, group = null) => {
+  if (!isShopeeFlow.value || !resolveManualShopeeItemId()) return false
+
+  const selectedKey = getGroupKey(selectedItem.value)
+  const itemKey = getGroupKey(item)
+  const groupKey = group?.key || ''
+  const activeKey = activeGroup.value?.key || ''
+
+  return Boolean(
+    (selectedKey && (itemKey === selectedKey || groupKey === selectedKey)) ||
+    (activeKey && (itemKey === activeKey || groupKey === activeKey))
+  )
+}
+const resolveContextShopeeItemId = (item, group = null) => {
+  return resolveShopeeItemId(item)
+    || resolveGroupShopeeItemId(group)
+    || (isCurrentShopeeContextGroup(item, group) ? resolveManualShopeeItemId() : '')
+}
+const shopeePresenceLabel = (item, group = null) => {
+  if (hasShopeeActual(item)) return 'Ada di Shopee'
+
+  const productExists = Boolean(resolveContextShopeeItemId(item, group))
+  return productExists
+    ? 'Varian ini tidak ada di Shopee'
+    : 'Product tidak ada dan Varian ini tidak ada di Shopee'
+}
 const tiktokPresenceLabel = (item) => {
   if (hasTiktokActual(item)) return 'Ada di TikTok'
   if (hasTiktokProductCandidate(item)) return 'Produk TikTok ada, varian belum cocok'
@@ -809,7 +862,8 @@ const resolveGroupShopeeItemId = (group) => {
 }
 const resolveSelectedTiktokProductId = () => resolveTiktokProductId(selectedItem.value) || resolveGroupTiktokProductId(activeGroup.value) || ''
 const resolveSelectedTiktokSkuId = () => resolveTiktokSkuId(selectedItem.value) || ''
-const resolveSelectedShopeeItemId = () => resolveShopeeItemId(selectedItem.value) || resolveGroupShopeeItemId(activeGroup.value) || ''
+const resolveSelectedShopeeItemId = () => resolveShopeeItemId(selectedItem.value) || resolveGroupShopeeItemId(activeGroup.value) || resolveManualShopeeItemId() || ''
+const resolveSelectedShopeeModelId = () => resolveShopeeModelId(selectedItem.value) || ''
 const sortGroupVariants = (group) => ({
   ...group,
   variants: [...group.variants].sort((a, b) => {
@@ -929,6 +983,8 @@ const toggleVariantSelection = (item, checked = null) => {
   const key = normalizeSelectionId(item?.id)
   if (!key) return
 
+  selectItem(item, { resetGetProductResponse: false })
+
   const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
   const nextChecked = checked === null ? !selected.has(key) : Boolean(checked)
 
@@ -947,6 +1003,9 @@ const toggleDisplayedVariantsSelection = (checked) => {
   const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
 
   if (checked) {
+    const firstVisible = displayVariants.value[0] || null
+    if (firstVisible) selectItem(firstVisible, { resetGetProductResponse: false })
+
     displayVariants.value.forEach((item) => {
       const key = normalizeSelectionId(item?.id)
       if (!key) return
@@ -967,6 +1026,8 @@ const toggleGroupVariantSelection = (group, checked) => {
   const selected = new Set(selectedVariantIds.value.map((value) => normalizeSelectionId(value)))
 
   if (checked) {
+    if (variants[0]) selectItem(variants[0], { resetGetProductResponse: false })
+
     variants.forEach((item) => {
       const key = normalizeSelectionId(item?.id)
       if (!key) return
@@ -2520,7 +2581,9 @@ const selectItem = (item, options = {}) => {
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
   getProductTool.product_id = resolvedProductId
-  shopeeProductTool.item_id = resolvedShopeeItemId
+  if (resolvedShopeeItemId || !String(shopeeProductTool.item_id || '').trim()) {
+    shopeeProductTool.item_id = resolvedShopeeItemId
+  }
   if (resetGetProductResponse) {
     getProductResponseText.value = ''
     getProductResponseStatus.value = '0'
@@ -2609,7 +2672,15 @@ const runTiktokAction = async (action) => {
   }
 }
 
+watch(() => route.meta?.flow, async () => {
+  applyDefaultFlowFilters()
+  pageCache.clear()
+  await loadData(true, { bypassCache: true })
+})
+
 onMounted(async () => {
+  applyDefaultFlowFilters()
+
   if (isShopeeFlow.value) {
     addVariantTool.product_id = ''
   }

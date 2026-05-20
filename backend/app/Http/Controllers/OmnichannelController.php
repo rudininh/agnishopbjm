@@ -2337,6 +2337,8 @@ class OmnichannelController extends Controller
         );
 
         $rows = $query->get();
+        $shopeeProductGroups = $this->shopeeProductGroupsForSkuMapping();
+        $stockGroupShopeeMatches = $this->suggestShopeeProductsForStockGroups($rows, $shopeeProductGroups);
         $tiktokLookup = $this->tiktokSkuMappingLookup();
         $tiktokProductGroups = $tiktokLookup['product_groups'];
         $stockGroupTiktokMatches = $this->suggestTiktokProductsForStockGroups($rows, $tiktokProductGroups);
@@ -2365,12 +2367,19 @@ class OmnichannelController extends Controller
         };
 
         foreach ($rows as $row) {
-            $shopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
+            $stockGroupKey = $this->stockMappingGroupKey($row);
+            $matchedShopeeItemId = $stockGroupShopeeMatches[$stockGroupKey] ?? null;
+            $matchedShopeeProduct = $matchedShopeeItemId ? ($shopeeProductGroups[$matchedShopeeItemId] ?? null) : null;
+            $savedShopeeItemId = $row->shopee_item_id ?: $row->stock_shopee_item_id;
+            $shopeeItemId = $savedShopeeItemId ?: $matchedShopeeItemId;
             $shopeeModelId = $row->shopee_model_id ?: $row->stock_shopee_model_id;
             $shopeeSellerSku = $row->mapped_seller_sku ?: $row->stock_shopee_seller_sku;
             $shopeeStatus = trim((string) ($row->shopee_status ?? ''));
+            $shopeeStatus = $shopeeStatus !== '' ? $shopeeStatus : (string) ($matchedShopeeProduct['status'] ?? '');
             $shopeeIsLive = $this->isLiveShopeeStatus($shopeeStatus);
-            $stockGroupKey = $this->stockMappingGroupKey($row);
+            $shopeeMatchSource = $this->filledString($savedShopeeItemId) || $this->filledString($shopeeModelId)
+                ? 'saved'
+                : ($matchedShopeeProduct ? 'suggested_product' : null);
             $matchedProductId = $stockGroupTiktokMatches[$stockGroupKey] ?? null;
             $canonicalGroupKey = $matchedProductId && isset($matchedTiktokToStockGroup[$matchedProductId])
                 ? $matchedTiktokToStockGroup[$matchedProductId]
@@ -2387,12 +2396,14 @@ class OmnichannelController extends Controller
             $tiktokSkuName = $row->tiktok_sku_name ?: null;
             $tiktokSellerSku = $row->mapped_seller_sku ?: $row->stock_tiktok_seller_sku ?: ($tiktokMatch->seller_sku ?? null);
             $variantActionStatus = trim((string) ($row->variant_action_status ?? ''));
-            $hasShopeeActual = $this->filledString($shopeeItemId)
+            $hasShopeeActual = $shopeeMatchSource !== 'suggested_product' && (
+                $this->filledString($shopeeItemId)
                 || $this->filledString($shopeeModelId)
                 || $this->filledString($row->shopee_model_image_url ?? null)
                 || $this->filledString($row->shopee_product_image_url ?? null)
                 || $this->filledString($row->shopee_image_url ?? null)
-                || ($row->shopee_variant_stock ?? $row->stock_qty ?? null) !== null;
+                || ($row->shopee_variant_stock ?? $row->stock_qty ?? null) !== null
+            );
             $hasTiktokVariantIdentity = $tiktokMatch !== null && (
                 $this->filledString($tiktokMatch->sku_id ?? null)
                 || $this->normalizeSkuMatchValue($tiktokMatch->sku_name ?? '') !== ''
@@ -2405,7 +2416,8 @@ class OmnichannelController extends Controller
             $shopeeImageUrl = $row->shopee_model_image_url
                 ?: $row->internal_image_url
                 ?: $row->shopee_image_url
-                ?: $row->shopee_product_image_url;
+                ?: $row->shopee_product_image_url
+                ?: ($matchedShopeeProduct['image_url'] ?? null);
             $tiktokImageUrl = $row->tiktok_image_url
                 ?: ($tiktokMatch->image_url ?? null)
                 ?: ($tiktokMatch->product_image_url ?? null);
@@ -2432,13 +2444,14 @@ class OmnichannelController extends Controller
                     'model_id' => $shopeeModelId,
                     'status' => $shopeeStatus !== '' ? $shopeeStatus : null,
                     'is_live' => $shopeeIsLive,
-                    'product_name' => $row->shopee_name ?: $row->product_name,
+                    'product_name' => $row->shopee_name ?: ($matchedShopeeProduct['product_name'] ?? $row->product_name),
                     'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
                     'seller_sku' => $shopeeSellerSku,
                     'price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                     'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
                     'image_url' => $shopeeImageUrl,
                     'status' => $hasShopeeActual ? 'mapped' : 'unmapped',
+                    'source' => $shopeeMatchSource,
                 ],
                 'shopee_variant_price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                 'tiktok' => [
@@ -2473,6 +2486,12 @@ class OmnichannelController extends Controller
                 : 'tiktok:'.$productId;
             $groupFirst = $group->first();
             $productImageUrl = $group->firstWhere('image_url')?->image_url ?? null;
+            $suggestedShopeeItemId = str_starts_with((string) $canonicalGroupKey, 'shopee:')
+                ? substr((string) $canonicalGroupKey, strlen('shopee:'))
+                : ($stockGroupShopeeMatches[$canonicalGroupKey] ?? null);
+            $suggestedShopeeProduct = $suggestedShopeeItemId
+                ? ($shopeeProductGroups[$suggestedShopeeItemId] ?? null)
+                : null;
 
             foreach ($group as $skuRow) {
                 $variantKey = $this->tiktokVariantKey($skuRow);
@@ -2491,13 +2510,14 @@ class OmnichannelController extends Controller
                     'image_url' => $skuRow->image_url ?: $productImageUrl,
                     'mapping_id' => null,
                     'shopee' => [
-                        'item_id' => null,
+                        'item_id' => $suggestedShopeeItemId,
                         'model_id' => null,
-                        'product_name' => null,
+                        'product_name' => $suggestedShopeeProduct['product_name'] ?? null,
                         'variant_name' => null,
                         'stock_qty' => null,
-                        'image_url' => null,
+                        'image_url' => $suggestedShopeeProduct['image_url'] ?? null,
                         'status' => 'unmapped',
+                        'source' => $suggestedShopeeProduct ? 'suggested_product' : null,
                     ],
                     'tiktok' => [
                         'product_id' => $skuRow->product_id,
@@ -2724,6 +2744,127 @@ class OmnichannelController extends Controller
             'product_groups' => $productGroups,
             'rows_by_product_id' => $rowsByProductId,
         ];
+    }
+
+    private function shopeeProductGroupsForSkuMapping(): array
+    {
+        if (! Schema::hasTable('shopee_product')) {
+            return [];
+        }
+
+        $products = DB::table('shopee_product as sp')
+            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), 'spi.item_id', '=', 'sp.item_id')
+            ->select('sp.item_id', 'sp.name as product_name', 'sp.status', 'spi.image_url')
+            ->get();
+
+        if ($products->isEmpty()) {
+            return [];
+        }
+
+        $modelRows = Schema::hasTable('shopee_product_model')
+            ? DB::table('shopee_product_model')
+                ->select('item_id', 'name', 'model_id')
+                ->get()
+                ->groupBy('item_id')
+            : collect();
+
+        $groups = [];
+
+        foreach ($products as $product) {
+            $itemId = trim((string) ($product->item_id ?? ''));
+            if ($itemId === '') {
+                continue;
+            }
+
+            $variantNames = [];
+            foreach (($modelRows[$product->item_id] ?? collect()) as $model) {
+                $variantKey = $this->normalizeSkuMatchValue($model->name ?? '');
+                if ($variantKey !== '') {
+                    $variantNames[$variantKey] = true;
+                }
+            }
+
+            $groups[$itemId] = [
+                'item_id' => $itemId,
+                'product_name' => $product->product_name ?? '',
+                'product_name_key' => $this->normalizeSkuMatchValue($product->product_name ?? ''),
+                'tokens' => $this->skuMappingNameTokens($product->product_name ?? ''),
+                'variant_names' => array_keys($variantNames),
+                'status' => $product->status ?? null,
+                'image_url' => $product->image_url ?? null,
+            ];
+        }
+
+        return $groups;
+    }
+
+    private function suggestShopeeProductsForStockGroups($rows, array $shopeeProductGroups): array
+    {
+        if ($rows->isEmpty() || $shopeeProductGroups === []) {
+            return [];
+        }
+
+        $stockGroups = [];
+
+        foreach ($rows as $row) {
+            $groupKey = $this->stockMappingGroupKey($row);
+
+            if (! isset($stockGroups[$groupKey])) {
+                $stockGroups[$groupKey] = [
+                    'product_name_key' => $this->normalizeSkuMatchValue($row->product_name ?? ''),
+                    'tokens' => $this->skuMappingNameTokens($row->product_name ?? ''),
+                    'variant_names' => [],
+                ];
+            }
+
+            $variantKey = $this->normalizeSkuMatchValue($row->variant_name ?? '');
+            if ($variantKey !== '') {
+                $stockGroups[$groupKey]['variant_names'][$variantKey] = true;
+            }
+        }
+
+        $matches = [];
+
+        foreach ($stockGroups as $groupKey => $stockGroup) {
+            $bestItemId = null;
+            $bestScore = 0;
+            $variantNames = array_keys($stockGroup['variant_names']);
+
+            foreach ($shopeeProductGroups as $itemId => $shopeeGroup) {
+                $exactNameMatch = $stockGroup['product_name_key'] !== ''
+                    && $stockGroup['product_name_key'] === $shopeeGroup['product_name_key'];
+                $nameContains = $stockGroup['product_name_key'] !== ''
+                    && $shopeeGroup['product_name_key'] !== ''
+                    && (
+                        str_contains($stockGroup['product_name_key'], $shopeeGroup['product_name_key'])
+                        || str_contains($shopeeGroup['product_name_key'], $stockGroup['product_name_key'])
+                    );
+                $tokenOverlap = count(array_intersect($stockGroup['tokens'], $shopeeGroup['tokens']));
+                $variantOverlap = $variantNames !== []
+                    ? count(array_intersect($variantNames, $shopeeGroup['variant_names']))
+                    : 0;
+
+                if (! $exactNameMatch && ! $nameContains && $tokenOverlap < 2 && $variantOverlap < 1) {
+                    continue;
+                }
+
+                $score = ($exactNameMatch ? 100000 : 0)
+                    + ($variantOverlap * 1000)
+                    + ($tokenOverlap * 50)
+                    + ($nameContains ? 25 : 0);
+
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $bestItemId = (string) $itemId;
+                }
+            }
+
+            if ($bestItemId !== null) {
+                $matches[$groupKey] = $bestItemId;
+            }
+        }
+
+        return $matches;
     }
 
     private function suggestTiktokProductsForStockGroups($rows, array $tiktokProductGroups): array
