@@ -107,6 +107,14 @@ export const omnichannelService = {
     return api.get('/get-stock-master')
   },
 
+  productVariantAnalysis(params = {}) {
+    return api.get('/product-variant-analysis', { params })
+  },
+
+  confirmProductVariantAnalysisIssue(data) {
+    return api.post('/product-variant-analysis/confirm', data)
+  },
+
   skuMapping(params = {}) {
     return api.get('/sku-mapping', { params })
   },

@@ -62,6 +62,902 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    public function productVariantAnalysis(Request $request): JsonResponse
+    {
+        $this->ensureProductVariantAnalysisTables();
+
+        $channel = (string) $request->query('channel', 'all');
+        if (! in_array($channel, ['all', 'shopee', 'tiktok'], true)) {
+            $channel = 'all';
+        }
+
+        $catalog = [
+            'shopee' => [],
+            'tiktok' => [],
+        ];
+        $issues = [];
+
+        if ($channel === 'all' || $channel === 'shopee') {
+            $catalog['shopee'] = $this->shopeeProductsForVariantAnalysis();
+            array_push($issues, ...$this->marketplaceProductVariantIssues('shopee', $catalog['shopee']));
+        }
+
+        if ($channel === 'all' || $channel === 'tiktok') {
+            $catalog['tiktok'] = $this->tiktokProductsForVariantAnalysis();
+            array_push($issues, ...$this->marketplaceProductVariantIssues('tiktok', $catalog['tiktok']));
+        }
+
+        $severityOrder = ['high' => 0, 'warning' => 1, 'info' => 2];
+        usort($issues, function (array $left, array $right) use ($severityOrder): int {
+            $severityCompare = ($severityOrder[$left['severity']] ?? 99) <=> ($severityOrder[$right['severity']] ?? 99);
+            if ($severityCompare !== 0) {
+                return $severityCompare;
+            }
+
+            $channelCompare = strcmp((string) $left['channel'], (string) $right['channel']);
+            if ($channelCompare !== 0) {
+                return $channelCompare;
+            }
+
+            return strcmp((string) $left['title'], (string) $right['title']);
+        });
+
+        $confirmedIssueIds = $this->confirmedProductVariantAnalysisIssueIds();
+        $allIssueCount = count($issues);
+        $issues = array_values(array_filter(
+            $issues,
+            fn (array $issue) => ! isset($confirmedIssueIds[(string) ($issue['id'] ?? '')])
+        ));
+        $confirmedIssueCount = $allIssueCount - count($issues);
+
+        $countWhere = static fn (array $rows, string $key, string $value): int => count(array_filter(
+            $rows,
+            fn (array $row) => ($row[$key] ?? null) === $value
+        ));
+
+        return response()->json([
+            'status' => 'ok',
+            'summary' => [
+                'total_issues' => count($issues),
+                'high' => $countWhere($issues, 'severity', 'high'),
+                'warning' => $countWhere($issues, 'severity', 'warning'),
+                'info' => $countWhere($issues, 'severity', 'info'),
+                'duplicate_products' => $countWhere($issues, 'type', 'duplicate_product'),
+                'duplicate_variants' => $countWhere($issues, 'type', 'duplicate_variant') + $countWhere($issues, 'type', 'duplicate_seller_sku'),
+                'variant_anomalies' => $countWhere($issues, 'type', 'variant_anomaly'),
+                'confirmed_not_anomaly' => $confirmedIssueCount,
+                'shopee_products' => count($catalog['shopee']),
+                'tiktok_products' => count($catalog['tiktok']),
+                'last_shopee_sync_at' => Schema::hasTable('shopee_sync_logs') ? DB::table('shopee_sync_logs')->max('synced_at') : null,
+                'last_tiktok_sync_at' => Schema::hasTable('tiktok_sync_logs') ? DB::table('tiktok_sync_logs')->max('synced_at') : null,
+            ],
+            'issues' => $issues,
+        ]);
+    }
+
+    public function confirmProductVariantAnalysisIssue(Request $request): JsonResponse
+    {
+        $this->ensureProductVariantAnalysisTables();
+
+        $data = $request->validate([
+            'issue_id' => ['required', 'string', 'max:160'],
+            'channel' => ['nullable', 'string', 'max:40'],
+            'type' => ['nullable', 'string', 'max:80'],
+            'product_name' => ['nullable', 'string', 'max:500'],
+            'product_ids' => ['nullable', 'array'],
+            'product_ids.*' => ['nullable', 'string', 'max:80'],
+            'note' => ['nullable', 'string', 'max:1000'],
+            'issue' => ['nullable', 'array'],
+        ]);
+
+        $issueId = trim((string) $data['issue_id']);
+        $issue = $data['issue'] ?? [];
+        $productIds = $data['product_ids'] ?? ($issue['product_ids'] ?? []);
+        $productIds = array_values(array_filter(array_map(
+            fn ($productId) => trim((string) $productId),
+            is_array($productIds) ? $productIds : []
+        ), fn (string $productId) => $productId !== ''));
+
+        DB::table('product_variant_analysis_confirmations')->updateOrInsert(
+            ['issue_id' => $issueId],
+            [
+                'channel' => trim((string) ($data['channel'] ?? ($issue['channel'] ?? ''))) ?: null,
+                'type' => trim((string) ($data['type'] ?? ($issue['type'] ?? ''))) ?: null,
+                'product_name' => mb_substr(trim((string) ($data['product_name'] ?? ($issue['product_name'] ?? ''))), 0, 500) ?: null,
+                'product_ids' => json_encode($productIds, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => 'not_anomaly',
+                'note' => mb_substr(trim((string) ($data['note'] ?? '')), 0, 1000) ?: null,
+                'issue_snapshot' => json_encode($issue, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'confirmed_at' => now(),
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => 'Temuan sudah ditandai sebagai bukan anomali.',
+            'issue_id' => $issueId,
+        ]);
+    }
+
+    private function ensureProductVariantAnalysisTables(): void
+    {
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS product_variant_analysis_confirmations (
+                id BIGSERIAL PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                channel TEXT NULL,
+                type TEXT NULL,
+                product_name TEXT NULL,
+                product_ids TEXT NULL,
+                status TEXT NOT NULL DEFAULT 'not_anomaly',
+                note TEXT NULL,
+                issue_snapshot TEXT NULL,
+                confirmed_at TIMESTAMP DEFAULT NOW(),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("CREATE UNIQUE INDEX IF NOT EXISTS product_variant_analysis_confirmations_issue_id_idx ON product_variant_analysis_confirmations (issue_id)");
+        DB::statement("CREATE INDEX IF NOT EXISTS product_variant_analysis_confirmations_status_idx ON product_variant_analysis_confirmations (status)");
+    }
+
+    private function confirmedProductVariantAnalysisIssueIds(): array
+    {
+        if (! Schema::hasTable('product_variant_analysis_confirmations')) {
+            return [];
+        }
+
+        return DB::table('product_variant_analysis_confirmations')
+            ->where('status', 'not_anomaly')
+            ->pluck('issue_id')
+            ->filter()
+            ->mapWithKeys(fn ($issueId) => [(string) $issueId => true])
+            ->all();
+    }
+
+    private function shopeeProductsForVariantAnalysis(): array
+    {
+        if (! Schema::hasTable('shopee_product')) {
+            return [];
+        }
+
+        $products = DB::table('shopee_product')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('item_id', 'shop_id', 'name', 'status', 'stock', 'updated_at')
+            ->get();
+
+        $modelsByItem = Schema::hasTable('shopee_product_model')
+            ? DB::table('shopee_product_model')
+                ->select('item_id', 'model_id', 'name', 'stock', 'price', 'updated_at')
+                ->get()
+                ->groupBy(fn ($row) => trim((string) ($row->item_id ?? '')))
+            : collect();
+
+        return $products
+            ->map(function ($product) use ($modelsByItem): array {
+                $itemId = trim((string) ($product->item_id ?? ''));
+                $variants = $modelsByItem
+                    ->get($itemId, collect())
+                    ->map(fn ($model): array => [
+                        'id' => trim((string) ($model->model_id ?? '')),
+                        'name' => trim((string) ($model->name ?? '')),
+                        'seller_sku' => null,
+                        'stock' => (int) ($model->stock ?? 0),
+                        'price' => (int) ($model->price ?? 0),
+                        'updated_at' => $model->updated_at ?? null,
+                    ])
+                    ->values()
+                    ->all();
+
+                return [
+                    'channel' => 'shopee',
+                    'id' => $itemId,
+                    'shop_id' => trim((string) ($product->shop_id ?? '')),
+                    'name' => trim((string) ($product->name ?? '')),
+                    'status' => $product->status ?? null,
+                    'stock' => (int) ($product->stock ?? 0),
+                    'updated_at' => $product->updated_at ?? null,
+                    'variants' => $variants,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function tiktokProductsForVariantAnalysis(): array
+    {
+        if (! Schema::hasTable('tiktok_products')) {
+            return [];
+        }
+
+        $rows = DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('product_id', 'product_name', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'price', 'updated_at', 'product_status', 'audit_status')
+            ->get();
+
+        return $rows
+            ->groupBy(fn ($row) => trim((string) ($row->product_id ?? '')))
+            ->map(function ($group, string $productId): array {
+                $first = $group->first();
+                $variants = $group
+                    ->map(fn ($sku): array => [
+                        'id' => trim((string) ($sku->sku_id ?? '')),
+                        'name' => trim((string) ($sku->sku_name ?? '')),
+                        'seller_sku' => trim((string) ($sku->seller_sku ?? '')) ?: null,
+                        'stock' => (int) ($sku->stock_qty ?? 0),
+                        'price' => (int) ($sku->price ?? 0),
+                        'updated_at' => $sku->updated_at ?? null,
+                    ])
+                    ->values()
+                    ->all();
+
+                return [
+                    'channel' => 'tiktok',
+                    'id' => $productId,
+                    'shop_id' => null,
+                    'name' => trim((string) ($first->product_name ?? '')),
+                    'status' => trim((string) ($first->product_status ?? ($first->audit_status ?? ''))) ?: null,
+                    'stock' => array_sum(array_map(fn (array $variant) => (int) ($variant['stock'] ?? 0), $variants)),
+                    'updated_at' => $group->max('updated_at'),
+                    'variants' => $variants,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function marketplaceProductVariantIssues(string $channel, array $products): array
+    {
+        return [
+            ...$this->duplicateMarketplaceProductIssues($channel, $products),
+            ...$this->duplicateMarketplaceVariantIssues($channel, $products),
+            ...$this->variantNameAnomalyIssues($channel, $products),
+        ];
+    }
+
+    private function duplicateMarketplaceProductIssues(string $channel, array $products): array
+    {
+        $groups = [];
+        foreach ($products as $product) {
+            $key = $this->normalizeSkuMatchValue($product['name'] ?? '');
+            if ($key === '') {
+                continue;
+            }
+
+            $groups[$key][] = $product;
+        }
+
+        $issues = [];
+        foreach ($groups as $nameKey => $group) {
+            if (count($group) < 2) {
+                continue;
+            }
+
+            $variantSets = [];
+            $sellerSkuSets = [];
+            foreach ($group as $product) {
+                $variantSets[] = $this->analysisVariantKeys($product['variants'] ?? [], 'name');
+                $sellerSkuSets[] = $this->analysisVariantKeys($product['variants'] ?? [], 'seller_sku');
+            }
+
+            $variantOverlap = $this->valuesRepeatedAcrossSets($variantSets);
+            $sellerSkuOverlap = $this->valuesRepeatedAcrossSets($sellerSkuSets);
+            $severity = count($variantOverlap) > 0 || count($sellerSkuOverlap) > 0 ? 'high' : 'warning';
+
+            $issues[] = [
+                'id' => $this->analysisIssueId($channel, 'duplicate_product', [$nameKey, array_column($group, 'id')]),
+                'channel' => $channel,
+                'type' => 'duplicate_product',
+                'type_label' => 'Produk double',
+                'severity' => $severity,
+                'title' => 'Nama produk sama di beberapa '.($channel === 'shopee' ? 'item Shopee' : 'produk TikTok'),
+                'description' => count($variantOverlap) > 0 || count($sellerSkuOverlap) > 0
+                    ? 'Nama produk sama dan sebagian varian/kode variasi juga berulang. Kemungkinan besar ini produk double.'
+                    : 'Nama produk sama, tetapi varian belum terlihat berulang. Tetap perlu dicek karena bisa membuat mapping bercabang.',
+                'action_plan' => $this->analysisActionPlan('duplicate_product', $channel, [
+                    'has_variant_overlap' => count($variantOverlap) > 0,
+                    'has_seller_sku_overlap' => count($sellerSkuOverlap) > 0,
+                ]),
+                'product_name' => $group[0]['name'] ?? '',
+                'product_ids' => array_values(array_map(fn (array $product) => $product['id'], $group)),
+                'products' => array_map(fn (array $product): array => $this->analysisProductSummary($product), $group),
+                'variants' => [],
+                'evidence' => [
+                    'product_count' => count($group),
+                    'overlap_variant_count' => count($variantOverlap),
+                    'overlap_seller_sku_count' => count($sellerSkuOverlap),
+                    'overlap_variants' => array_slice($variantOverlap, 0, 12),
+                    'overlap_seller_skus' => array_slice($sellerSkuOverlap, 0, 12),
+                ],
+            ];
+        }
+
+        return $issues;
+    }
+
+    private function duplicateMarketplaceVariantIssues(string $channel, array $products): array
+    {
+        $issues = [];
+
+        foreach ($products as $product) {
+            $variantGroups = [];
+            $sellerSkuGroups = [];
+
+            foreach (($product['variants'] ?? []) as $variant) {
+                $variantKey = $this->normalizeSkuMatchValue($variant['name'] ?? '');
+                if ($variantKey !== '' && $variantKey !== 'default') {
+                    $variantGroups[$variantKey][] = $variant;
+                }
+
+                $sellerSkuKey = $this->normalizeSkuMatchValue($variant['seller_sku'] ?? '');
+                if ($sellerSkuKey !== '') {
+                    $sellerSkuGroups[$sellerSkuKey][] = $variant;
+                }
+            }
+
+            foreach ($variantGroups as $variantKey => $variants) {
+                if (count($variants) < 2) {
+                    continue;
+                }
+
+                $issues[] = [
+                    'id' => $this->analysisIssueId($channel, 'duplicate_variant', [$product['id'] ?? '', $variantKey]),
+                    'channel' => $channel,
+                    'type' => 'duplicate_variant',
+                    'type_label' => 'Varian double',
+                    'severity' => 'warning',
+                    'title' => 'Nama varian berulang dalam satu produk',
+                    'description' => 'Ada lebih dari satu varian dengan nama yang sama setelah dinormalisasi. Ini rawan salah sinkron stok.',
+                    'action_plan' => $this->analysisActionPlan('duplicate_variant', $channel),
+                    'product_name' => $product['name'] ?? '',
+                    'product_ids' => [$product['id'] ?? ''],
+                    'products' => [$this->analysisProductSummary($product)],
+                    'variants' => array_map(fn (array $variant): array => $this->analysisVariantSummary($variant), $variants),
+                    'evidence' => [
+                        'variant_name_key' => $variantKey,
+                        'duplicate_count' => count($variants),
+                    ],
+                ];
+            }
+
+            if ($channel !== 'tiktok') {
+                continue;
+            }
+
+            foreach ($sellerSkuGroups as $sellerSkuKey => $variants) {
+                if (count($variants) < 2) {
+                    continue;
+                }
+
+                $issues[] = [
+                    'id' => $this->analysisIssueId($channel, 'duplicate_seller_sku', [$product['id'] ?? '', $sellerSkuKey]),
+                    'channel' => $channel,
+                    'type' => 'duplicate_seller_sku',
+                    'type_label' => 'Seller SKU double',
+                    'severity' => 'high',
+                    'title' => 'Seller SKU sama dipakai beberapa varian TikTok',
+                    'description' => 'Ini bukan berarti nama variannya sama. Artinya kolom Seller SKU/kode penjual pada beberapa varian aktif berisi nilai yang sama, sehingga pencocokan varian bisa tidak pasti.',
+                    'action_plan' => $this->analysisActionPlan('duplicate_seller_sku', $channel, [
+                        'suggestions' => $this->analysisSellerSkuSuggestions($product, $variants),
+                    ]),
+                    'product_name' => $product['name'] ?? '',
+                    'product_ids' => [$product['id'] ?? ''],
+                    'products' => [$this->analysisProductSummary($product)],
+                    'variants' => array_map(fn (array $variant): array => $this->analysisVariantSummary($variant), $variants),
+                    'evidence' => [
+                        'seller_sku_key' => $sellerSkuKey,
+                        'duplicate_count' => count($variants),
+                    ],
+                ];
+            }
+        }
+
+        return $issues;
+    }
+
+    private function variantNameAnomalyIssues(string $channel, array $products): array
+    {
+        $issues = [];
+        $ignoredTokens = ['color', 'colour', 'default', 'kode', 'model', 'motif', 'no', 'nomor', 'seri', 'sku', 'variant', 'varian', 'warna'];
+
+        foreach ($products as $product) {
+            $variants = array_values(array_filter(
+                $product['variants'] ?? [],
+                fn (array $variant) => $this->normalizeSkuMatchValue($variant['name'] ?? '') !== ''
+                    && $this->normalizeSkuMatchValue($variant['name'] ?? '') !== 'default'
+            ));
+
+            $variantCount = count($variants);
+            if ($variantCount < 4) {
+                continue;
+            }
+
+            $variantTokens = [];
+            $tokenCounts = [];
+
+            foreach ($variants as $index => $variant) {
+                $tokens = preg_split('/\s+/', $this->normalizeSkuMatchValue($variant['name'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                $tokens = array_values(array_unique(array_filter($tokens, function (string $token) use ($ignoredTokens): bool {
+                    return strlen($token) >= 3
+                        && ! ctype_digit($token)
+                        && ! in_array($token, $ignoredTokens, true);
+                })));
+                $variantTokens[$index] = $tokens;
+
+                foreach ($tokens as $token) {
+                    $tokenCounts[$token] = ($tokenCounts[$token] ?? 0) + 1;
+                }
+            }
+
+            arsort($tokenCounts);
+            $dominantToken = null;
+            $dominantCount = 0;
+            foreach ($tokenCounts as $token => $count) {
+                if ($count >= 3 && ($count / max(1, $variantCount)) >= 0.65) {
+                    $dominantToken = (string) $token;
+                    $dominantCount = (int) $count;
+                    break;
+                }
+            }
+
+            if ($dominantToken === null) {
+                continue;
+            }
+
+            $outliers = [];
+            $nearMissTokens = [];
+            foreach ($variants as $index => $variant) {
+                if (in_array($dominantToken, $variantTokens[$index] ?? [], true)) {
+                    continue;
+                }
+
+                $outliers[] = $variant;
+                foreach (($variantTokens[$index] ?? []) as $token) {
+                    if (abs(strlen($token) - strlen($dominantToken)) <= 2 && levenshtein($token, $dominantToken) <= 2) {
+                        $nearMissTokens[] = $token;
+                    }
+                }
+            }
+
+            $maxOutliers = max(1, min(3, (int) floor($variantCount * 0.35)));
+            if ($outliers === [] || count($outliers) > $maxOutliers) {
+                continue;
+            }
+
+            $issues[] = [
+                'id' => $this->analysisIssueId($channel, 'variant_anomaly', [$product['id'] ?? '', $dominantToken, array_column($outliers, 'id')]),
+                'channel' => $channel,
+                'type' => 'variant_anomaly',
+                'type_label' => 'Anomali varian',
+                'severity' => count($outliers) <= 2 ? 'warning' : 'info',
+                'title' => 'Nama varian keluar dari pola mayoritas',
+                'description' => 'Mayoritas varian memakai pola "'.$dominantToken.'", tetapi ada varian yang tidak mengikuti pola itu. Cek apakah ini typo, salah upload, atau memang varian berbeda.',
+                'action_plan' => $this->analysisActionPlan('variant_anomaly', $channel, [
+                    'dominant_token' => $dominantToken,
+                    'near_miss_tokens' => array_values(array_unique($nearMissTokens)),
+                ]),
+                'product_name' => $product['name'] ?? '',
+                'product_ids' => [$product['id'] ?? ''],
+                'products' => [$this->analysisProductSummary($product)],
+                'variants' => array_map(fn (array $variant): array => $this->analysisVariantSummary($variant), $outliers),
+                'evidence' => [
+                    'dominant_token' => $dominantToken,
+                    'dominant_count' => $dominantCount,
+                    'variant_count' => $variantCount,
+                    'near_miss_tokens' => array_values(array_unique($nearMissTokens)),
+                ],
+            ];
+        }
+
+        return $issues;
+    }
+
+    private function analysisVariantKeys(array $variants, string $field): array
+    {
+        return array_values(array_unique(array_filter(array_map(
+            fn (array $variant) => $this->normalizeSkuMatchValue($variant[$field] ?? ''),
+            $variants
+        ), fn (string $key) => $key !== '' && $key !== 'default')));
+    }
+
+    private function valuesRepeatedAcrossSets(array $sets): array
+    {
+        $counts = [];
+        foreach ($sets as $set) {
+            foreach (array_unique($set) as $value) {
+                if ($value === '') {
+                    continue;
+                }
+
+                $counts[$value] = ($counts[$value] ?? 0) + 1;
+            }
+        }
+
+        return array_values(array_keys(array_filter($counts, fn (int $count) => $count > 1)));
+    }
+
+    private function analysisProductSummary(array $product): array
+    {
+        $variants = $product['variants'] ?? [];
+
+        return [
+            'id' => $product['id'] ?? '',
+            'name' => $product['name'] ?? '',
+            'status' => $product['status'] ?? null,
+            'shop_id' => $product['shop_id'] ?? null,
+            'variant_count' => count($variants),
+            'stock_total' => array_sum(array_map(fn (array $variant) => (int) ($variant['stock'] ?? 0), $variants)),
+            'updated_at' => $product['updated_at'] ?? null,
+        ];
+    }
+
+    private function analysisVariantSummary(array $variant): array
+    {
+        return [
+            'id' => $variant['id'] ?? '',
+            'name' => $variant['name'] ?? '',
+            'seller_sku' => $variant['seller_sku'] ?? null,
+            'stock' => (int) ($variant['stock'] ?? 0),
+            'price' => (int) ($variant['price'] ?? 0),
+            'updated_at' => $variant['updated_at'] ?? null,
+        ];
+    }
+
+    private function analysisActionPlan(string $type, string $channel, array $context = []): array
+    {
+        $marketplace = $channel === 'shopee' ? 'Shopee' : 'TikTok';
+
+        if ($type === 'duplicate_product') {
+            return [
+                'title' => 'Solusi produk double',
+                'summary' => 'Pilih satu produk utama, lalu nonaktifkan atau rapikan produk duplikat.',
+                'steps' => [
+                    'Buka semua produk terkait di '.$marketplace.' dan tentukan produk utama yang akan dipertahankan.',
+                    'Bandingkan varian, stok, harga, foto, dan SKU mapping. Pastikan stok yang benar ada di produk utama.',
+                    'Jika produk lain benar-benar duplikat, nonaktifkan/hapus produk duplikat di '.$marketplace.'.',
+                    'Jika keduanya memang produk berbeda, ubah nama produk atau pola varian supaya tidak identik.',
+                    'Jalankan Sync '.$marketplace.', lalu Refresh Analisa sampai temuan hilang.',
+                ],
+                'note' => ($context['has_variant_overlap'] ?? false) || ($context['has_seller_sku_overlap'] ?? false)
+                    ? 'Prioritas tinggi karena ada overlap varian/kode. Cek mapping sebelum menghapus produk.'
+                    : 'Nama produk sama belum tentu salah, tapi tetap perlu dibuat jelas agar mapping tidak bercabang.',
+            ];
+        }
+
+        if ($type === 'duplicate_variant') {
+            return [
+                'title' => 'Solusi varian double',
+                'summary' => 'Pastikan setiap nama varian dalam satu produk unik dan mewakili stok yang benar.',
+                'steps' => [
+                    'Buka produk tersebut di '.$marketplace.' dan cek varian yang namanya sama.',
+                    'Jika salah satu hanya duplikat, pindahkan stok bila perlu lalu hapus/nonaktifkan varian duplikat.',
+                    'Jika sebenarnya varian berbeda, ubah nama varian agar spesifik, misalnya tambah warna, ukuran, atau tipe.',
+                    'Cek lagi SKU mapping/stock master supaya hanya menunjuk ke varian yang benar.',
+                    'Jalankan Sync '.$marketplace.', lalu Refresh Analisa.',
+                ],
+            ];
+        }
+
+        if ($type === 'duplicate_seller_sku') {
+            return [
+                'title' => 'Solusi Seller SKU double',
+                'summary' => 'Isi Seller SKU tiap varian dengan kode unik, jangan pakai kode umum seperti 1 untuk banyak varian.',
+                'steps' => [
+                    'Buka produk di TikTok Seller Center, masuk ke daftar variasi/SKU.',
+                    'Ubah kolom Seller SKU/kode penjual pada setiap varian mengikuti daftar SKU disarankan di bawah.',
+                    'Pola SKU disarankan mengikuti penulisan SKU valid yang sudah ada di database, lalu disesuaikan dengan nama varian.',
+                    'Simpan perubahan di TikTok, lalu jalankan Sync TikTok di aplikasi ini.',
+                    'Refresh Analisa dan pastikan temuan Seller SKU double hilang.',
+                ],
+                'suggestions' => $context['suggestions'] ?? [],
+                'examples' => $context['suggestions'] ?? [],
+                'note' => 'Kalau Seller SKU tidak dipakai untuk mapping, risikonya lebih kecil. Tapi untuk sinkron stok yang aman, kode tetap sebaiknya unik.',
+            ];
+        }
+
+        if ($type === 'variant_anomaly') {
+            $dominantToken = (string) ($context['dominant_token'] ?? '');
+            $nearMissTokens = $context['near_miss_tokens'] ?? [];
+            $patternText = $dominantToken !== '' ? 'pola mayoritas "'.$dominantToken.'"' : 'pola mayoritas varian';
+
+            return [
+                'title' => 'Solusi anomali varian',
+                'summary' => 'Cek varian yang keluar dari pola: typo, salah upload, atau memang perlu dipisah.',
+                'steps' => [
+                    'Bandingkan varian yang ditandai dengan '.$patternText.'.',
+                    'Jika ini typo penamaan, perbaiki nama varian di '.$marketplace.' agar konsisten.',
+                    'Jika ini salah upload varian, hapus/nonaktifkan varian tersebut atau pindahkan ke produk yang benar.',
+                    'Jika varian memang sah tetapi beda tipe, pertimbangkan memisahkan produk atau memperjelas nama produk.',
+                    'Jalankan Sync '.$marketplace.', lalu Refresh Analisa.',
+                ],
+                'note' => count($nearMissTokens) > 0
+                    ? 'Ada indikasi typo mirip: '.implode(', ', array_slice($nearMissTokens, 0, 5)).'.'
+                    : 'Tidak semua anomali berarti salah. Ini penanda untuk dicek manual.',
+            ];
+        }
+
+        return [
+            'title' => 'Solusi',
+            'summary' => 'Cek data marketplace, rapikan sumber masalah, lalu sinkronkan ulang.',
+            'steps' => [
+                'Buka produk terkait di marketplace.',
+                'Perbaiki produk, varian, atau kode yang ditandai.',
+                'Jalankan sync dan refresh analisa.',
+            ],
+        ];
+    }
+
+    private function analysisSellerSkuSuggestions(array $product, array $variants): array
+    {
+        $referenceRows = $this->analysisSellerSkuReferenceRows();
+        $prefix = $this->analysisSellerSkuPrefix($product, $variants, $referenceRows);
+        $used = [];
+
+        return array_values(array_filter(array_map(function (array $variant) use ($prefix, $referenceRows, &$used): ?array {
+            $variantName = trim((string) ($variant['name'] ?? ''));
+            if ($variantName === '') {
+                return null;
+            }
+
+            $variantCode = $this->analysisVariantSkuCodePart($variantName, $prefix, $referenceRows);
+            if ($variantCode === '') {
+                return null;
+            }
+
+            $suggestedSku = $prefix.$variantCode;
+            $baseSku = $suggestedSku;
+            $counter = 2;
+            while (isset($used[$this->normalizeSkuMatchValue($suggestedSku)])) {
+                $suggestedSku = $baseSku.'-'.$counter;
+                $counter++;
+            }
+            $used[$this->normalizeSkuMatchValue($suggestedSku)] = true;
+
+            return [
+                'variant_name' => $variantName,
+                'current_sku' => trim((string) ($variant['seller_sku'] ?? '')),
+                'suggested_sku' => $suggestedSku,
+            ];
+        }, $variants)));
+    }
+
+    private function analysisSellerSkuReferenceRows()
+    {
+        if (! Schema::hasTable('tiktok_products')) {
+            return collect();
+        }
+
+        return DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->whereNotNull('seller_sku')
+            ->where('seller_sku', '<>', '')
+            ->select('product_id', 'product_name', 'sku_name', 'seller_sku')
+            ->get()
+            ->filter(fn ($row) => ! $this->analysisSellerSkuIsGeneric($row->seller_sku ?? ''))
+            ->values();
+    }
+
+    private function analysisSellerSkuPrefix(array $product, array $variants, $referenceRows): string
+    {
+        $currentSkus = array_values(array_unique(array_filter(array_map(
+            fn (array $variant) => trim((string) ($variant['seller_sku'] ?? '')),
+            $variants
+        ), fn (string $sku) => ! $this->analysisSellerSkuIsGeneric($sku))));
+
+        $currentPrefix = $this->analysisBestPrefixFromSkus($currentSkus);
+        if ($currentPrefix !== '') {
+            return $currentPrefix;
+        }
+
+        $productNameTokens = $this->analysisSkuNameTokens($product['name'] ?? '');
+        $variantKeys = array_flip(array_map(
+            fn (array $variant) => $this->normalizeSkuMatchValue($this->analysisVariantBaseName($variant['name'] ?? '')),
+            $variants
+        ));
+
+        $prefixScores = [];
+        foreach ($referenceRows as $row) {
+            $prefix = $this->analysisPrefixFromSellerSku((string) ($row->seller_sku ?? ''));
+            if ($prefix === '') {
+                continue;
+            }
+
+            $rowNameTokens = $this->analysisSkuNameTokens($row->product_name ?? '');
+            $sharedProductTokens = count(array_intersect($productNameTokens, $rowNameTokens));
+            $rowVariantKey = $this->normalizeSkuMatchValue($this->analysisVariantBaseName($row->sku_name ?? ''));
+            $variantScore = $rowVariantKey !== '' && isset($variantKeys[$rowVariantKey]) ? 5 : 0;
+
+            $score = $sharedProductTokens + $variantScore;
+            if ((string) ($row->product_id ?? '') === (string) ($product['id'] ?? '')) {
+                $score += 20;
+            }
+
+            if ($score <= 0) {
+                continue;
+            }
+
+            $prefixScores[$prefix] = ($prefixScores[$prefix] ?? 0) + $score;
+        }
+
+        if ($prefixScores !== []) {
+            arsort($prefixScores);
+
+            return (string) array_key_first($prefixScores);
+        }
+
+        return $this->analysisFallbackProductSkuPrefix($product['name'] ?? '', $product['id'] ?? '');
+    }
+
+    private function analysisBestPrefixFromSkus(array $skus): string
+    {
+        $prefixCounts = [];
+        foreach ($skus as $sku) {
+            $prefix = $this->analysisPrefixFromSellerSku($sku);
+            if ($prefix !== '') {
+                $prefixCounts[$prefix] = ($prefixCounts[$prefix] ?? 0) + 1;
+            }
+        }
+
+        if ($prefixCounts === []) {
+            return '';
+        }
+
+        arsort($prefixCounts);
+
+        return (string) array_key_first($prefixCounts);
+    }
+
+    private function analysisPrefixFromSellerSku(string $sku): string
+    {
+        $sku = trim($sku);
+        if ($this->analysisSellerSkuIsGeneric($sku)) {
+            return '';
+        }
+
+        $parts = array_values(array_filter(explode('-', $sku), fn (string $part) => trim($part) !== ''));
+        if (count($parts) >= 3) {
+            return strtoupper($parts[0].'-'.$parts[1].'-');
+        }
+
+        if (count($parts) === 2) {
+            return strtoupper($parts[0].'-');
+        }
+
+        return '';
+    }
+
+    private function analysisVariantSkuCodePart(string $variantName, string $prefix, $referenceRows): string
+    {
+        $variantBaseName = $this->analysisVariantBaseName($variantName);
+        $variantKey = $this->normalizeSkuMatchValue($variantBaseName);
+        $fallback = $this->analysisSkuCodePart($variantBaseName);
+        $bestSuffix = '';
+        $bestScore = -1;
+
+        foreach ($referenceRows as $row) {
+            $rowVariantKey = $this->normalizeSkuMatchValue($this->analysisVariantBaseName($row->sku_name ?? ''));
+            if ($rowVariantKey === '' || $rowVariantKey !== $variantKey) {
+                continue;
+            }
+
+            $sku = trim((string) ($row->seller_sku ?? ''));
+            $rowPrefix = $this->analysisPrefixFromSellerSku($sku);
+            $suffix = $this->analysisSellerSkuSuffix($sku, $prefix !== '' ? $prefix : $rowPrefix);
+            if ($suffix === '') {
+                $suffix = $this->analysisSellerSkuSuffix($sku, $rowPrefix);
+            }
+            if ($suffix === '') {
+                continue;
+            }
+            if (strlen(str_replace('-', '', $suffix)) > max(12, strlen(str_replace('-', '', $fallback)) + 8)) {
+                continue;
+            }
+
+            $score = 10;
+            if ($prefix !== '' && str_starts_with(strtoupper($sku), strtoupper($prefix))) {
+                $score += 10;
+            }
+            $score -= max(0, strlen(str_replace('-', '', $suffix)) - strlen(str_replace('-', '', $fallback)));
+
+            if ($score > $bestScore) {
+                $bestSuffix = $suffix;
+                $bestScore = $score;
+            }
+        }
+
+        return $bestSuffix !== '' ? $bestSuffix : $fallback;
+    }
+
+    private function analysisSellerSkuSuffix(string $sku, string $prefix): string
+    {
+        $sku = strtoupper(trim($sku));
+        $prefix = strtoupper(trim($prefix));
+        if ($sku === '' || $prefix === '' || ! str_starts_with($sku, $prefix)) {
+            return '';
+        }
+
+        return trim(substr($sku, strlen($prefix)), '-');
+    }
+
+    private function analysisVariantBaseName(mixed $value): string
+    {
+        $name = trim((string) $value);
+        $name = preg_split('/[\/|]/', $name, 2)[0] ?? $name;
+        $name = preg_replace('/\b(polos|premium|pouch)\b/i', ' ', $name) ?: $name;
+
+        return trim(preg_replace('/\s+/', ' ', $name) ?: $name);
+    }
+
+    private function analysisSkuNameTokens(mixed $value): array
+    {
+        $ignored = ['agni', 'by', 'daily', 'empat', 'hijab', 'instan', 'logo', 'metal', 'motif', 'packing', 'polos', 'pouch', 'premium', 'segi', 'superfashion'];
+        $tokens = preg_split('/\s+/', $this->normalizeSkuMatchValue($value), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        return array_values(array_unique(array_filter($tokens, fn (string $token) => strlen($token) >= 3 && ! in_array($token, $ignored, true))));
+    }
+
+    private function analysisFallbackProductSkuPrefix(mixed $productName, mixed $productId): string
+    {
+        $tokens = $this->analysisSkuNameTokens($productName);
+        $knownPrefixes = [
+            'azara' => 'AZR-HJP-',
+            'zaryta' => 'ZARYTA-',
+            'zannoo' => 'ZANOO-',
+            'zanoo' => 'ZANOO-',
+        ];
+
+        foreach ($tokens as $token) {
+            if (isset($knownPrefixes[$token])) {
+                return $knownPrefixes[$token];
+            }
+        }
+
+        if ($tokens !== []) {
+            $first = strtoupper($tokens[0]);
+            if (strlen($first) > 8) {
+                $first = substr($first, 0, 8);
+            }
+
+            return $first.'-';
+        }
+
+        $productCode = preg_replace('/\D+/', '', (string) $productId) ?: 'PROD';
+
+        return 'TT-'.substr($productCode, -6).'-';
+    }
+
+    private function analysisSellerSkuIsGeneric(mixed $value): bool
+    {
+        $sku = strtoupper(trim((string) $value));
+        if ($sku === '') {
+            return true;
+        }
+
+        $normalized = $this->normalizeSkuMatchValue($sku);
+        if (in_array($normalized, ['-', '0', '00', '1', '01', '2', '02', 'SKU', 'DEFAULT', 'NONE', 'NULL'], true)) {
+            return true;
+        }
+
+        return ctype_digit($normalized) && strlen($normalized) <= 3;
+    }
+
+    private function analysisSkuCodePart(string $value): string
+    {
+        $normalized = strtoupper($this->normalizeSkuMatchValue($value));
+        $normalized = preg_replace('/[^A-Z0-9]+/', '-', $normalized) ?: '';
+        $normalized = trim($normalized, '-');
+
+        return substr($normalized, 0, 40);
+    }
+
+    private function analysisIssueId(string $channel, string $type, array $parts): string
+    {
+        return $channel.'-'.$type.'-'.substr(sha1(json_encode($parts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: implode('|', $parts)), 0, 12);
+    }
+
     public function shopeeItems(Request $request): JsonResponse
     {
         $this->ensureShopeeProductTables();
@@ -79,6 +975,7 @@ class OmnichannelController extends Controller
     {
         $shopNames = $this->shopeeShopNames();
         $products = DB::table('shopee_product')
+            ->whereRaw('COALESCE(is_active, true) = true')
             ->select(
                 'item_id',
                 'shop_id',
@@ -195,6 +1092,7 @@ class OmnichannelController extends Controller
         $accounts = [];
         $productCount = 0;
         $variantCount = 0;
+        $inactiveCount = 0;
         $config = $this->shopeeConfig();
 
         foreach ($tokens as $token) {
@@ -218,6 +1116,8 @@ class OmnichannelController extends Controller
                     $this->storeShopeeProductPayload($baseItem, $models, $tierVariations, $shopId);
                 }
 
+                $deactivatedForShop = $this->deactivateShopeeProductsMissingFromSync($shopId, $itemIds);
+                $inactiveCount += $deactivatedForShop;
                 $productCount += count($baseItems);
                 $accounts[] = [
                     'status' => 'ok',
@@ -225,6 +1125,7 @@ class OmnichannelController extends Controller
                     'account_name' => $accountName,
                     'shop_id' => (string) $shopId,
                     'products' => count($baseItems),
+                    'deactivated_products' => $deactivatedForShop,
                 ];
             } catch (\Throwable $exception) {
                 $accounts[] = [
@@ -240,6 +1141,9 @@ class OmnichannelController extends Controller
 
         $hasError = collect($accounts)->contains(fn ($account) => ($account['status'] ?? '') === 'error');
         $message = $productCount.' produk Shopee dan '.$variantCount.' varian berhasil disinkronkan ke database.';
+        if ($inactiveCount > 0) {
+            $message .= ' '.$inactiveCount.' produk lama dinonaktifkan dari cache.';
+        }
 
         if ($hasError && $productCount === 0) {
             $message = collect($accounts)->firstWhere('status', 'error')['message'] ?? 'Gagal mengambil data Shopee.';
@@ -262,9 +1166,36 @@ class OmnichannelController extends Controller
             'message' => $message,
             'products' => $productCount,
             'variants' => $variantCount,
+            'deactivated_products' => $inactiveCount,
             'accounts' => $accounts,
             'last_sync_at' => now()->toDateTimeString(),
         ];
+    }
+
+    private function deactivateShopeeProductsMissingFromSync(int $shopId, array $activeItemIds): int
+    {
+        if (! Schema::hasTable('shopee_product')) {
+            return 0;
+        }
+
+        $activeItemIds = array_values(array_unique(array_filter(array_map(
+            fn ($itemId) => (int) $itemId,
+            $activeItemIds
+        ), fn (int $itemId) => $itemId > 0)));
+
+        $query = DB::table('shopee_product')
+            ->where('shop_id', $shopId)
+            ->whereRaw('COALESCE(is_active, true) = true');
+
+        if ($activeItemIds !== []) {
+            $query->whereNotIn('item_id', $activeItemIds);
+        }
+
+        return $query->update([
+            'is_active' => DB::raw('false'),
+            'status' => DB::raw("COALESCE(status, 'REMOVED')"),
+            'updated_at' => now(),
+        ]);
     }
 
     private function activeShopeeTokensForSync()
@@ -549,6 +1480,85 @@ class OmnichannelController extends Controller
             'image' => $imageId !== '' ? ['image_id' => $imageId] : null,
             '_source_image_url' => $imageId === '' && $sourceImageUrl !== '' ? $sourceImageUrl : null,
         ], fn ($value) => $value !== null);
+    }
+
+    private function buildShopeeAddModel(array $variant, int $optionIndex, string $sellerStockLocationId = '', ?float $modelWeight = null): array
+    {
+        $sellerStock = [
+            'stock' => $variant['stock'],
+        ];
+        if ($sellerStockLocationId !== '') {
+            $sellerStock['location_id'] = $sellerStockLocationId;
+        }
+
+        $model = [
+            'tier_index' => [$optionIndex],
+            'original_price' => $variant['price'],
+            'seller_stock' => [$sellerStock],
+        ];
+
+        if (($variant['seller_sku'] ?? '') !== '') {
+            $model['model_sku'] = mb_substr((string) $variant['seller_sku'], 0, 100);
+        }
+
+        if ($modelWeight !== null && $modelWeight > 0) {
+            $model['weight'] = $modelWeight;
+        }
+
+        return $model;
+    }
+
+    private function rebuildShopeeAddModelsFromFreshTier(array $plannedVariants, array $modelPayload, string $sellerStockLocationId = '', ?float $modelWeight = null): ?array
+    {
+        $standardiseTierVariation = data_get($modelPayload, 'standardise_tier_variation', []);
+        $tierVariation = data_get($modelPayload, 'tier_variation', []);
+        $useStandardiseTier = is_array($standardiseTierVariation) && $standardiseTierVariation !== [];
+        $activeTierVariation = $useStandardiseTier ? $standardiseTierVariation : $tierVariation;
+
+        if (! is_array($activeTierVariation) || count($activeTierVariation) !== 1) {
+            return null;
+        }
+
+        $tierOptions = $useStandardiseTier
+            ? data_get($activeTierVariation, '0.variation_option_list', [])
+            : data_get($activeTierVariation, '0.option_list', []);
+
+        if (! is_array($tierOptions)) {
+            return null;
+        }
+
+        $optionIndexByName = [];
+        foreach ($tierOptions as $index => $option) {
+            $name = $useStandardiseTier
+                ? data_get($option, 'variation_option_name')
+                : data_get($option, 'option');
+            $key = $this->normalizeSkuMatchValue($name ?? '');
+            if ($key !== '') {
+                $optionIndexByName[$key] = (int) $index;
+            }
+        }
+
+        $modelList = [];
+        $updatedPlannedVariants = [];
+
+        foreach ($plannedVariants as $variant) {
+            $variantKey = $this->normalizeSkuMatchValue($variant['variant_name'] ?? '');
+            if ($variantKey === '' || ! array_key_exists($variantKey, $optionIndexByName)) {
+                return null;
+            }
+
+            $optionIndex = $optionIndexByName[$variantKey];
+            $modelList[] = $this->buildShopeeAddModel($variant, $optionIndex, $sellerStockLocationId, $modelWeight);
+            $updatedPlannedVariants[] = [
+                ...$variant,
+                'tier_index' => [$optionIndex],
+            ];
+        }
+
+        return [
+            'model_list' => $modelList,
+            'planned_variants' => $updatedPlannedVariants,
+        ];
     }
 
     private function normalizePositiveInt(mixed $value): int
@@ -1174,6 +2184,7 @@ class OmnichannelController extends Controller
 
             $syncCount = 0;
             $variantCount = 0;
+            $syncedProductIds = [];
             $pageSize = 100;
             $pageToken = null;
             $apiHost = rtrim((string) $config['api_host'], '/');
@@ -1284,15 +2295,26 @@ class OmnichannelController extends Controller
 
                     $detail = $this->fetchTiktokProductDetail($config, $accessToken, $shop, $productId, $detailBaseUrl);
                     $this->storeTiktokProductPayload($detail ?: $product);
+                    $syncedProductIds[$productId] = true;
                     $syncCount++;
                     $variantCount += count(data_get($detail ?: $product, 'skus', []));
                 }
 
             } while ($pageToken);
 
+            $deactivatedProducts = $this->deactivateTiktokProductsMissingFromSync(array_keys($syncedProductIds));
+            $deactivatedDuplicateSkus = $this->deactivateDuplicateTiktokProductSkuRows();
+            $message = $syncCount.' produk TikTok berhasil disinkronkan.';
+            if ($deactivatedProducts > 0) {
+                $message .= ' '.$deactivatedProducts.' produk lama dinonaktifkan.';
+            }
+            if ($deactivatedDuplicateSkus > 0) {
+                $message .= ' '.$deactivatedDuplicateSkus.' SKU duplikat cache dinonaktifkan.';
+            }
+
             DB::table('tiktok_sync_logs')->insert([
                 'status' => 'ok',
-                'message' => $syncCount.' produk TikTok berhasil disinkronkan.',
+                'message' => $message,
                 'product_count' => $syncCount,
                 'variant_count' => $variantCount,
                 'synced_at' => now(),
@@ -1302,9 +2324,11 @@ class OmnichannelController extends Controller
 
             return [
                 'status' => 'ok',
-                'message' => $syncCount.' produk TikTok berhasil disinkronkan.',
+                'message' => $message,
                 'products' => $syncCount,
                 'variants' => $variantCount,
+                'deactivated_products' => $deactivatedProducts,
+                'deactivated_duplicate_skus' => $deactivatedDuplicateSkus,
                 'last_sync_at' => now()->toDateTimeString(),
             ];
         } catch (\Throwable $exception) {
@@ -1326,6 +2350,92 @@ class OmnichannelController extends Controller
                 ],
             ];
         }
+    }
+
+    private function deactivateTiktokProductsMissingFromSync(array $activeProductIds): int
+    {
+        if (! Schema::hasTable('tiktok_products')) {
+            return 0;
+        }
+
+        $activeProductIds = array_values(array_unique(array_filter(array_map(
+            fn ($productId) => trim((string) $productId),
+            $activeProductIds
+        ), fn (string $productId) => $productId !== '')));
+
+        $query = DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true');
+
+        if ($activeProductIds !== []) {
+            $query->whereNotIn('product_id', $activeProductIds);
+        }
+
+        return $query->update([
+            'is_active' => DB::raw('false'),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function deactivateDuplicateTiktokProductSkuRows(?string $productId = null): int
+    {
+        if (! Schema::hasTable('tiktok_products')) {
+            return 0;
+        }
+
+        $rowsQuery = DB::table('tiktok_products')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('id', 'product_id', 'sku_id', 'sku_name', 'updated_at', 'created_at')
+            ->orderBy('product_id')
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id');
+
+        if ($productId !== null && trim($productId) !== '') {
+            $rowsQuery->where('product_id', trim($productId));
+        }
+
+        $seen = [];
+        $duplicateIds = [];
+
+        foreach ($rowsQuery->get() as $row) {
+            $skuIdentity = $this->tiktokCacheSkuIdentityKey($row);
+            if ($skuIdentity === '') {
+                continue;
+            }
+
+            $key = trim((string) ($row->product_id ?? '')).'|'.$skuIdentity;
+            if (isset($seen[$key])) {
+                $duplicateIds[] = (int) $row->id;
+                continue;
+            }
+
+            $seen[$key] = true;
+        }
+
+        foreach (array_chunk($duplicateIds, 500) as $chunk) {
+            DB::table('tiktok_products')
+                ->whereIn('id', $chunk)
+                ->update([
+                    'is_active' => DB::raw('false'),
+                    'updated_at' => now(),
+                ]);
+        }
+
+        return count($duplicateIds);
+    }
+
+    private function tiktokCacheSkuIdentityKey(object $row): string
+    {
+        $skuId = trim((string) ($row->sku_id ?? ''));
+        if ($skuId !== '') {
+            return 'sku_id:'.$skuId;
+        }
+
+        $skuName = $this->normalizeSkuMatchValue($row->sku_name ?? '');
+        if ($skuName !== '') {
+            return 'sku_name:'.$skuName;
+        }
+
+        return '';
     }
 
     private function fetchTiktokProductDetail(array $config, string $accessToken, ?object $shop, string $productId, string $detailBaseUrl): ?array
@@ -1741,13 +2851,16 @@ class OmnichannelController extends Controller
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
             $skuImageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokSkuImageUrl($sku), 'tiktok', $productId, $skuId !== '' ? $skuId : $skuName);
             $skuKey = $skuId !== '' ? $skuId : $skuName;
+            $matchAttributes = $skuId !== ''
+                ? ['product_id' => $productId, 'sku_id' => $skuId]
+                : ['product_id' => $productId, 'sku_name' => $skuName];
 
             if ($skuKey !== '') {
                 $activeSkuKeys[$this->normalizeSkuMatchValue($skuKey)] = true;
             }
 
             DB::table('tiktok_products')->updateOrInsert(
-                ['product_id' => $productId, 'sku_id' => $skuId !== '' ? $skuId : $skuName],
+                $matchAttributes,
                 [
                     'product_name' => $productName,
                     'sku_id' => $skuId !== '' ? $skuId : null,
@@ -1794,6 +2907,8 @@ class OmnichannelController extends Controller
                 }
             }
         }
+
+        $this->deactivateDuplicateTiktokProductSkuRows($productId);
     }
 
     private function extractTiktokImageUrl(array $data): ?string
@@ -2423,7 +3538,9 @@ class OmnichannelController extends Controller
                 ?: ($tiktokMatch->product_image_url ?? null);
 
             if ($tiktokMatch) {
-                $matchedTiktokVariantKeys[$this->tiktokVariantKey($tiktokMatch)] = true;
+                foreach ($this->tiktokVariantMatchKeys($tiktokMatch) as $matchKey) {
+                    $matchedTiktokVariantKeys[$matchKey] = true;
+                }
             }
 
             $items[] = [
@@ -2494,8 +3611,7 @@ class OmnichannelController extends Controller
                 : null;
 
             foreach ($group as $skuRow) {
-                $variantKey = $this->tiktokVariantKey($skuRow);
-                if (isset($matchedTiktokVariantKeys[$variantKey])) {
+                if ($this->hasMatchedTiktokVariant($matchedTiktokVariantKeys, $skuRow)) {
                     continue;
                 }
 
@@ -2617,6 +3733,8 @@ class OmnichannelController extends Controller
     {
         $empty = [
             'by_sku_id' => [],
+            'by_seller_sku' => [],
+            'by_product_seller_sku' => [],
             'by_product_sku_id' => [],
             'by_product_sku_name' => [],
             'by_product_variant_name' => [],
@@ -2754,6 +3872,7 @@ class OmnichannelController extends Controller
 
         $products = DB::table('shopee_product as sp')
             ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), 'spi.item_id', '=', 'sp.item_id')
+            ->whereRaw('COALESCE(sp.is_active, true) = true')
             ->select('sp.item_id', 'sp.name as product_name', 'sp.status', 'spi.image_url')
             ->get();
 
@@ -3104,6 +4223,49 @@ class OmnichannelController extends Controller
         }
 
         return $productId.'|name:'.$skuNameKey;
+    }
+
+    private function tiktokVariantMatchKeys(object $row): array
+    {
+        $keys = [];
+        $variantKey = $this->tiktokVariantKey($row);
+        $skuId = trim((string) ($row->sku_id ?? ''));
+        $sellerSkuKey = $this->normalizeSkuMatchValue($row->seller_sku ?? '');
+        $productNameKey = $this->normalizeSkuMatchValue($row->product_name ?? '');
+        $skuNameKey = $this->normalizeSkuMatchValue($row->sku_name ?? '');
+
+        if ($variantKey !== '') {
+            $keys[] = 'variant:'.$variantKey;
+        }
+
+        if ($skuId !== '') {
+            $keys[] = 'sku_id:'.$skuId;
+        }
+
+        if ($sellerSkuKey !== '') {
+            $keys[] = 'seller_sku:'.$sellerSkuKey;
+        }
+
+        if ($productNameKey !== '' && $skuNameKey !== '') {
+            $keys[] = 'product_variant:'.$productNameKey.'|'.$skuNameKey;
+        }
+
+        if ($productNameKey !== '' && $sellerSkuKey !== '') {
+            $keys[] = 'product_seller_sku:'.$productNameKey.'|'.$sellerSkuKey;
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function hasMatchedTiktokVariant(array $matchedKeys, object $row): bool
+    {
+        foreach ($this->tiktokVariantMatchKeys($row) as $matchKey) {
+            if (isset($matchedKeys[$matchKey])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function skuMappingNameTokens(mixed $value): array
@@ -3838,28 +5000,7 @@ class OmnichannelController extends Controller
                 continue;
             }
 
-            $sellerStock = [
-                'stock' => $variant['stock'],
-            ];
-            if ($sellerStockLocationId !== '') {
-                $sellerStock['location_id'] = $sellerStockLocationId;
-            }
-
-            $model = [
-                'tier_index' => [$optionIndex],
-                'original_price' => $variant['price'],
-                'seller_stock' => [$sellerStock],
-            ];
-
-            if ($variant['seller_sku'] !== '') {
-                $model['model_sku'] = mb_substr($variant['seller_sku'], 0, 100);
-            }
-
-            if ($modelWeight !== null && $modelWeight > 0) {
-                $model['weight'] = $modelWeight;
-            }
-
-            $addModels[] = $model;
+            $addModels[] = $this->buildShopeeAddModel($variant, $optionIndex, $sellerStockLocationId, $modelWeight);
             $plannedVariants[] = [
                 ...$variant,
                 'tier_index' => [$optionIndex],
@@ -3937,6 +5078,48 @@ class OmnichannelController extends Controller
                     'responses' => $responses,
                 ], 422);
             }
+
+            $rebuiltAddModels = null;
+            for ($attempt = 1; $attempt <= 5; $attempt++) {
+                if ($attempt > 1) {
+                    usleep(600000);
+                }
+
+                $freshModelPayload = $this->fetchShopeeModelList($config, $shopId, $accessToken, $itemId);
+                $rebuiltAddModels = $this->rebuildShopeeAddModelsFromFreshTier(
+                    $plannedVariants,
+                    $freshModelPayload,
+                    $sellerStockLocationId,
+                    $modelWeight
+                );
+
+                if ($rebuiltAddModels !== null) {
+                    $responses['post_update_model_list'] = [
+                        'attempt' => $attempt,
+                        'message' => 'Tier variation Shopee terbaru berhasil dibaca sebelum add_model.',
+                    ];
+                    break;
+                }
+            }
+
+            if ($rebuiltAddModels === null) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Shopee sudah menerima update opsi varian, tetapi opsi baru belum terbaca ulang untuk add_model. Coba klik Tambah ke Shopee sekali lagi.',
+                    'plan' => $plan,
+                    'responses' => $responses,
+                ], 422);
+            }
+
+            $addModels = $rebuiltAddModels['model_list'];
+            $plannedVariants = $rebuiltAddModels['planned_variants'];
+            $addModelPayload = [
+                'item_id' => $itemId,
+                'model_list' => $addModels,
+            ];
+            $plan['new_model_count'] = count($addModels);
+            $plan['planned_variants'] = $plannedVariants;
+            $plan['requests']['add_model'] = $addModelPayload;
         }
 
         $responses['add_model'] = $this->shopeeSignedPost($config, '/api/v2/product/add_model', $shopId, $accessToken, $addModelPayload);

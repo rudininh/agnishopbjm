@@ -42,6 +42,8 @@ Route::get('omnichannel/dashboard', [OmnichannelController::class, 'dashboard'])
 Route::get('get-shopee-items', [OmnichannelController::class, 'shopeeItems']);
 Route::get('get-tiktok-items', [OmnichannelController::class, 'tiktokItems']);
 Route::get('get-stock-master', [OmnichannelController::class, 'stockMaster']);
+Route::get('product-variant-analysis', [OmnichannelController::class, 'productVariantAnalysis']);
+Route::post('product-variant-analysis/confirm', [OmnichannelController::class, 'confirmProductVariantAnalysisIssue']);
 Route::get('sku-mapping', [OmnichannelController::class, 'skuMapping']);
 Route::post('sku-mapping', [OmnichannelController::class, 'saveSkuMapping']);
 Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
