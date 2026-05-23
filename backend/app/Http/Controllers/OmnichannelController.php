@@ -983,6 +983,7 @@ class OmnichannelController extends Controller
                 'stock',
                 'price_min',
                 'price_max',
+                'price_before_discount',
                 'sold',
                 'liked_count',
                 'rating',
@@ -995,7 +996,7 @@ class OmnichannelController extends Controller
             ->get();
 
         $models = DB::table('shopee_product_model')
-            ->select('item_id', 'model_id', 'name', 'price', 'stock', 'updated_at')
+            ->select('item_id', 'model_id', 'name', 'price', 'original_price', 'stock', 'updated_at')
             ->orderBy('name')
             ->get()
             ->groupBy('item_id');
@@ -1045,6 +1046,7 @@ class OmnichannelController extends Controller
                 'stok' => (int) ($item->stock ?? 0),
                 'price_min' => (int) ($item->price_min ?? 0),
                 'price_max' => (int) ($item->price_max ?? 0),
+                'price_before_discount' => (int) ($item->price_before_discount ?? 0),
                 'harga' => $this->formatRupiah((int) ($item->price_min ?? $item->price_max ?? 0)),
                 'sales' => (int) ($item->sold ?? 0),
                 'likes' => (int) ($item->liked_count ?? 0),
@@ -1057,6 +1059,7 @@ class OmnichannelController extends Controller
                     'model_id' => (string) $model->model_id,
                     'name' => $model->name,
                     'price' => (int) ($model->price ?? 0),
+                    'original_price' => (int) ($model->original_price ?? $model->price ?? 0),
                     'stock' => (int) ($model->stock ?? 0),
                     'image_url' => $modelImages[$item->item_id][$model->model_id] ?? null,
                     'fallback_image_url' => $productImages[$item->item_id] ?? null,
@@ -1695,6 +1698,8 @@ class OmnichannelController extends Controller
         $modelName = (string) ($model['model_name'] ?? $model['name'] ?? 'Tanpa Varian');
         $modelSku = (string) ($model['model_sku'] ?? '');
         $price = $this->shopeePrice($this->shopeePriceInfoValue($model['price_info'] ?? null, 'current_price', $model['price'] ?? 0));
+        $originalPrice = $this->shopeePrice($this->shopeePriceInfoValue($model['price_info'] ?? null, 'original_price', $model['price_before_discount'] ?? $price));
+        $originalPrice = max($price, $originalPrice);
         $stock = $this->shopeeModelStock($model);
         $now = now();
 
@@ -1703,6 +1708,7 @@ class OmnichannelController extends Controller
             [
                 'name' => $modelName,
                 'price' => $price,
+                'original_price' => $originalPrice,
                 'stock' => $stock,
                 'updated_at' => $now,
                 'created_at' => $now,
@@ -3443,8 +3449,10 @@ class OmnichannelController extends Controller
             'sva.variant_action_status',
             'sva.variant_action_payload',
             'sp.name as shopee_name',
+            'sp.is_active as shopee_is_active',
             'spm.name as shopee_variant_name',
             'spm.price as shopee_variant_price',
+            'spm.original_price as shopee_variant_original_price',
             'spm.stock as shopee_variant_stock',
             'sp.status as shopee_status',
             'spmi.image_url as shopee_model_image_url',
@@ -3491,9 +3499,17 @@ class OmnichannelController extends Controller
             $shopeeSellerSku = $row->mapped_seller_sku ?: $row->stock_shopee_seller_sku;
             $shopeeStatus = trim((string) ($row->shopee_status ?? ''));
             $shopeeStatus = $shopeeStatus !== '' ? $shopeeStatus : (string) ($matchedShopeeProduct['status'] ?? '');
-            $shopeeIsLive = $this->isLiveShopeeStatus($shopeeStatus);
+            $shopeeActive = $row->shopee_is_active === null ? true : (bool) $row->shopee_is_active;
+            $shopeeIsLive = $shopeeActive && $this->isLiveShopeeStatus($shopeeStatus);
+            $stockVariantKey = $this->normalizeSkuMatchValue($row->variant_name ?? '');
+            $matchedShopeeVariant = $matchedShopeeProduct && $stockVariantKey !== ''
+                ? ($matchedShopeeProduct['variants_by_name'][$stockVariantKey] ?? null)
+                : null;
+            if (! $this->filledString($shopeeModelId) && $matchedShopeeVariant) {
+                $shopeeModelId = $matchedShopeeVariant['model_id'] ?? null;
+            }
             $shopeeMatchSource = $this->filledString($savedShopeeItemId) || $this->filledString($shopeeModelId)
-                ? 'saved'
+                ? ($matchedShopeeVariant && ! $this->filledString($savedShopeeItemId) ? 'suggested_variant' : 'saved')
                 : ($matchedShopeeProduct ? 'suggested_product' : null);
             $matchedProductId = $stockGroupTiktokMatches[$stockGroupKey] ?? null;
             $canonicalGroupKey = $matchedProductId && isset($matchedTiktokToStockGroup[$matchedProductId])
@@ -3511,7 +3527,7 @@ class OmnichannelController extends Controller
             $tiktokSkuName = $row->tiktok_sku_name ?: null;
             $tiktokSellerSku = $row->mapped_seller_sku ?: $row->stock_tiktok_seller_sku ?: ($tiktokMatch->seller_sku ?? null);
             $variantActionStatus = trim((string) ($row->variant_action_status ?? ''));
-            $hasShopeeActual = $shopeeMatchSource !== 'suggested_product' && (
+            $hasShopeeActual = $shopeeActive && $shopeeMatchSource !== 'suggested_product' && (
                 $this->filledString($shopeeItemId)
                 || $this->filledString($shopeeModelId)
                 || $this->filledString($row->shopee_model_image_url ?? null)
@@ -3560,11 +3576,15 @@ class OmnichannelController extends Controller
                     'item_id' => $shopeeItemId,
                     'model_id' => $shopeeModelId,
                     'status' => $shopeeStatus !== '' ? $shopeeStatus : null,
+                    'is_active' => $shopeeActive,
                     'is_live' => $shopeeIsLive,
                     'product_name' => $row->shopee_name ?: ($matchedShopeeProduct['product_name'] ?? $row->product_name),
-                    'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
+                    'variant_name' => $row->shopee_variant_name ?: ($matchedShopeeVariant['name'] ?? $row->variant_name),
                     'seller_sku' => $shopeeSellerSku,
-                    'price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
+                    'price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : ($matchedShopeeVariant['price'] ?? null),
+                    'original_price' => isset($row->shopee_variant_original_price) ? (int) $row->shopee_variant_original_price : ($matchedShopeeVariant['original_price'] ?? null),
+                    'product_prices' => $matchedShopeeProduct['prices'] ?? [],
+                    'product_original_prices' => $matchedShopeeProduct['original_prices'] ?? [],
                     'stock_qty' => (int) ($row->shopee_variant_stock ?? $row->stock_qty ?? 0),
                     'image_url' => $shopeeImageUrl,
                     'status' => $hasShopeeActual ? 'mapped' : 'unmapped',
@@ -3615,6 +3635,11 @@ class OmnichannelController extends Controller
                     continue;
                 }
 
+                $skuVariantKey = $this->normalizeSkuMatchValue($skuRow->sku_name ?? '');
+                if ($suggestedShopeeProduct && $skuVariantKey !== '' && isset($suggestedShopeeProduct['variants_by_name'][$skuVariantKey])) {
+                    continue;
+                }
+
                 $items[] = [
                     'id' => 'tiktok-'.$skuRow->product_id.'-'.($skuRow->sku_id ?: $this->normalizeSkuMatchValue($skuRow->sku_name ?? '')),
                     'group_key' => $canonicalGroupKey,
@@ -3630,6 +3655,10 @@ class OmnichannelController extends Controller
                         'model_id' => null,
                         'product_name' => $suggestedShopeeProduct['product_name'] ?? null,
                         'variant_name' => null,
+                        'price' => null,
+                        'original_price' => null,
+                        'product_prices' => $suggestedShopeeProduct['prices'] ?? [],
+                        'product_original_prices' => $suggestedShopeeProduct['original_prices'] ?? [],
                         'stock_qty' => null,
                         'image_url' => $suggestedShopeeProduct['image_url'] ?? null,
                         'status' => 'unmapped',
@@ -3882,7 +3911,7 @@ class OmnichannelController extends Controller
 
         $modelRows = Schema::hasTable('shopee_product_model')
             ? DB::table('shopee_product_model')
-                ->select('item_id', 'name', 'model_id')
+                ->select('item_id', 'name', 'model_id', 'price', 'original_price')
                 ->get()
                 ->groupBy('item_id')
             : collect();
@@ -3896,10 +3925,30 @@ class OmnichannelController extends Controller
             }
 
             $variantNames = [];
+            $variantsByName = [];
+            $prices = [];
+            $originalPrices = [];
             foreach (($modelRows[$product->item_id] ?? collect()) as $model) {
                 $variantKey = $this->normalizeSkuMatchValue($model->name ?? '');
                 if ($variantKey !== '') {
                     $variantNames[$variantKey] = true;
+                    $price = (int) ($model->price ?? 0);
+                    $variantsByName[$variantKey] = [
+                        'model_id' => trim((string) ($model->model_id ?? '')),
+                        'name' => $model->name ?? '',
+                        'price' => $price,
+                        'original_price' => max($price, (int) ($model->original_price ?? 0)),
+                    ];
+                }
+
+                $price = (int) ($model->price ?? 0);
+                if ($price > 0) {
+                    $prices[] = $price;
+                }
+
+                $originalPrice = max($price, (int) ($model->original_price ?? 0));
+                if ($originalPrice > 0) {
+                    $originalPrices[] = $originalPrice;
                 }
             }
 
@@ -3909,6 +3958,9 @@ class OmnichannelController extends Controller
                 'product_name_key' => $this->normalizeSkuMatchValue($product->product_name ?? ''),
                 'tokens' => $this->skuMappingNameTokens($product->product_name ?? ''),
                 'variant_names' => array_keys($variantNames),
+                'variants_by_name' => $variantsByName,
+                'prices' => $prices,
+                'original_prices' => $originalPrices,
                 'status' => $product->status ?? null,
                 'image_url' => $product->image_url ?? null,
             ];
@@ -7223,6 +7275,7 @@ class OmnichannelController extends Controller
                 item_id BIGINT NOT NULL,
                 name TEXT NULL,
                 price BIGINT DEFAULT 0,
+                original_price BIGINT DEFAULT 0,
                 stock INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW(),
@@ -7273,8 +7326,8 @@ class OmnichannelController extends Controller
         ");
 
         foreach ([
-            'shopee_product' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()'],
-            'shopee_product_model' => ['created_at TIMESTAMP DEFAULT NOW()'],
+            'shopee_product' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'price_before_discount BIGINT DEFAULT 0'],
+            'shopee_product_model' => ['created_at TIMESTAMP DEFAULT NOW()', 'original_price BIGINT DEFAULT 0'],
             'shopee_product_image' => ['updated_at TIMESTAMP DEFAULT NOW()'],
             'stock_master' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'shopee_seller_sku TEXT NULL', 'tiktok_product_id TEXT NULL', 'tiktok_sku TEXT NULL', 'tiktok_seller_sku TEXT NULL'],
         ] as $table => $columns) {

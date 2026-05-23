@@ -52,6 +52,16 @@
               <strong>{{ activeGroup.name }}</strong>
               <small>Shopee: {{ activeGroup.shopee.present }} varian, stok {{ activeGroup.shopee.total_stock }}</small>
               <small>TikTok: {{ activeGroup.tiktok.present }} varian, stok {{ activeGroup.tiktok.total_stock }}</small>
+              <div class="group-price-summary">
+                <span>
+                  <em>Harga Shopee</em>
+                  <strong>{{ groupShopeePriceSummary(activeGroup) }}</strong>
+                </span>
+                <span>
+                  <em>Harga TikTok</em>
+                  <strong>{{ groupChannelPriceSummary(activeGroup, 'tiktok') }}</strong>
+                </span>
+              </div>
             </div>
           </div>
           <span :class="['badge', activeGroup.status]">{{ labelStatus(activeGroup.status) }}</span>
@@ -441,7 +451,7 @@
                       <strong>{{ variant.variant_name || 'Tanpa Varian' }}</strong>
                       <small>SKU: {{ variant.seller_sku || variant.internal_sku || '-' }}</small>
                       <small>Stok: {{ displayStock(isShopeeFlow ? (variant.tiktok?.stock_qty ?? variant.stock_qty) : (variant.shopee?.stock_qty ?? variant.stock_qty)) }}</small>
-                      <small v-if="isShopeeFlow && hasPrice(variant.tiktok?.price)">Harga: {{ displayPrice(variant.tiktok.price) }}</small>
+                      <small v-if="isShopeeFlow">Harga: {{ displayPrice(resolveShopeeVariantSubmitPrice(variant)) }}</small>
                     </div>
                     <button type="button" class="ghost mini" @click="toggleVariantSelection(variant, false)">Hapus</button>
                   </div>
@@ -623,7 +633,7 @@ const addVariantPanelSubtitle = computed(() => isShopeeFlow.value
   ? 'Klik baris/checkbox varian TikTok yang belum ada di Shopee, lalu kirim sebagai model Shopee baru.'
   : 'Workflow aman: klik baris berstatus belum ada variant untuk autofill data Shopee, lalu GET product terbaru, normalize payload edit, append 1 SKU baru, lalu copy payload untuk PUT.')
 const variantPriceHint = computed(() => isShopeeFlow.value
-  ? `Harga Shopee diambil dari harga TikTok per SKU. Fallback manual: ${displayPrice(addVariantTool.price)}.`
+  ? `Harga submit Shopee mengikuti input ini: ${displayPrice(resolveShopeeVariantSubmitPrice(selectedItem.value))}. Jika input dikosongkan, pakai harga asli mayoritas Shopee lalu fallback harga TikTok.`
   : `Harga final per SKU: ${displayPrice(applyDiscountToPrice(addVariantTool.price, addVariantTool.discount))}`)
 const addVariantSubmitLabel = computed(() => {
   if (isShopeeFlow.value) {
@@ -729,6 +739,105 @@ const displayPrice = (value) => {
   if (!Number.isFinite(numeric)) return '-'
 
   return `Rp ${new Intl.NumberFormat('id-ID').format(numeric)}`
+}
+const numericPrice = (value) => {
+  if (value === null || value === undefined || value === '') return 0
+
+  const normalized = String(value).trim().replace(',', '.').replace(/[^\d.-]/g, '')
+  const numeric = Number(normalized)
+
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0
+}
+const variantChannelPrice = (item, channel, type = 'current') => {
+  const value = channel === 'shopee'
+    ? type === 'original'
+      ? (item?.shopee?.original_price ?? item?.shopee_original_price ?? item?.shopee?.price ?? item?.shopee_variant_price ?? item?.stock_shopee_price)
+      : (item?.shopee?.price ?? item?.shopee_variant_price ?? item?.stock_shopee_price)
+    : (item?.tiktok?.price ?? item?.tiktok_price ?? item?.price)
+
+  return numericPrice(value)
+}
+const groupChannelPrices = (group, channel, type = 'current') => {
+  const variants = group?.variants || []
+
+  if (channel === 'shopee') {
+    const productPricesByItem = new Map()
+    variants.forEach((variant) => {
+      const itemId = String(variant?.shopee?.item_id || variant?.shopee_item_id || '').trim()
+      const sourceKey = type === 'original' ? 'product_original_prices' : 'product_prices'
+      const productPrices = Array.isArray(variant?.shopee?.[sourceKey])
+        ? variant.shopee[sourceKey].map(numericPrice).filter(Boolean)
+        : []
+
+      if (itemId && productPrices.length && !productPricesByItem.has(itemId)) {
+        productPricesByItem.set(itemId, productPrices)
+      }
+    })
+
+    if (productPricesByItem.size) {
+      return [...productPricesByItem.values()].flat()
+    }
+  }
+
+  return variants
+    .map((variant) => variantChannelPrice(variant, channel, type))
+    .filter(Boolean)
+}
+const summarizePriceList = (prices, emptyText = 'Belum ada harga') => {
+  if (!prices.length) return emptyText
+
+  const counts = prices.reduce((result, price) => {
+    result[price] = (result[price] || 0) + 1
+    return result
+  }, {})
+  const sortedCounts = Object.entries(counts)
+    .map(([price, count]) => ({ price: Number(price), count }))
+    .sort((a, b) => b.count - a.count || a.price - b.price)
+  const majority = sortedCounts[0]
+
+  if (majority.count > 1 && majority.count >= Math.ceil(prices.length / 2)) {
+    return `Mayoritas ${displayPrice(majority.price)} (${majority.count}/${prices.length} varian)`
+  }
+
+  const min = Math.min(...prices)
+  const max = Math.max(...prices)
+
+  return min === max
+    ? `${displayPrice(min)} (${prices.length} varian)`
+    : `${displayPrice(min)} - ${displayPrice(max)} (${prices.length} varian)`
+}
+const groupChannelPriceSummary = (group, channel, type = 'current') => summarizePriceList(groupChannelPrices(group, channel, type))
+const groupShopeePriceSummary = (group) => {
+  const originalSummary = groupChannelPriceSummary(group, 'shopee', 'original')
+  const discountSummary = groupChannelPriceSummary(group, 'shopee')
+
+  if (originalSummary === 'Belum ada harga') return originalSummary
+  if (originalSummary === discountSummary) return `Asli/Jual ${discountSummary}`
+
+  return `Asli ${originalSummary} | Diskon ${discountSummary}`
+}
+const groupChannelDominantPrice = (group, channel) => {
+  const prices = groupChannelPrices(group, channel, channel === 'shopee' ? 'original' : 'current')
+  if (!prices.length) return 0
+
+  const counts = prices.reduce((result, price) => {
+    result[price] = (result[price] || 0) + 1
+    return result
+  }, {})
+
+  return Object.entries(counts)
+    .map(([price, count]) => ({ price: Number(price), count }))
+    .sort((a, b) => b.count - a.count || a.price - b.price)[0]?.price || 0
+}
+const manualAddVariantPrice = () => numericPrice(addVariantTool.price)
+const resolveShopeeVariantSubmitPrice = (source = null) => {
+  const manualPrice = manualAddVariantPrice()
+  if (manualPrice) return manualPrice
+
+  const shopeeDominantPrice = groupChannelDominantPrice(activeGroup.value, 'shopee')
+  if (shopeeDominantPrice) return shopeeDominantPrice
+
+  return numericPrice(source?.tiktok?.price ?? source?.price ?? addVariantTool.price) || 1
 }
 const resolveTiktokProductId = (item) => String(
   item?.mapped_tiktok_product_id ||
@@ -1096,7 +1205,7 @@ const buildShopeeAddVariantPayload = () => {
     if (!variantName || seen.has(variantKey)) return
     seen.add(variantKey)
 
-    const tiktokPrice = source?.tiktok?.price ?? source?.price ?? addVariantTool.price
+    const targetPrice = resolveShopeeVariantSubmitPrice(source)
     const tiktokStock = source?.tiktok?.stock_qty ?? source?.stock_qty ?? addVariantTool.quantity ?? 0
     const sellerSku = String(
       source?.tiktok?.seller_sku ||
@@ -1116,7 +1225,7 @@ const buildShopeeAddVariantPayload = () => {
       stock_master_id: typeof source?.stock_master_id === 'number' ? source.stock_master_id : null,
       variant_name: variantName,
       seller_sku: sellerSku,
-      price: normalizePriceInput(tiktokPrice, normalizePriceInput(addVariantTool.price, '50000') || '50000'),
+      price: normalizePriceInput(targetPrice, '1') || '1',
       stock: Number(tiktokStock ?? 0),
       image_url: imageUrl,
       tiktok_product_id: String(source?.tiktok?.product_id || resolveSelectedTiktokProductId() || '').trim(),
@@ -2285,10 +2394,12 @@ const submitAddVariant = async () => {
 
       if (response.status >= 200 && response.status < 300 && parsed?.status !== 'error') {
         if (!payload.dry_run) {
+          clearSelectedVariants()
           await loadData(false, {
             bypassCache: true,
-            preserveSelection: true
+            preserveSelection: false
           })
+          clearSelectedVariants()
         }
         return
       }
@@ -2723,6 +2834,10 @@ onMounted(async () => {
 .group-title { display:flex; gap:12px; align-items:flex-start; min-width:0; }
 .group-title strong { display:block; color:#111827; font-size:18px; line-height:1.25; margin-bottom:4px; }
 .group-title small { color:#64748b; display:block; margin-top:3px; }
+.group-price-summary { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.group-price-summary span { display:grid; gap:2px; min-width:190px; padding:7px 9px; border:1px solid #dbeafe; border-radius:6px; background:#f8fbff; }
+.group-price-summary em { color:#64748b; font-style:normal; font-size:11px; line-height:1.2; }
+.group-price-summary strong { color:#0f172a; font-size:12px; line-height:1.25; margin:0; }
 .group-empty { margin-bottom:12px; padding:12px; border:1px dashed #cbd5e1; border-radius:8px; color:#64748b; background:#f8fafc; }
 .empty-row { text-align:center; color:#64748b; padding:20px !important; }
 .table-filters { display:flex; align-items:end; gap:12px; margin: 0 0 12px; padding: 12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:8px; }
