@@ -449,7 +449,7 @@
                   <div v-for="variant in selectedVariantItems" :key="variant.id" class="variant-selection-item">
                     <div class="variant-selection-copy">
                       <strong>{{ variant.variant_name || 'Tanpa Varian' }}</strong>
-                      <small>SKU: {{ variant.seller_sku || variant.internal_sku || '-' }}</small>
+                      <small>SKU: {{ displaySelectedVariantSellerSku(variant) }}</small>
                       <small>Stok: {{ displayStock(isShopeeFlow ? (variant.tiktok?.stock_qty ?? variant.stock_qty) : (variant.shopee?.stock_qty ?? variant.stock_qty)) }}</small>
                       <small v-if="isShopeeFlow">Harga: {{ displayPrice(resolveShopeeVariantSubmitPrice(variant)) }}</small>
                     </div>
@@ -489,7 +489,7 @@
                   <div v-for="variant in selectedVariantItems" :key="`summary-${variant.id}`" class="variant-selection-item">
                     <div class="variant-selection-copy">
                       <strong>{{ variant.variant_name || 'Tanpa Varian' }}</strong>
-                      <small>{{ variant.seller_sku || variant.internal_sku || '-' }}</small>
+                      <small>{{ displaySelectedVariantSellerSku(variant) }}</small>
                     </div>
                   </div>
                 </div>
@@ -716,6 +716,38 @@ const resetForm = () => {
 }
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+const skuFragment = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toUpperCase()
+
+  return normalized || 'VARIANT'
+}
+const buildShopeeTemplateSku = (variantName, itemId = '') => {
+  const productId = String(itemId || resolveSelectedShopeeItemId() || resolveManualShopeeItemId() || '').trim()
+  const suffix = skuFragment(variantName)
+  return productId ? `INT-${productId}-${suffix}` : `INT-${suffix}`
+}
+const isMarketplaceNumericSku = (value) => /^\d{10,19}$/.test(String(value || '').trim())
+const resolveStandardSellerSku = (source, variantName = '', productId = '') => {
+  const candidates = [
+    source?.shopee?.seller_sku,
+    source?.stock_shopee_seller_sku,
+    source?.mapped_seller_sku,
+    source?.seller_sku,
+    source?.internal_sku,
+    source?.tiktok?.seller_sku
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  const standardCandidate = candidates.find((value) => !isMarketplaceNumericSku(value))
+
+  return standardCandidate || buildShopeeTemplateSku(variantName, productId) || candidates[0] || ''
+}
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '-'
 const initials = (name) => String(name || 'SK').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
 const labelStatus = (status) => {
@@ -1011,10 +1043,18 @@ const selectedVariantItems = computed(() => {
 const selectedVariantPayloadLabels = computed(() => {
   return selectedVariantItems.value.map((variant) => {
     const variantName = String(variant?.variant_name || 'Tanpa Varian').trim() || 'Tanpa Varian'
-    const sellerSku = String(variant?.seller_sku || variant?.internal_sku || '-').trim() || '-'
+    const sellerSku = displaySelectedVariantSellerSku(variant)
     return `${variantName} (${sellerSku})`
   })
 })
+const displaySelectedVariantSellerSku = (variant) => {
+  const variantName = String(variant?.variant_name || '').trim()
+  const sellerSku = isShopeeFlow.value
+    ? String(variant?.seller_sku || variant?.internal_sku || '').trim()
+    : resolveStandardSellerSku(variant, variantName, resolveShopeeItemId(variant) || resolveSelectedShopeeItemId())
+
+  return sellerSku || '-'
+}
 const allDisplayedVariantsSelected = computed(() => displayVariants.value.length > 0 && displayVariants.value.every((item) => isVariantSelected(item)))
 const someDisplayedVariantsSelected = computed(() => displayVariants.value.some((item) => isVariantSelected(item)))
 const groupVariantIds = (group) => {
@@ -1207,13 +1247,15 @@ const buildShopeeAddVariantPayload = () => {
 
     const targetPrice = resolveShopeeVariantSubmitPrice(source)
     const tiktokStock = source?.tiktok?.stock_qty ?? source?.stock_qty ?? addVariantTool.quantity ?? 0
-    const sellerSku = String(
-      source?.tiktok?.seller_sku ||
-      source?.seller_sku ||
-      source?.internal_sku ||
-      addVariantTool.seller_sku ||
-      ''
-    ).trim()
+    const sellerSku = isShopeeFlow.value
+      ? buildShopeeTemplateSku(variantName)
+      : String(
+        source?.tiktok?.seller_sku ||
+        source?.seller_sku ||
+        source?.internal_sku ||
+        addVariantTool.seller_sku ||
+        ''
+      ).trim()
     const imageUrl = String(
       source?.tiktok?.image_url ||
       source?.image_url ||
@@ -1278,14 +1320,6 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
     ? (contextProductId || resolveShopeeItemId(item) || '')
     : (contextProductId || resolveTiktokProductId(item))
 
-  const sellerSku = String(
-    (isShopeeFlow.value ? item.tiktok?.seller_sku : item.shopee?.seller_sku) ||
-    item.seller_sku ||
-    item.stock_shopee_seller_sku ||
-    item.internal_sku ||
-    item.tiktok?.seller_sku ||
-    ''
-  ).trim()
   const colorName = String(
     (isShopeeFlow.value ? item.tiktok?.variant_name : item.shopee?.variant_name) ||
     item.variant_name ||
@@ -1293,6 +1327,9 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
     item.tiktok?.sku_name ||
     ''
   ).trim()
+  const sellerSku = isShopeeFlow.value
+    ? buildShopeeTemplateSku(colorName, contextProductId || resolveShopeeItemId(item) || resolveSelectedShopeeItemId())
+    : resolveStandardSellerSku(item, colorName, contextProductId || resolveShopeeItemId(item) || resolveSelectedShopeeItemId())
   const imageUri = String(
     (isShopeeFlow.value ? item.tiktok?.image_url : item.shopee?.image_url) ||
     item.image_url ||
@@ -1899,11 +1936,14 @@ const buildAddVariantRequestPreview = () => {
 
     const existingVariantIndex = existingVariantIndexByKey.get(colorKey)
 
-    let sellerSku = String(source?.seller_sku || source?.internal_sku || source?.tiktok?.seller_sku || `SKU-${buildNextNumericValue(
+    let sellerSku = resolveStandardSellerSku(source, colorName, resolveShopeeItemId(source) || resolveSelectedShopeeItemId())
+    if (!sellerSku) {
+      sellerSku = `SKU-${buildNextNumericValue(
       existingSkus.map((sku) => sku.id || sku.sku_id),
       `${productTitle}|${colorName}|${sourceIndex}`,
       '65536'
-    ).slice(-6)}`).trim()
+      ).slice(-6)}`
+    }
     const imageUri = String(
       source?.image_url ||
       source?.shopee?.image_url ||
