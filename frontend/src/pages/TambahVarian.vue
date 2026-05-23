@@ -2385,6 +2385,10 @@ const confirmSubmitTiktokPayload = async () => {
       statusCode,
       responseHint
     )
+
+    if (Number(parsed?.code) === 0) {
+      clearSelectedVariants()
+    }
   } catch (error) {
     const responseData = error.response?.data
     const responseText = formatResponseText(responseData || {

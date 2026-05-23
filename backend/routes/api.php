@@ -46,6 +46,7 @@ Route::get('product-variant-analysis', [OmnichannelController::class, 'productVa
 Route::post('product-variant-analysis/confirm', [OmnichannelController::class, 'confirmProductVariantAnalysisIssue']);
 Route::get('sku-mapping', [OmnichannelController::class, 'skuMapping']);
 Route::post('sku-mapping', [OmnichannelController::class, 'saveSkuMapping']);
+Route::post('sku-mapping/update-marketplace-sku', [OmnichannelController::class, 'updateSkuMappingMarketplaceSku']);
 Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
 Route::post('tiktok-variant/action', [OmnichannelController::class, 'tiktokVariantAction']);
 Route::post('tiktok/submit-generated-payload', [OmnichannelController::class, 'tiktokSubmitGeneratedPayload']);
