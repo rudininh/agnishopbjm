@@ -1427,7 +1427,7 @@ class OmnichannelController extends Controller
         ];
     }
 
-    private function normalizeShopeeAddVariantRows(array $rows): array
+    private function normalizeShopeeAddVariantRows(array $rows, string $itemId = ''): array
     {
         $variants = [];
 
@@ -1444,6 +1444,9 @@ class OmnichannelController extends Controller
             $price = $this->normalizePositiveInt($row['price'] ?? 0);
             $stock = $this->normalizeNonNegativeInt($row['stock'] ?? 0);
             $sellerSku = trim((string) ($row['seller_sku'] ?? ''));
+            if ($itemId !== '' && ! $this->shopeeSellerSkuLooksGenerated($sellerSku, $itemId)) {
+                $sellerSku = $this->buildShopeeTemplateSellerSku($itemId, $variantName);
+            }
 
             if ($sellerSku === '') {
                 $tiktokSkuId = trim((string) ($row['tiktok_sku_id'] ?? ''));
@@ -1465,6 +1468,21 @@ class OmnichannelController extends Controller
         }
 
         return $variants;
+    }
+
+    private function shopeeSellerSkuLooksGenerated(string $sellerSku, string $itemId): bool
+    {
+        $sellerSku = trim($sellerSku);
+        if ($sellerSku === '') {
+            return false;
+        }
+
+        return str_starts_with(strtoupper($sellerSku), 'INT-'.trim($itemId).'-');
+    }
+
+    private function buildShopeeTemplateSellerSku(string $itemId, string $variantName): string
+    {
+        return 'INT-'.trim($itemId).'-'.$this->sanitizeSkuFragment($variantName);
     }
 
     private function buildShopeeTierOption(string $variantName, bool $useStandardiseTier, string $imageId = '', string $sourceImageUrl = ''): array
@@ -1506,6 +1524,30 @@ class OmnichannelController extends Controller
 
         if ($modelWeight !== null && $modelWeight > 0) {
             $model['weight'] = $modelWeight;
+        }
+
+        return $model;
+    }
+
+    private function buildShopeeUpdateModel(array $variant, array $existingModel): array
+    {
+        $model = [
+            'model_id' => (int) $existingModel['model_id'],
+            'model_sku' => mb_substr((string) (
+                ($variant['seller_sku'] ?? '') !== ''
+                    ? $variant['seller_sku']
+                    : ($existingModel['model_sku'] ?? '')
+            ), 0, 100),
+        ];
+
+        $preOrder = data_get($existingModel, 'pre_order');
+        if (is_array($preOrder) && array_key_exists('is_pre_order', $preOrder)) {
+            $model['pre_order'] = [
+                'is_pre_order' => (bool) ($preOrder['is_pre_order'] ?? false),
+            ];
+            if (($model['pre_order']['is_pre_order'] ?? false) && isset($preOrder['days_to_ship'])) {
+                $model['pre_order']['days_to_ship'] = (int) $preOrder['days_to_ship'];
+            }
         }
 
         return $model;
@@ -3386,7 +3428,7 @@ class OmnichannelController extends Controller
         $search = trim((string) $request->query('search', ''));
         $status = (string) $request->query('status', 'all');
         $sort = (string) $request->query('sort', 'updated_desc');
-        $perPage = max(1, min(50, (int) $request->query('per_page', 10)));
+        $perPage = max(1, min(500, (int) $request->query('per_page', 10)));
         $page = max(1, (int) $request->query('page', 1));
 
         $query = DB::table('stock_master as sm')
@@ -3668,6 +3710,7 @@ class OmnichannelController extends Controller
                         'product_id' => $skuRow->product_id,
                         'sku_id' => $skuRow->sku_id ?? null,
                         'sku_name' => $skuRow->sku_name,
+                        'seller_sku' => $skuRow->seller_sku ?? null,
                         'product_name' => $skuRow->product_name,
                         'variant_name' => $skuRow->sku_name,
                         'price' => (int) ($skuRow->price ?? 0),
@@ -3682,9 +3725,11 @@ class OmnichannelController extends Controller
             }
         }
 
+        $items = $this->deduplicateSkuMappingItems($items);
+
         $items = collect($items)
             ->filter(function (array $item) use ($search, $status, $flow) {
-                if ($flow === 'shopee-to-tiktok' && ! ($item['shopee']['is_live'] ?? false)) {
+                if ($this->isSkuMappingSoldOutItem($item)) {
                     return false;
                 }
 
@@ -3756,6 +3801,198 @@ class OmnichannelController extends Controller
                 'last_page' => (int) max(1, (int) ceil($total / $perPage)),
             ],
         ]);
+    }
+
+    private function deduplicateSkuMappingItems(array $items): array
+    {
+        $merged = [];
+
+        foreach ($items as $item) {
+            $key = $this->skuMappingItemIdentityKey($item);
+            if ($key === '') {
+                $merged[] = $item;
+                continue;
+            }
+
+            if (! isset($merged[$key])) {
+                $merged[$key] = $item;
+                continue;
+            }
+
+            $merged[$key] = $this->mergeSkuMappingItems($merged[$key], $item);
+        }
+
+        return array_values($merged);
+    }
+
+    private function skuMappingItemIdentityKey(array $item): string
+    {
+        $shopeeItemId = trim((string) data_get($item, 'shopee.item_id', ''));
+        $shopeeModelId = trim((string) data_get($item, 'shopee.model_id', ''));
+        if ($shopeeItemId !== '' && $shopeeModelId !== '') {
+            return 'shopee:'.$shopeeItemId.'|'.$shopeeModelId;
+        }
+
+        $tiktokProductId = trim((string) data_get($item, 'tiktok.product_id', ''));
+        $tiktokSkuId = trim((string) data_get($item, 'tiktok.sku_id', ''));
+        if ($tiktokProductId !== '' && $tiktokSkuId !== '') {
+            return 'tiktok:'.$tiktokProductId.'|'.$tiktokSkuId;
+        }
+
+        $groupKey = trim((string) ($item['group_key'] ?? ''));
+        $variantKey = $this->normalizeSkuMatchValue($item['variant_name'] ?? '');
+
+        return $groupKey !== '' && $variantKey !== '' ? 'variant:'.$groupKey.'|'.$variantKey : '';
+    }
+
+    private function mergeSkuMappingItems(array $left, array $right): array
+    {
+        $base = $this->skuMappingItemScore($right) > $this->skuMappingItemScore($left) ? $right : $left;
+        $other = $base === $right ? $left : $right;
+
+        $merged = $this->mergeSkuMappingArrayValues($base, $other);
+        $merged['shopee'] = $this->mergeSkuMappingArrayValues($base['shopee'] ?? [], $other['shopee'] ?? []);
+        $merged['tiktok'] = $this->mergeSkuMappingArrayValues($base['tiktok'] ?? [], $other['tiktok'] ?? []);
+
+        $merged['internal_sku'] = $this->bestSkuMappingSkuValue([
+            $this->sameSkuMappingSku(data_get($merged, 'shopee.seller_sku'), data_get($merged, 'tiktok.seller_sku'))
+                ? data_get($merged, 'shopee.seller_sku')
+                : null,
+            $left['internal_sku'] ?? null,
+            $right['internal_sku'] ?? null,
+            data_get($left, 'shopee.seller_sku'),
+            data_get($right, 'shopee.seller_sku'),
+            data_get($left, 'tiktok.seller_sku'),
+            data_get($right, 'tiktok.seller_sku'),
+        ]) ?: ($merged['internal_sku'] ?? null);
+
+        $merged['seller_sku'] = $this->bestSkuMappingSkuValue([
+            $this->sameSkuMappingSku(data_get($merged, 'shopee.seller_sku'), data_get($merged, 'tiktok.seller_sku'))
+                ? data_get($merged, 'shopee.seller_sku')
+                : null,
+            $merged['seller_sku'] ?? null,
+            data_get($merged, 'shopee.seller_sku'),
+            data_get($merged, 'tiktok.seller_sku'),
+            $merged['internal_sku'] ?? null,
+        ]);
+
+        $hasShopeeActual = ($merged['shopee']['status'] ?? null) === 'mapped'
+            && ($merged['shopee']['source'] ?? null) !== 'suggested_product';
+        $hasTiktokActual = ($merged['tiktok']['status'] ?? null) === 'mapped'
+            && ($merged['tiktok']['source'] ?? null) !== 'suggested_product';
+        $merged['status'] = $hasShopeeActual && $hasTiktokActual
+            ? 'ready_to_sync'
+            : ($hasShopeeActual ? 'tiktok_missing' : ($hasTiktokActual ? 'shopee_missing' : 'belum_ada_variant'));
+
+        return $merged;
+    }
+
+    private function mergeSkuMappingArrayValues(array $base, array $other): array
+    {
+        $merged = $base;
+
+        foreach ($other as $key => $value) {
+            if (! array_key_exists($key, $merged) || ! $this->filledSkuMappingValue($merged[$key])) {
+                $merged[$key] = $value;
+            }
+        }
+
+        return $merged;
+    }
+
+    private function skuMappingItemScore(array $item): int
+    {
+        $score = 0;
+        foreach ([
+            $item['mapping_id'] ?? null,
+            data_get($item, 'shopee.seller_sku'),
+            data_get($item, 'tiktok.seller_sku'),
+            data_get($item, 'shopee.item_id'),
+            data_get($item, 'shopee.model_id'),
+            data_get($item, 'tiktok.product_id'),
+            data_get($item, 'tiktok.sku_id'),
+        ] as $value) {
+            if ($this->filledSkuMappingValue($value)) {
+                $score += 10;
+            }
+        }
+
+        $score += max(0, 20 - $this->skuMappingSkuPenalty($item['internal_sku'] ?? null));
+
+        return $score;
+    }
+
+    private function bestSkuMappingSkuValue(array $values): ?string
+    {
+        $best = null;
+        $bestPenalty = PHP_INT_MAX;
+
+        foreach ($values as $value) {
+            $sku = trim((string) ($value ?? ''));
+            if ($sku === '') {
+                continue;
+            }
+
+            $penalty = $this->skuMappingSkuPenalty($sku);
+            if ($best === null || $penalty < $bestPenalty || ($penalty === $bestPenalty && strlen($sku) < strlen($best))) {
+                $best = $sku;
+                $bestPenalty = $penalty;
+            }
+        }
+
+        return $best;
+    }
+
+    private function skuMappingSkuPenalty(mixed $value): int
+    {
+        $sku = trim((string) ($value ?? ''));
+        if ($sku === '') {
+            return 1000;
+        }
+
+        $penalty = substr_count(strtoupper($sku), 'INT-') > 1 ? 100 : 0;
+
+        if (preg_match('/^INT-(\d+)-INT-\1-/i', $sku) === 1) {
+            $penalty += 100;
+        }
+
+        return $penalty + min(strlen($sku), 200);
+    }
+
+    private function sameSkuMappingSku(mixed $left, mixed $right): bool
+    {
+        $left = trim((string) ($left ?? ''));
+        $right = trim((string) ($right ?? ''));
+
+        return $left !== '' && $right !== '' && strcasecmp($left, $right) === 0;
+    }
+
+    private function filledSkuMappingValue(mixed $value): bool
+    {
+        if (is_array($value)) {
+            return $value !== [];
+        }
+
+        return trim((string) ($value ?? '')) !== '';
+    }
+
+    private function isSkuMappingSoldOutItem(array $item): bool
+    {
+        $shopeeItemId = trim((string) data_get($item, 'shopee.item_id', ''));
+        $shopeeStatus = strtoupper(trim((string) data_get($item, 'shopee.status', '')));
+        $hasShopeeActual = $shopeeItemId !== '' && (data_get($item, 'shopee.source') !== 'suggested_product');
+
+        if ($hasShopeeActual && ! (bool) data_get($item, 'shopee.is_live', false)) {
+            return true;
+        }
+
+        foreach ([$shopeeStatus, strtoupper(trim((string) data_get($item, 'tiktok.product_status', '')))] as $status) {
+            if ($status !== '' && preg_match('/SOLD[ _-]?OUT|OUT[ _-]?OF[ _-]?STOCK|UNLIST|DELETED|REMOVED|DEACTIVATED/', $status) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function tiktokSkuMappingLookup(): array
@@ -4385,6 +4622,305 @@ class OmnichannelController extends Controller
         return response()->json(['status' => 'ok', 'message' => 'Mapping SKU berhasil disimpan.']);
     }
 
+    public function updateSkuMappingMarketplaceSku(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'stock_master_id' => ['required', 'integer'],
+            'seller_sku' => ['required', 'string', 'max:100'],
+            'apply_shopee' => ['nullable'],
+            'apply_tiktok' => ['nullable'],
+            'dry_run' => ['nullable'],
+        ]);
+
+        $stock = $this->loadSkuMappingVariantStockRow((int) $data['stock_master_id']);
+        abort_if(! $stock, 404, 'Varian tidak ditemukan.');
+
+        $sellerSku = trim((string) $data['seller_sku']);
+        abort_if($sellerSku === '', 422, 'SKU target wajib diisi.');
+
+        $applyShopee = $this->boolString($data['apply_shopee'] ?? true) === 'true';
+        $applyTiktok = $this->boolString($data['apply_tiktok'] ?? true) === 'true';
+        $dryRun = $this->boolString($data['dry_run'] ?? false) === 'true';
+        abort_if(! $applyShopee && ! $applyTiktok, 422, 'Pilih minimal satu marketplace untuk diedit.');
+
+        $shopeeItemId = trim((string) (($stock->shopee_item_id ?: $stock->shopee_product_id) ?? ''));
+        $shopeeModelId = trim((string) (($stock->shopee_model_id ?: $stock->shopee_sku) ?? ''));
+        $tiktokProductId = trim((string) (($stock->mapped_tiktok_product_id ?: $stock->tiktok_product_id) ?? ''));
+        $tiktokSkuId = trim((string) (($stock->tiktok_sku_id ?: $stock->tiktok_sku) ?? ''));
+        $now = now();
+
+        $result = [
+            'status' => 'ok',
+            'message' => $dryRun
+                ? 'Preview update SKU berhasil dibuat. Belum ada perubahan dikirim.'
+                : 'Update SKU marketplace selesai diproses.',
+            'dry_run' => $dryRun,
+            'seller_sku' => $sellerSku,
+            'stock_master_id' => (int) $stock->id,
+            'shopee' => [
+                'enabled' => $applyShopee,
+                'status' => $applyShopee ? 'pending' : 'skipped',
+                'request' => null,
+                'response' => null,
+            ],
+            'tiktok' => [
+                'enabled' => $applyTiktok,
+                'status' => $applyTiktok ? 'pending' : 'skipped',
+                'request' => null,
+                'response' => null,
+            ],
+        ];
+
+        $successfulChannels = [];
+
+        if ($applyShopee) {
+            $shopeePayload = [
+                'item_id' => is_numeric($shopeeItemId) ? (int) $shopeeItemId : $shopeeItemId,
+                'model' => [[
+                    'model_id' => is_numeric($shopeeModelId) ? (int) $shopeeModelId : $shopeeModelId,
+                    'model_sku' => mb_substr($sellerSku, 0, 100),
+                ]],
+            ];
+            $result['shopee']['request'] = [
+                'method' => 'POST',
+                'path' => '/api/v2/product/update_model',
+                'body' => $shopeePayload,
+            ];
+
+            if ($shopeeItemId === '' || $shopeeModelId === '') {
+                $result['shopee']['status'] = 'skipped';
+                $result['shopee']['response'] = [
+                    'message' => 'Item ID atau Model ID Shopee belum lengkap.',
+                    'item_id' => $shopeeItemId,
+                    'model_id' => $shopeeModelId,
+                ];
+            } elseif ($dryRun) {
+                $result['shopee']['status'] = 'dry_run';
+                $result['shopee']['response'] = ['message' => 'Dry run Shopee. Request belum dikirim.'];
+            } else {
+                try {
+                    $config = $this->shopeeConfig();
+                    $context = $this->resolveShopeeApiTestContext([]);
+                    $shopId = (int) ($context['shop_id'] ?? 0);
+                    $accessToken = trim((string) ($context['access_token'] ?? ''));
+                    abort_if($shopId <= 0 || $accessToken === '', 422, 'Token Shopee aktif belum lengkap.');
+
+                    $response = $this->shopeeSignedPost($config, '/api/v2/product/update_model', $shopId, $accessToken, $shopeePayload);
+                    $result['shopee']['response'] = $response;
+                    $result['shopee']['status'] = ($response['error'] ?? '') === '' ? 'ok' : 'error';
+
+                    if ($result['shopee']['status'] === 'ok') {
+                        $successfulChannels[] = 'shopee';
+                    }
+                } catch (\Throwable $exception) {
+                    $result['shopee']['status'] = 'error';
+                    $result['shopee']['response'] = [
+                        'message' => $exception->getMessage(),
+                    ];
+                }
+            }
+        }
+
+        if ($applyTiktok) {
+            $tiktokPayload = null;
+            $tiktokPath = null;
+
+            if ($tiktokProductId === '' || $tiktokSkuId === '') {
+                $result['tiktok']['status'] = 'skipped';
+                $result['tiktok']['response'] = [
+                    'message' => 'Product ID atau SKU ID TikTok belum lengkap.',
+                    'product_id' => $tiktokProductId,
+                    'sku_id' => $tiktokSkuId,
+                ];
+            } else {
+                try {
+                    $context = $this->resolveTiktokGetProductContext(['version' => '202509']);
+                    $accessToken = trim((string) ($context['access_token'] ?? ''));
+                    $shopId = trim((string) ($context['shop_id'] ?? ''));
+                    $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+                    abort_if($accessToken === '', 422, 'Token TikTok belum aktif.');
+                    abort_if($shopId === '' || $shopCipher === '', 422, 'Shop TikTok belum lengkap.');
+
+                    $config = $this->tiktokConfig();
+                    $detail = $this->fetchTiktokProductDetail(
+                        $config,
+                        $accessToken,
+                        (object) ['shop_id' => $shopId, 'shop_cipher' => $shopCipher, 'cipher' => $shopCipher],
+                        $tiktokProductId,
+                        $config['api_host'].'/product/202309/products/'
+                    );
+                    abort_if(! is_array($detail), 422, 'Detail produk TikTok belum bisa dibaca untuk menjaga SKU lain tidak terhapus.');
+                    $detailPayload = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
+
+                    $skuRows = $this->buildTiktokPartialEditSkuRows($detailPayload, $tiktokSkuId, $sellerSku);
+                    abort_if($skuRows === [], 422, 'SKU TikTok target tidak ditemukan di detail produk terbaru.');
+
+                    $tiktokPayload = [
+                        'save_mode' => 'LISTING',
+                        'skus' => $skuRows,
+                    ];
+                    $tiktokPath = '/product/202509/products/'.$tiktokProductId.'/partial_edit';
+                    $result['tiktok']['request'] = [
+                        'method' => 'POST',
+                        'path' => $tiktokPath,
+                        'body' => $tiktokPayload,
+                    ];
+
+                    if ($dryRun) {
+                        $result['tiktok']['status'] = 'dry_run';
+                        $result['tiktok']['response'] = ['message' => 'Dry run TikTok. Request belum dikirim.'];
+                    } else {
+                        $response = $this->submitTiktokPartialEditPayload($tiktokPath, $tiktokPayload, $context);
+                        $result['tiktok']['response'] = $response;
+                        $result['tiktok']['status'] = (int) ($response['code'] ?? -1) === 0 ? 'ok' : 'error';
+
+                        if ($result['tiktok']['status'] === 'ok') {
+                            $successfulChannels[] = 'tiktok';
+                        }
+                    }
+                } catch (\Throwable $exception) {
+                    $result['tiktok']['status'] = 'error';
+                    $result['tiktok']['request'] = $result['tiktok']['request'] ?: [
+                        'method' => 'POST',
+                        'path' => $tiktokPath ?: '/product/202509/products/'.$tiktokProductId.'/partial_edit',
+                        'body' => $tiktokPayload,
+                    ];
+                    $result['tiktok']['response'] = [
+                        'message' => $exception->getMessage(),
+                    ];
+                }
+            }
+        }
+
+        if (! $dryRun && $successfulChannels !== []) {
+            DB::table('sku_mappings')->updateOrInsert(
+                ['stock_master_id' => (int) $stock->id],
+                [
+                    'shopee_item_id' => $shopeeItemId ?: null,
+                    'shopee_model_id' => $shopeeModelId ?: null,
+                    'tiktok_product_id' => $tiktokProductId ?: null,
+                    'tiktok_sku_id' => $tiktokSkuId ?: null,
+                    'tiktok_sku_name' => $stock->tiktok_sku_name ?? $stock->variant_name,
+                    'seller_sku' => $sellerSku,
+                    'updated_at' => $now,
+                    'created_at' => $now,
+                ]
+            );
+
+            $stockUpdate = ['updated_at' => $now];
+            if (in_array('shopee', $successfulChannels, true)) {
+                $stockUpdate['shopee_seller_sku'] = $sellerSku;
+                $stockUpdate['shopee_product_id'] = $shopeeItemId ?: null;
+                $stockUpdate['shopee_sku'] = $shopeeModelId ?: null;
+            }
+            if (in_array('tiktok', $successfulChannels, true)) {
+                $stockUpdate['tiktok_seller_sku'] = $sellerSku;
+                $stockUpdate['tiktok_product_id'] = $tiktokProductId ?: null;
+                $stockUpdate['tiktok_sku'] = $tiktokSkuId ?: null;
+                DB::table('tiktok_products')
+                    ->where('product_id', $tiktokProductId)
+                    ->where('sku_id', $tiktokSkuId)
+                    ->update([
+                        'seller_sku' => $sellerSku,
+                        'updated_at' => $now,
+                    ]);
+            }
+
+            DB::table('stock_master')->where('id', (int) $stock->id)->update($stockUpdate);
+        }
+
+        if (($result['shopee']['status'] ?? 'skipped') === 'error' || ($result['tiktok']['status'] ?? 'skipped') === 'error') {
+            $result['status'] = 'partial_error';
+            $result['message'] = 'Sebagian request SKU gagal. Cek response Shopee dan TikTok.';
+        }
+
+        return response()->json($result);
+    }
+
+    private function buildTiktokPartialEditSkuRows(array $productDetail, string $targetSkuId, string $sellerSku): array
+    {
+        $rows = [];
+        $targetFound = false;
+
+        foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
+            if ($skuId === '') {
+                continue;
+            }
+
+            $row = [
+                'id' => $skuId,
+                'seller_sku' => $skuId === $targetSkuId
+                    ? $sellerSku
+                    : (string) ($this->extractTiktokSellerSku($sku) ?? ''),
+            ];
+
+            $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
+            if (is_array($salesAttributes) && $salesAttributes !== []) {
+                $row['sales_attributes'] = $salesAttributes;
+            }
+
+            $rows[] = $row;
+            if ($skuId === $targetSkuId) {
+                $targetFound = true;
+            }
+        }
+
+        return $targetFound ? $rows : [];
+    }
+
+    private function submitTiktokPartialEditPayload(string $path, array $payload, array $context): array
+    {
+        $config = $this->tiktokConfig();
+        $accessToken = trim((string) ($context['access_token'] ?? ''));
+        $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+        $shopId = trim((string) ($context['shop_id'] ?? ''));
+        $payloadBody = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if ($payloadBody === false) {
+            throw new \RuntimeException('Payload TikTok tidak bisa diencode.');
+        }
+
+        $query = [
+            'access_token' => $accessToken,
+            'app_key' => $config['app_key'],
+            'shop_cipher' => $shopCipher,
+            'shop_id' => $shopId,
+            'timestamp' => time(),
+            'version' => '202509',
+        ];
+        $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $payloadBody);
+
+        $response = Http::timeout(45)
+            ->asJson()
+            ->withHeaders([
+                'x-tts-access-token' => $accessToken,
+                'content-type' => 'application/json',
+            ])
+            ->post($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), $payload);
+
+        $decoded = $response->json();
+
+        if (! is_array($decoded)) {
+            return [
+                'code' => $response->status(),
+                'message' => 'TikTok tidak mengembalikan JSON valid.',
+                'raw' => $response->body(),
+            ];
+        }
+
+        return [
+            ...$decoded,
+            '_http_status' => $response->status(),
+        ];
+    }
+
     private function loadSkuMappingVariantStockRow(int $stockMasterId): ?object
     {
         return DB::table('stock_master as sm')
@@ -4970,6 +5506,7 @@ class OmnichannelController extends Controller
         }
 
         $existingModelTierKeys = [];
+        $existingModelByTierKey = [];
         $existingModelList = [];
         $sellerStockLocationId = '';
         $modelWeight = null;
@@ -4981,7 +5518,9 @@ class OmnichannelController extends Controller
 
             $tierIndex = array_map('intval', $this->normalizeShopeeIndexList($model['tier_index'] ?? []));
             if ($tierIndex !== []) {
-                $existingModelTierKeys[implode('|', $tierIndex)] = true;
+                $tierKey = implode('|', $tierIndex);
+                $existingModelTierKeys[$tierKey] = true;
+                $existingModelByTierKey[$tierKey] = $model;
             }
 
             if (! empty($model['model_id'])) {
@@ -5000,12 +5539,14 @@ class OmnichannelController extends Controller
             }
         }
 
-        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants']);
+        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants'], (string) $itemId);
         abort_if($requestedVariants === [], 422, 'Tidak ada varian valid untuk ditambahkan ke Shopee.');
 
         $newOptionCount = 0;
         $addModels = [];
+        $updateModels = [];
         $plannedVariants = [];
+        $plannedUpdateVariants = [];
         $skippedVariants = [];
         $seenVariantNames = [];
 
@@ -5044,11 +5585,22 @@ class OmnichannelController extends Controller
 
             $tierKey = (string) $optionIndex;
             if (isset($existingModelTierKeys[$tierKey])) {
-                $skippedVariants[] = [
-                    'variant_name' => $variantName,
-                    'reason' => 'Model Shopee untuk opsi ini sudah ada.',
-                    'tier_index' => [$optionIndex],
-                ];
+                $existingModel = $existingModelByTierKey[$tierKey] ?? null;
+                if (is_array($existingModel) && ! empty($existingModel['model_id'])) {
+                    $updateModels[] = $this->buildShopeeUpdateModel($variant, $existingModel);
+                    $plannedUpdateVariants[] = [
+                        ...$variant,
+                        'model_id' => (int) $existingModel['model_id'],
+                        'tier_index' => [$optionIndex],
+                        'option_already_exists' => true,
+                    ];
+                } else {
+                    $skippedVariants[] = [
+                        'variant_name' => $variantName,
+                        'reason' => 'Model Shopee untuk opsi ini sudah ada, tetapi model_id tidak terbaca.',
+                        'tier_index' => [$optionIndex],
+                    ];
+                }
                 continue;
             }
 
@@ -5087,6 +5639,10 @@ class OmnichannelController extends Controller
             'item_id' => $itemId,
             'model_list' => $addModels,
         ];
+        $updateModelPayload = [
+            'item_id' => $itemId,
+            'model' => $updateModels,
+        ];
 
         $plan = [
             'item_id' => (string) $itemId,
@@ -5094,10 +5650,13 @@ class OmnichannelController extends Controller
             'dry_run' => $dryRun,
             'new_option_count' => $newOptionCount,
             'new_model_count' => count($addModels),
+            'existing_model_update_count' => count($updateModels),
             'skipped' => $skippedVariants,
             'planned_variants' => $plannedVariants,
+            'planned_update_variants' => $plannedUpdateVariants,
             'requests' => [
                 'update_tier_variation' => $updateTierPayload,
+                'update_model' => $updateModelPayload,
                 'add_model' => $addModelPayload,
             ],
         ];
@@ -5110,10 +5669,10 @@ class OmnichannelController extends Controller
             ]);
         }
 
-        if ($addModels === []) {
+        if ($addModels === [] && $updateModels === []) {
             return response()->json([
                 'status' => 'ok',
-                'message' => 'Tidak ada model baru yang perlu dikirim ke Shopee.',
+                'message' => 'Tidak ada model baru atau model existing yang perlu dikirim ke Shopee.',
                 'plan' => $plan,
             ]);
         }
@@ -5174,14 +5733,28 @@ class OmnichannelController extends Controller
             $plan['requests']['add_model'] = $addModelPayload;
         }
 
-        $responses['add_model'] = $this->shopeeSignedPost($config, '/api/v2/product/add_model', $shopId, $accessToken, $addModelPayload);
-        if (($responses['add_model']['error'] ?? '') !== '') {
-            return response()->json([
-                'status' => 'error',
-                'message' => $responses['add_model']['message'] ?? 'Shopee menolak add_model.',
-                'plan' => $plan,
-                'responses' => $responses,
-            ], 422);
+        if ($updateModels !== []) {
+            $responses['update_model'] = $this->shopeeSignedPost($config, '/api/v2/product/update_model', $shopId, $accessToken, $updateModelPayload);
+            if (($responses['update_model']['error'] ?? '') !== '') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $responses['update_model']['message'] ?? 'Shopee menolak update_model.',
+                    'plan' => $plan,
+                    'responses' => $responses,
+                ], 422);
+            }
+        }
+
+        if ($addModels !== []) {
+            $responses['add_model'] = $this->shopeeSignedPost($config, '/api/v2/product/add_model', $shopId, $accessToken, $addModelPayload);
+            if (($responses['add_model']['error'] ?? '') !== '') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $responses['add_model']['message'] ?? 'Shopee menolak add_model.',
+                    'plan' => $plan,
+                    'responses' => $responses,
+                ], 422);
+            }
         }
 
         $freshBaseItems = $this->fetchShopeeBaseInfo($config, $shopId, $accessToken, [$itemId]);
@@ -5195,7 +5768,7 @@ class OmnichannelController extends Controller
             );
         }
 
-        foreach ($plannedVariants as $variant) {
+        foreach ([...$plannedVariants, ...$plannedUpdateVariants] as $variant) {
             $stockMasterId = (int) ($variant['stock_master_id'] ?? 0);
             if ($stockMasterId <= 0) {
                 continue;
@@ -5205,7 +5778,7 @@ class OmnichannelController extends Controller
                 [
                     'stock_master_id' => $stockMasterId,
                     'target_channel' => 'shopee',
-                    'action_type' => 'create_variant',
+                    'action_type' => in_array($variant, $plannedUpdateVariants, true) ? 'update_variant' : 'create_variant',
                 ],
                 [
                     'source_channel' => 'tiktok',
@@ -5222,7 +5795,7 @@ class OmnichannelController extends Controller
 
         return response()->json([
             'status' => 'ok',
-            'message' => count($addModels).' varian Shopee berhasil dikirim.',
+            'message' => count($addModels).' varian baru dan '.count($updateModels).' varian existing Shopee berhasil diproses.',
             'plan' => $plan,
             'responses' => $responses,
         ]);

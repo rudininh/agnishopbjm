@@ -123,6 +123,10 @@ export const omnichannelService = {
     return api.post('/sku-mapping', data)
   },
 
+  updateSkuMappingMarketplaceSku(data) {
+    return api.post('/sku-mapping/update-marketplace-sku', data)
+  },
+
   prepareMissingVariant(data) {
     return api.post('/sku-mapping/prepare-missing-variant', data)
   },
