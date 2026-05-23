@@ -138,7 +138,13 @@
                   <strong>{{ item.sku || '--' }}</strong>
                   <small>{{ modelSummary(item) }}</small>
                 </td>
-                <td>{{ priceRange(item) }}</td>
+                <td>
+                  <div class="price-cell">
+                    <small v-if="hasDiscount(item)">Harga asli: {{ originalPriceRange(item) }}</small>
+                    <strong>{{ hasDiscount(item) ? 'Harga diskon' : 'Harga' }}: {{ discountedPriceRange(item) }}</strong>
+                    <span v-if="hasDiscount(item)" class="discount-pill">{{ discountLabel(item) }}</span>
+                  </div>
+                </td>
                 <td>
                   <strong>{{ totalStock(item.models) }}</strong>
                   <small>{{ formatCurrency(totalValue(item.models)) }}</small>
@@ -171,7 +177,11 @@
                         <span>{{ model.name || 'Tanpa Varian' }}</span>
                       </span>
                       <span>SKU ID: {{ model.model_id || '-' }}</span>
-                      <strong>{{ formatCurrency(model.price || 0) }}</strong>
+                      <span class="variant-price">
+                        <small v-if="modelHasDiscount(model)" class="original-price">Harga asli: {{ formatCurrency(modelOriginalPrice(model)) }}</small>
+                        <small v-if="modelHasDiscount(model)" class="discount-label">Harga Diskon <span title="Diskon dari harga asli">?</span>:</small>
+                        <strong>{{ modelDiscountDetail(model) }}</strong>
+                      </span>
                       <strong>Stock {{ model.stock || 0 }}</strong>
                     </div>
                     <div v-if="!item.models?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
@@ -220,6 +230,7 @@ const filters = reactive({
 const formatCurrency = (value) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0)
 const totalStock = (models) => (models || []).reduce((sum, item) => sum + Number(item.stock || 0), 0)
 const totalValue = (models) => (models || []).reduce((sum, item) => sum + Number(item.stock || 0) * Number(item.price || 0), 0)
+const numberValue = (value) => Number(value || 0)
 const isSoldOut = (item) => totalStock(item.models) <= 0
 const isLive = (item) => Boolean(item.is_live)
 const liveCount = computed(() => items.value.filter((item) => isLive(item) && !isSoldOut(item)).length)
@@ -299,12 +310,63 @@ const rowStatus = (item) => {
   return { label: 'Live', tone: 'success' }
 }
 const priceRange = (item) => {
-  const prices = (item.models || []).map((model) => Number(model.price || 0)).filter(Boolean)
-  const min = Math.min(...prices, Number(item.price_min || 0) || Infinity)
-  const max = Math.max(...prices, Number(item.price_max || 0) || 0)
+  const prices = (item.models || []).map((model) => numberValue(model.price)).filter(Boolean)
+  const min = Math.min(...prices, numberValue(item.price_min) || Infinity)
+  const max = Math.max(...prices, numberValue(item.price_max) || 0)
 
   if (!Number.isFinite(min) || !max) return '-'
   return min === max ? formatCurrency(min) : `${formatCurrency(min)} - ${formatCurrency(max)}`
+}
+const modelOriginalPrice = (model) => Math.max(numberValue(model.original_price), numberValue(model.price))
+const modelDiscountPrice = (model) => numberValue(model.price)
+const modelHasDiscount = (model) => modelOriginalPrice(model) > numberValue(model.price)
+const modelDiscountPercent = (model) => {
+  const original = modelOriginalPrice(model)
+  const current = numberValue(model.price)
+
+  if (!original || current >= original) return 0
+  return Math.round(((original - current) / original) * 100)
+}
+const modelDiscountDetail = (model) => {
+  const current = formatCurrency(modelDiscountPrice(model))
+  const percent = modelDiscountPercent(model)
+
+  return percent ? `${current} (${percent}% DISKON)` : current
+}
+const modelPrices = (item, key) => (item.models || [])
+  .map((model) => key === 'original' ? modelOriginalPrice(model) : numberValue(model.price))
+  .filter(Boolean)
+const rangeText = (values, fallback = 0) => {
+  const prices = values.filter(Boolean)
+  if (fallback) prices.push(numberValue(fallback))
+  if (!prices.length) return '-'
+
+  const min = Math.min(...prices)
+  const max = Math.max(...prices)
+  return min === max ? formatCurrency(min) : `${formatCurrency(min)} - ${formatCurrency(max)}`
+}
+const discountedPriceRange = (item) => priceRange(item)
+const originalPriceRange = (item) => rangeText(modelPrices(item, 'original'), numberValue(item.price_before_discount) || numberValue(item.price_max))
+const hasDiscount = (item) => {
+  const currentPrices = modelPrices(item, 'current')
+  const originalPrices = modelPrices(item, 'original')
+  const currentMin = currentPrices.length ? Math.min(...currentPrices) : numberValue(item.price_min)
+  const originalMax = originalPrices.length ? Math.max(...originalPrices) : Math.max(numberValue(item.price_before_discount), numberValue(item.price_max))
+
+  return originalMax > currentMin
+}
+const discountLabel = (item) => {
+  const percents = (item.models || []).map(modelDiscountPercent).filter(Boolean)
+  if (!percents.length && hasDiscount(item)) {
+    const current = numberValue(item.price_min)
+    const original = Math.max(numberValue(item.price_before_discount), numberValue(item.price_max))
+    const percent = original && current < original ? Math.round(((original - current) / original) * 100) : 0
+    return percent ? `-${percent}%` : 'Promo'
+  }
+
+  const min = Math.min(...percents)
+  const max = Math.max(...percents)
+  return min === max ? `-${min}%` : `-${min}% s/d -${max}%`
 }
 const formatDate = (value) => {
   if (!value) return '-'
@@ -405,6 +467,12 @@ thead th { position: sticky; top: 0; background: #f8fafc; color: #0f172a; z-inde
 strong { display: block; color: #0f172a; line-height: 1.35; }
 small { display: block; color: #64748b; line-height: 1.55; }
 .store-pill { display: inline-block; margin-top: 6px; padding: 4px 8px; color: #64748b; background: #f6f7fb; border-radius: 4px; font-size: 12px; }
+.price-cell, .variant-price { display: grid; gap: 3px; align-content: start; }
+.price-cell small, .variant-price .original-price { text-decoration: line-through; color: #94a3b8; }
+.variant-price strong { font-size: 13px; }
+.discount-label { color: #64748b; font-size: 11px; line-height: 1.25; text-decoration: none; }
+.discount-label span { display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid #cbd5e1; border-radius: 999px; color: #64748b; font-size: 9px; font-weight: 700; }
+.discount-pill { display: inline-flex; width: max-content; align-items: center; border-radius: 999px; padding: 2px 7px; color: #b42318; background: #fee4e2; font-size: 11px; font-weight: 800; line-height: 1.4; }
 .status-badge { display: inline-block; border-radius: 999px; padding: 4px 8px; margin-bottom: 4px; font-size: 12px; font-weight: 700; }
 .success { color: #047857; background: #d1fae5; }
 .warning { color: #b45309; background: #fef3c7; }
