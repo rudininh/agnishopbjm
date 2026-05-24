@@ -157,6 +157,7 @@
                         <span v-else class="variant-thumb-fallback">{{ initials(sku.sku_name) }}</span>
                         <span>{{ sku.sku_name || '-' }}</span>
                       </span>
+                      <span>Kode Variasi: {{ variationCode(item, sku) }}</span>
                       <span>SKU ID: {{ sku.sku_id || sku.tiktok_sku || '-' }}</span>
                       <strong>{{ formatCurrency(sku.price || 0) }}</strong>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
@@ -235,7 +236,7 @@ const filteredItems = computed(() => {
 
       const haystack = {
         name: item.product_name,
-        sku: item.skus?.[0]?.sku_name,
+        sku: [item.skus?.[0]?.sku_name, item.skus?.[0]?.seller_sku, item.skus?.[0]?.kode_variasi].filter(Boolean).join(' '),
         product_id: item.product_id
       }[filters.searchBy] || item.product_name
 
@@ -256,6 +257,12 @@ const lastSyncLabel = computed(() => lastSyncAt.value ? `Terakhir sinkron: ${for
 
 const skuSummary = (item) => `${item.skus?.length || 0} varian`
 const initials = (name) => String(name || 'TT').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
+const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
+const variationCode = (item, sku) => {
+  const sellerSku = String(sku?.seller_sku || '').trim()
+  if (sellerSku.toUpperCase().startsWith('INT-')) return sellerSku
+  return sku?.kode_variasi || `INT-${item?.product_id || 'PRODUCT'}-${skuFragment(sku?.sku_name)}`
+}
 const qualityNote = (item) => totalStock(item.skus) > 0 ? 'Produk sedang dijual' : 'Stok perlu dicek'
 const rowStatus = (item) => totalStock(item.skus) > 0 ? { label: 'Live', tone: 'success' } : { label: 'Sold Out', tone: 'warning' }
 const priceRange = (skus) => {
@@ -376,7 +383,7 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .actions button { color: #0f5fc7; background: #eaf1ff; padding: 7px 9px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: 1.3fr 1fr .7fr .5fr; gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .95fr) minmax(0, .9fr) minmax(0, .7fr) minmax(0, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }

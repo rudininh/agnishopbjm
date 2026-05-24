@@ -17,7 +17,7 @@
     <p v-else-if="loading && !items.length" class="notice">Memuat data SKU mapping...</p>
 
     <div class="summary-grid">
-      <article class="metric"><span>Produk Dua Sisi</span><strong>{{ productGroups.length }}</strong></article>
+      <article class="metric"><span>Grup Produk</span><strong>{{ productGroups.length }}</strong></article>
       <article class="metric"><span>Variant Siap</span><strong>{{ readyVariantCount }}</strong></article>
       <article class="metric"><span>Perlu Edit SKU</span><strong>{{ needsSkuVariantCount }}</strong></article>
       <article class="metric"><span>Last Sync</span><strong>{{ formatDate(summary?.last_shopee_sync_at || summary?.last_tiktok_sync_at) }}</strong></article>
@@ -28,10 +28,13 @@
         <div class="filter-row">
           <input v-model.trim="filters.search" type="search" placeholder="Cari produk / varian / SKU" @keyup.enter="loadData" />
           <select v-model="filters.status">
-            <option value="all">Semua dua sisi</option>
+            <option value="all">Semua data</option>
             <option value="ready">Siap disinkronkan</option>
             <option value="needs_sku">Perlu edit SKU</option>
             <option value="incomplete">ID marketplace belum lengkap</option>
+            <option value="shopee_missing">Belum ada Shopee</option>
+            <option value="tiktok_missing">Belum ada TikTok</option>
+            <option value="belum_ada_variant">Belum ada dua sisi</option>
           </select>
           <select v-model="filters.sort" @change="loadData">
             <option value="updated_desc">Update Time</option>
@@ -65,8 +68,8 @@
                   <div v-else class="thumb small fallback">{{ initials(group.name) }}</div>
                   <div>
                     <strong>{{ group.name }}</strong>
-                    <small>{{ group.variants.length }} variant tersambung di Shopee dan TikTok</small>
-                    <small>{{ group.ready_count }} siap, {{ group.needs_sku_count }} perlu edit SKU</small>
+                    <small>{{ group.variants.length }} variant dalam grup</small>
+                    <small>{{ group.ready_count }} siap, {{ group.needs_sku_count }} perlu edit SKU, {{ group.incomplete_count }} belum lengkap</small>
                   </div>
                 </td>
                 <td>
@@ -123,13 +126,14 @@
                 </td>
                 <td>
                   <span :class="['badge', skuStatus(item)]">{{ skuStatusLabel(skuStatus(item)) }}</span>
+                  <small class="status-note">{{ itemStatusLabel(item.status) }}</small>
                 </td>
               </tr>
             </tbody>
 
             <tbody v-if="!filteredProductGroups.length && !loading">
               <tr>
-                <td colspan="4" class="empty">{{ loadError ? 'Data belum bisa dimuat.' : 'Tidak ada produk dua sisi untuk filter ini.' }}</td>
+                <td colspan="4" class="empty">{{ loadError ? 'Data belum bisa dimuat.' : 'Tidak ada data SKU mapping untuk filter ini.' }}</td>
               </tr>
             </tbody>
           </table>
@@ -291,10 +295,20 @@ const skuStatusLabel = (status) => ({
   mismatch: 'SKU belum sama'
 }[status] || 'Perlu dicek')
 
+const itemStatusLabel = (status) => ({
+  ready_to_sync: 'Shopee dan TikTok terhubung',
+  shopee_missing: 'Belum ada variant Shopee',
+  tiktok_missing: 'Belum ada variant TikTok',
+  belum_ada_variant: 'Belum ada variant Shopee/TikTok'
+}[status] || 'Status belum terbaca')
+
 const groupStatusLabel = (status) => ({
   ready_to_sync: 'Siap disinkronkan',
   partially_ready: 'Sebagian siap',
   incomplete: 'ID belum lengkap',
+  shopee_missing: 'Belum ada Shopee',
+  tiktok_missing: 'Belum ada TikTok',
+  belum_ada_variant: 'Belum ada dua sisi',
   needs_sku: 'Perlu edit SKU'
 }[status] || 'Perlu edit SKU')
 
@@ -302,8 +316,6 @@ const productGroups = computed(() => {
   const groups = new Map()
 
   items.value.forEach((item) => {
-    if (!hasShopeeActual(item) || !hasTiktokActual(item)) return
-
     const key = item.group_key || item.shopee?.item_id || item.tiktok?.product_id || item.product_name || item.internal_sku
     if (!groups.has(key)) {
       groups.set(key, {
@@ -314,6 +326,9 @@ const productGroups = computed(() => {
         ready_count: 0,
         needs_sku_count: 0,
         incomplete_count: 0,
+        shopee_missing_count: 0,
+        tiktok_missing_count: 0,
+        both_missing_count: 0,
         shopee: { present: 0, item_id: item.shopee?.item_id || '', product_name: item.shopee?.product_name || '' },
         tiktok: { present: 0, product_id: item.tiktok?.product_id || '', product_name: item.tiktok?.product_name || '' },
         status: 'needs_sku'
@@ -323,8 +338,8 @@ const productGroups = computed(() => {
     const group = groups.get(key)
     const status = skuStatus(item)
     group.variants.push(item)
-    group.shopee.present += 1
-    group.tiktok.present += 1
+    if (hasShopeeActual(item)) group.shopee.present += 1
+    if (hasTiktokActual(item)) group.tiktok.present += 1
     if (!group.image_url) group.image_url = item.image_url || item.shopee?.image_url || item.tiktok?.image_url || ''
     if (!group.shopee.item_id && item.shopee?.item_id) group.shopee.item_id = item.shopee.item_id
     if (!group.tiktok.product_id && item.tiktok?.product_id) group.tiktok.product_id = item.tiktok.product_id
@@ -333,21 +348,33 @@ const productGroups = computed(() => {
     if (status === 'ready_to_sync') group.ready_count += 1
     else group.needs_sku_count += 1
     if (status === 'incomplete') group.incomplete_count += 1
+    if (item.status === 'shopee_missing') group.shopee_missing_count += 1
+    if (item.status === 'tiktok_missing') group.tiktok_missing_count += 1
+    if (item.status === 'belum_ada_variant') group.both_missing_count += 1
   })
 
   return Array.from(groups.values()).map((group) => {
     const allReady = group.ready_count === group.variants.length
     const hasReady = group.ready_count > 0
     const hasIncomplete = group.incomplete_count > 0
+    const allShopeeMissing = group.shopee_missing_count === group.variants.length
+    const allTiktokMissing = group.tiktok_missing_count === group.variants.length
+    const allBothMissing = group.both_missing_count === group.variants.length
     return {
       ...group,
       status: allReady
         ? 'ready_to_sync'
-        : hasIncomplete
-          ? 'incomplete'
-          : hasReady
-            ? 'partially_ready'
-            : 'needs_sku'
+        : allShopeeMissing
+          ? 'shopee_missing'
+          : allTiktokMissing
+            ? 'tiktok_missing'
+            : allBothMissing
+              ? 'belum_ada_variant'
+              : hasIncomplete
+                ? 'incomplete'
+                : hasReady
+                  ? 'partially_ready'
+                  : 'needs_sku'
     }
   })
 })
@@ -360,6 +387,9 @@ const filteredProductGroups = computed(() => {
       || (filters.status === 'ready' && group.status === 'ready_to_sync')
       || (filters.status === 'needs_sku' && group.status !== 'ready_to_sync' && group.status !== 'incomplete')
       || (filters.status === 'incomplete' && group.status === 'incomplete')
+      || (filters.status === 'shopee_missing' && group.shopee_missing_count > 0)
+      || (filters.status === 'tiktok_missing' && group.tiktok_missing_count > 0)
+      || (filters.status === 'belum_ada_variant' && group.both_missing_count > 0)
 
     if (!matchesStatus) return false
     if (!search) return true
@@ -453,16 +483,36 @@ const loadData = async (options = {}) => {
   loadError.value = ''
   const preserveResponses = options?.preserveResponses === true
   const previousStockMasterId = selectedItem.value?.stock_master_id
+  const perPage = 5000
+  const baseParams = {
+    search: filters.search,
+    status: 'all',
+    sort: filters.sort,
+    per_page: perPage,
+    compact: 1
+  }
 
   try {
-    const response = await omnichannelService.skuMapping({
-      search: filters.search,
-      status: 'all',
-      sort: filters.sort,
-      per_page: 500
+    const firstResponse = await omnichannelService.skuMapping({
+      ...baseParams,
+      page: 1
     })
-    summary.value = response.data.summary
-    items.value = response.data.items || []
+    const firstPagination = firstResponse.data.pagination || {}
+    const lastPage = Number(firstPagination.last_page || 1)
+    const responses = [firstResponse]
+
+    if (lastPage > 1) {
+      const remainingResponses = await Promise.all(
+        Array.from({ length: lastPage - 1 }, (_, index) => omnichannelService.skuMapping({
+          ...baseParams,
+          page: index + 2
+        }))
+      )
+      responses.push(...remainingResponses)
+    }
+
+    summary.value = firstResponse.data.summary
+    items.value = responses.flatMap((response) => response.data.items || [])
     await nextTick()
 
     const firstGroup = filteredProductGroups.value[0]
@@ -470,7 +520,7 @@ const loadData = async (options = {}) => {
       ? items.value.find((item) => item.stock_master_id === previousStockMasterId)
       : null
 
-    if (refreshed && hasShopeeActual(refreshed) && hasTiktokActual(refreshed)) {
+    if (refreshed) {
       selectItem(refreshed, { clearResponses: !preserveResponses })
     } else if (firstGroup?.variants?.length) {
       selectItem(firstGroup.variants[0], { clearResponses: !preserveResponses })
@@ -602,8 +652,10 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .badge.ready_to_sync { background:#d1fae5; color:#047857; }
 .badge.partially_ready { background:#e0f2fe; color:#0369a1; }
 .badge.needs_sku,.badge.mismatch { background:#fef3c7; color:#b45309; }
+.badge.shopee_missing,.badge.tiktok_missing,.badge.belum_ada_variant { background:#f1f5f9; color:#475569; }
 .badge.shopee_empty,.badge.tiktok_empty,.badge.both_empty { background:#ffedd5; color:#c2410c; }
 .badge.incomplete,.badge.internal_empty { background:#fee2e2; color:#b91c1c; }
+.status-note { margin-top:6px; }
 .detail-panel label { display:block; margin-bottom:10px; }
 .detail-panel span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
 .detail-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }

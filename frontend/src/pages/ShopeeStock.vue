@@ -176,6 +176,7 @@
                         <span v-else class="variant-thumb-fallback">{{ initials(model.name) }}</span>
                         <span>{{ model.name || 'Tanpa Varian' }}</span>
                       </span>
+                      <span>Kode Variasi: {{ variationCode(item, model) }}</span>
                       <span>SKU ID: {{ model.model_id || '-' }}</span>
                       <span class="variant-price">
                         <small v-if="modelHasDiscount(model)" class="original-price">Harga asli: {{ formatCurrency(modelOriginalPrice(model)) }}</small>
@@ -302,6 +303,12 @@ const markImageBroken = (id) => {
 }
 
 const initials = (name) => String(name || 'SP').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
+const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
+const variationCode = (item, model) => {
+  const modelSku = String(model?.model_sku || '').trim()
+  if (modelSku.toUpperCase().startsWith('INT-')) return modelSku
+  return model?.kode_variasi || `INT-${item?.item_id || 'ITEM'}-${skuFragment(model?.name)}`
+}
 const modelSummary = (item) => `${item.models?.length || 0} varian`
 const qualityNote = (item) => isSoldOut(item) ? 'Stok perlu dicek' : 'Produk sedang dijual'
 const rowStatus = (item) => {
@@ -481,7 +488,7 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .actions button { color: #4f2ec7; background: #f1efff; padding: 7px 9px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: 1.3fr 1fr .7fr .5fr; gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .95fr) minmax(0, .9fr) minmax(0, .7fr) minmax(0, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
