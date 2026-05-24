@@ -15,20 +15,21 @@
 
     <div class="summary-grid">
       <article class="metric">
-        <span>Produk</span>
-        <strong>{{ items.length }}</strong>
+        <span>Produk Live</span>
+        <strong>{{ liveSummary.product_count }}</strong>
       </article>
       <article class="metric">
-        <span>Total SKU</span>
-        <strong>{{ skuCount }}</strong>
+        <span>Varian Live</span>
+        <strong>{{ liveSummary.variant_count }}</strong>
       </article>
       <article class="metric">
-        <span>Total Stok</span>
-        <strong>{{ grandStock }}</strong>
+        <span>Stok Live</span>
+        <strong>{{ liveSummary.stock_qty }}</strong>
       </article>
       <article class="metric">
-        <span>Nilai Stok</span>
-        <strong>{{ formatCurrency(grandValue) }}</strong>
+        <span>Status Produk</span>
+        <strong>{{ liveCount }} / {{ soldOutCount }} / {{ inactiveCount }}</strong>
+        <small>Live / Sold Out / Tidak Live</small>
       </article>
     </div>
 
@@ -39,6 +40,7 @@
           <select v-model="filters.status">
             <option value="all">Semua Status</option>
             <option value="live">Live</option>
+            <option value="soldout">Sold Out</option>
             <option value="inactive">Tidak Live</option>
           </select>
         </label>
@@ -75,6 +77,7 @@
     <div class="toolbar">
       <nav class="tabs">
         <button :class="{ active: activeTab === 'live' }" @click="setActiveTab('live')">Live ({{ liveCount }})</button>
+        <button :class="{ active: activeTab === 'soldout' }" @click="setActiveTab('soldout')">Sold Out ({{ soldOutCount }})</button>
         <button :class="{ active: activeTab === 'inactive' }" @click="setActiveTab('inactive')">Tidak Live ({{ inactiveCount }})</button>
         <button :class="{ active: activeTab === 'all' }" @click="setActiveTab('all')">Semua ({{ items.length }})</button>
       </nav>
@@ -95,21 +98,15 @@
         <table>
           <thead>
             <tr>
-              <th class="check-col"><input type="checkbox" /></th>
-              <th>Item & Store</th>
-              <th>Parent SKU</th>
-              <th>SKU</th>
-              <th>Price</th>
-              <th>Stock</th>
-              <th>Quality</th>
-              <th>Time</th>
-              <th>Operation</th>
+              <th>Produk</th>
+              <th>Variant</th>
+              <th>Total Stok</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="item in pagedItems" :key="item.product_id">
               <tr class="product-row">
-                <td class="check-col"><input type="checkbox" /></td>
                 <td>
                   <div class="product-cell">
                     <img v-if="item.image_url" :src="item.image_url" :alt="item.product_name" class="thumb-image" />
@@ -122,34 +119,22 @@
                     </div>
                   </div>
                 </td>
-                <td>--</td>
                 <td>
-                  <strong>{{ item.skus?.[0]?.sku_name || '--' }}</strong>
-                  <small>{{ skuSummary(item) }}</small>
+                  <strong>{{ skuSummary(item) }}</strong>
+                  <small>{{ variantPreview(item.skus) }}</small>
+                  <button class="inline-action" title="Lihat varian" @click="toggle(item.product_id)">{{ expanded[item.product_id] ? 'Hide' : 'Show' }}</button>
                 </td>
-                <td>{{ priceRange(item.skus) }}</td>
                 <td>
                   <strong>{{ totalStock(item.skus) }}</strong>
-                  <small>{{ formatCurrency(totalValue(item.skus)) }}</small>
+                  <small>{{ activeSkuCount(item.skus) }} varian aktif</small>
                 </td>
                 <td>
                   <span :class="['status-badge', rowStatus(item).tone]">{{ rowStatus(item).label }}</span>
-                  <small>{{ qualityNote(item) }}</small>
-                </td>
-                <td>
-                  <small>Update Time</small>
-                  <strong>{{ formatDate(item.updated_at) }}</strong>
-                </td>
-                <td>
-                  <div class="actions">
-                    <button title="Lihat varian" @click="toggle(item.product_id)">{{ expanded[item.product_id] ? 'Hide' : 'Show' }}</button>
-                    <button title="Refresh data" @click="loadData">Sync</button>
-                  </div>
+                  <small>{{ statusNote(item) }}</small>
                 </td>
               </tr>
               <tr v-if="expanded[item.product_id]" class="variant-row">
-                <td></td>
-                <td colspan="8">
+                <td colspan="4">
                   <div class="variant-list">
                     <div v-for="(sku, index) in item.skus" :key="`${item.product_id}-${sku.sku_id || sku.sku_name || index}`" class="variant-item">
                       <span class="variant-name">
@@ -158,9 +143,8 @@
                         <span>{{ sku.sku_name || '-' }}</span>
                       </span>
                       <span>Kode Variasi: {{ variationCode(item, sku) }}</span>
-                      <span>SKU ID: {{ sku.sku_id || sku.tiktok_sku || '-' }}</span>
-                      <strong>{{ formatCurrency(sku.price || 0) }}</strong>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
+                      <span :class="['status-badge', skuStatus(sku).tone]">{{ skuStatus(sku).label }}</span>
                     </div>
                     <div v-if="!item.skus?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
                   </div>
@@ -168,15 +152,13 @@
               </tr>
             </template>
             <tr v-if="!filteredItems.length">
-              <td colspan="9" class="empty">{{ loading ? 'Sedang memuat produk...' : 'Belum ada produk yang cocok dengan filter.' }}</td>
+              <td colspan="4" class="empty">{{ loading ? 'Sedang memuat produk...' : 'Belum ada produk yang cocok dengan filter.' }}</td>
             </tr>
           </tbody>
           <tfoot v-if="filteredItems.length">
             <tr>
-              <td colspan="5" class="right">Total semua produk</td>
+              <td colspan="2" class="right">Total produk tampil</td>
               <td class="center">{{ grandStock }}</td>
-              <td></td>
-              <td class="right">{{ formatCurrency(grandValue) }}</td>
               <td></td>
             </tr>
           </tfoot>
@@ -215,11 +197,16 @@ const filters = reactive({
 const formatCurrency = (value) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0)
 const totalStock = (skus) => (skus || []).reduce((sum, item) => sum + Number(item.stock_qty || 0), 0)
 const totalValue = (skus) => (skus || []).reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
-const skuCount = computed(() => items.value.reduce((sum, item) => sum + (item.skus?.length || 0), 0))
 const grandStock = computed(() => filteredItems.value.reduce((sum, item) => sum + totalStock(item.skus), 0))
-const grandValue = computed(() => filteredItems.value.reduce((sum, item) => sum + totalValue(item.skus), 0))
-const liveCount = computed(() => items.value.filter((item) => totalStock(item.skus) > 0).length)
-const inactiveCount = computed(() => items.value.filter((item) => totalStock(item.skus) <= 0).length)
+const liveItems = computed(() => items.value.filter((item) => isLive(item)))
+const liveSummary = computed(() => ({
+  product_count: liveItems.value.length,
+  variant_count: liveItems.value.reduce((sum, item) => sum + activeSkuCount(item.skus), 0),
+  stock_qty: liveItems.value.reduce((sum, item) => sum + totalStock(item.skus), 0)
+}))
+const liveCount = computed(() => items.value.filter((item) => isLive(item)).length)
+const soldOutCount = computed(() => items.value.filter((item) => isSoldOut(item)).length)
+const inactiveCount = computed(() => items.value.filter((item) => isInactive(item)).length)
 
 const filteredItems = computed(() => {
   const query = filters.search.toLowerCase()
@@ -227,10 +214,12 @@ const filteredItems = computed(() => {
   return items.value
     .filter((item) => {
       const stock = totalStock(item.skus)
-      if (activeTab.value === 'live' && stock <= 0) return false
-      if (activeTab.value === 'inactive' && stock > 0) return false
-      if (filters.status === 'live' && stock <= 0) return false
-      if (filters.status === 'inactive' && stock > 0) return false
+      if (activeTab.value === 'live' && !isLive(item)) return false
+      if (activeTab.value === 'soldout' && !isSoldOut(item)) return false
+      if (activeTab.value === 'inactive' && !isInactive(item)) return false
+      if (filters.status === 'live' && !isLive(item)) return false
+      if (filters.status === 'soldout' && !isSoldOut(item)) return false
+      if (filters.status === 'inactive' && !isInactive(item)) return false
       if (Number(filters.minimumStock || 0) > 0 && stock < Number(filters.minimumStock)) return false
       if (!query) return true
 
@@ -256,6 +245,10 @@ const pagedItems = computed(() => filteredItems.value.slice((currentPage.value -
 const lastSyncLabel = computed(() => lastSyncAt.value ? `Terakhir sinkron: ${formatDate(lastSyncAt.value)}` : 'Belum pernah sinkron.')
 
 const skuSummary = (item) => `${item.skus?.length || 0} varian`
+const activeSkuCount = (skus) => (skus || []).filter((sku) => sku?.is_active !== false).length
+const isInactive = (item) => item?.is_active === false
+const isSoldOut = (item) => !isInactive(item) && totalStock(item.skus) <= 0
+const isLive = (item) => !isInactive(item) && totalStock(item.skus) > 0
 const initials = (name) => String(name || 'TT').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
 const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
 const variationCode = (item, sku) => {
@@ -263,8 +256,22 @@ const variationCode = (item, sku) => {
   if (sellerSku.toUpperCase().startsWith('INT-')) return sellerSku
   return sku?.kode_variasi || `INT-${item?.product_id || 'PRODUCT'}-${skuFragment(sku?.sku_name)}`
 }
-const qualityNote = (item) => totalStock(item.skus) > 0 ? 'Produk sedang dijual' : 'Stok perlu dicek'
-const rowStatus = (item) => totalStock(item.skus) > 0 ? { label: 'Live', tone: 'success' } : { label: 'Sold Out', tone: 'warning' }
+const variantPreview = (skus) => (skus || []).slice(0, 3).map((sku) => sku.sku_name || 'Tanpa Varian').join(', ') || '-'
+const statusNote = (item) => {
+  if (isInactive(item)) return item.product_status || item.audit_status || 'Produk tidak live.'
+  if (isSoldOut(item)) return 'Produk aktif, stok habis.'
+  return 'Produk aktif/live.'
+}
+const rowStatus = (item) => {
+  if (isInactive(item)) return { label: 'Tidak Live', tone: 'muted' }
+  if (isSoldOut(item)) return { label: 'Sold Out', tone: 'warning' }
+  return { label: 'Live', tone: 'success' }
+}
+const skuStatus = (sku) => {
+  if (sku?.is_active === false) return { label: 'Tidak Live', tone: 'muted' }
+  if (Number(sku?.stock_qty || 0) <= 0) return { label: 'Sold Out', tone: 'warning' }
+  return { label: 'Live', tone: 'success' }
+}
 const priceRange = (skus) => {
   const prices = (skus || []).map((sku) => Number(sku.price || 0)).filter(Boolean)
   if (!prices.length) return '-'
@@ -364,7 +371,7 @@ select, input { width: 100%; height: 36px; border: 1px solid #d7dde8; border-rad
 .panel-head span, .panel-head small { color: #64748b; font-size: 12px; }
 .panel-head strong { color: #111827; display: block; margin-top: 3px; }
 .table-wrap { max-height: 72vh; overflow: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1180px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 860px; }
 th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vertical-align: top; }
 thead th { position: sticky; top: 0; background: #1f2937; color: #fff; }
 .check-col { width: 34px; text-align: center; }
@@ -379,11 +386,10 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .success { color: #047857; background: #d1fae5; }
 .warning { color: #b45309; background: #fef3c7; }
 .muted { color: #64748b; background: #eef2f7; }
-.actions { display: grid; gap: 6px; }
-.actions button { color: #0f5fc7; background: #eaf1ff; padding: 7px 9px; }
+.inline-action { color: #0f5fc7; background: #eaf1ff; padding: 6px 10px; margin-top: 8px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .95fr) minmax(0, .9fr) minmax(0, .7fr) minmax(0, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .6fr) minmax(0, .6fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; align-items:center; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
