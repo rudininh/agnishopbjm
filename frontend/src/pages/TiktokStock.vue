@@ -143,6 +143,9 @@
                         <span>{{ sku.sku_name || '-' }}</span>
                       </span>
                       <span>Kode Variasi: {{ variationCode(item, sku) }}</span>
+                      <span class="variant-price">
+                        <strong>{{ formatCurrency(sku.price || 0) }}</strong>
+                      </span>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
                       <span :class="['status-badge', skuStatus(sku).tone]">{{ skuStatus(sku).label }}</span>
                     </div>
@@ -225,7 +228,9 @@ const filteredItems = computed(() => {
 
       const haystack = {
         name: item.product_name,
-        sku: [item.skus?.[0]?.sku_name, item.skus?.[0]?.seller_sku, item.skus?.[0]?.kode_variasi].filter(Boolean).join(' '),
+        sku: (item.skus || [])
+          .map((sku) => [sku.sku_name, sku.seller_sku, sku.kode_variasi].filter(Boolean).join(' '))
+          .join(' '),
         product_id: item.product_id
       }[filters.searchBy] || item.product_name
 
@@ -250,13 +255,11 @@ const isInactive = (item) => item?.is_active === false
 const isSoldOut = (item) => !isInactive(item) && totalStock(item.skus) <= 0
 const isLive = (item) => !isInactive(item) && totalStock(item.skus) > 0
 const initials = (name) => String(name || 'TT').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
 const variationCode = (item, sku) => {
   const sellerSku = String(sku?.seller_sku || '').trim()
-  if (sellerSku.toUpperCase().startsWith('INT-')) return sellerSku
-  return sku?.kode_variasi || `INT-${item?.product_id || 'PRODUCT'}-${skuFragment(sku?.sku_name)}`
+  return sellerSku || String(sku?.kode_variasi || '').trim() || '-'
 }
-const variantPreview = (skus) => (skus || []).slice(0, 3).map((sku) => sku.sku_name || 'Tanpa Varian').join(', ') || '-'
+const variantPreview = (skus) => (skus || []).slice(0, 3).map((sku) => sku.sku_name || '-').join(', ') || '-'
 const statusNote = (item) => {
   if (isInactive(item)) return item.product_status || item.audit_status || 'Produk tidak live.'
   if (isSoldOut(item)) return 'Produk aktif, stok habis.'
@@ -382,6 +385,8 @@ thead th { position: sticky; top: 0; background: #1f2937; color: #fff; }
 strong { display: block; color: #0f172a; line-height: 1.35; }
 small { display: block; color: #64748b; line-height: 1.55; }
 .store-pill { display: inline-block; margin-top: 6px; padding: 4px 8px; color: #64748b; background: #f6f7fb; border-radius: 4px; font-size: 12px; }
+.variant-price { display: grid; gap: 3px; align-content: start; }
+.variant-price strong { font-size: 13px; }
 .status-badge { display: inline-block; border-radius: 999px; padding: 4px 8px; margin-bottom: 4px; font-size: 12px; font-weight: 700; }
 .success { color: #047857; background: #d1fae5; }
 .warning { color: #b45309; background: #fef3c7; }
@@ -389,7 +394,7 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .inline-action { color: #0f5fc7; background: #eaf1ff; padding: 6px 10px; margin-top: 8px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .6fr) minmax(0, .6fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; align-items:center; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(118px, .7fr) minmax(0, .5fr) minmax(0, .6fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; align-items:center; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }

@@ -1060,7 +1060,7 @@ class OmnichannelController extends Controller
                     'model_id' => (string) $model->model_id,
                     'name' => $model->name,
                     'model_sku' => $model->model_sku ?? null,
-                    'kode_variasi' => $this->shopeeModelVariationCode((string) $item->item_id, $model),
+                    'kode_variasi' => trim((string) ($model->model_sku ?? '')) ?: null,
                     'price' => (int) ($model->price ?? 0),
                     'original_price' => (int) ($model->original_price ?? $model->price ?? 0),
                     'stock' => (int) ($model->stock ?? 0),
@@ -1495,22 +1495,12 @@ class OmnichannelController extends Controller
 
     private function shopeeModelVariationCode(string $itemId, object $model): string
     {
-        $modelSku = trim((string) ($model->model_sku ?? ''));
-        if (str_starts_with(strtoupper($modelSku), 'INT-')) {
-            return $modelSku;
-        }
-
-        return $this->buildShopeeTemplateSellerSku($itemId, (string) ($model->name ?? 'VARIAN'));
+        return trim((string) ($model->model_sku ?? ''));
     }
 
     private function tiktokSkuVariationCode(string $productId, object $sku): string
     {
-        $sellerSku = trim((string) ($sku->seller_sku ?? ''));
-        if (str_starts_with(strtoupper($sellerSku), 'INT-')) {
-            return $sellerSku;
-        }
-
-        return 'INT-'.trim($productId).'-'.$this->sanitizeSkuFragment((string) ($sku->sku_name ?? 'VARIAN'));
+        return trim((string) ($sku->seller_sku ?? ''));
     }
 
     private function buildShopeeTierOption(string $variantName, bool $useStandardiseTier, string $imageId = '', string $sourceImageUrl = ''): array
@@ -1760,6 +1750,32 @@ class OmnichannelController extends Controller
             $this->storeShopeeModelPayload($itemId, (string) ($item['item_name'] ?? ''), $model);
             $this->storeShopeeImages($itemId, (string) ($model['model_id'] ?? '0'), $this->shopeeModelImageUrls($model, $tierVariations));
         }
+
+        $this->pruneShopeeModelsMissingFromPayload($itemId, $models);
+    }
+
+    private function pruneShopeeModelsMissingFromPayload(int $itemId, array $models): void
+    {
+        $activeModelIds = collect($models)
+            ->map(fn ($model) => trim((string) ($model['model_id'] ?? '')))
+            ->filter(fn ($modelId) => $modelId !== '')
+            ->values()
+            ->all();
+
+        if ($activeModelIds === []) {
+            return;
+        }
+
+        DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->whereNotIn('model_id', $activeModelIds)
+            ->delete();
+
+        DB::table('shopee_product_image')
+            ->where('item_id', $itemId)
+            ->whereNotNull('model_id')
+            ->whereNotIn('model_id', $activeModelIds)
+            ->delete();
     }
 
     private function storeShopeeModelPayload(int $itemId, string $itemName, array $model): void
@@ -2180,6 +2196,12 @@ class OmnichannelController extends Controller
 
         $rows = DB::table('tiktok_products')
             ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'price', 'subtotal', 'product_status', 'audit_status', 'is_active', 'updated_at')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->where(function ($query) {
+                $query->whereRaw("TRIM(COALESCE(sku_id, '')) <> ''")
+                    ->orWhereRaw("UPPER(TRIM(COALESCE(sku_name, ''))) <> 'DEFAULT'")
+                    ->orWhereRaw("TRIM(COALESCE(seller_sku, '')) <> ''");
+            })
             ->orderBy('product_name')
             ->orderBy('sku_name')
             ->get()
@@ -2213,9 +2235,9 @@ class OmnichannelController extends Controller
                 'updated_at' => $first->updated_at,
                 'skus' => $group->map(fn ($sku) => [
                         'sku_id' => $sku->sku_id ?? null,
-                        'sku_name' => $sku->sku_name,
+                        'sku_name' => $this->tiktokDisplaySkuName($sku->sku_name ?? null),
                         'seller_sku' => $sku->seller_sku ?? null,
-                        'kode_variasi' => $this->tiktokSkuVariationCode((string) $productId, $sku),
+                        'kode_variasi' => trim((string) ($sku->seller_sku ?? '')) ?: null,
                         'stock_qty' => (int) ($sku->stock_qty ?? 0),
                         'price' => (int) ($sku->price ?? 0),
                         'subtotal' => (int) ($sku->subtotal ?? 0),
@@ -2242,6 +2264,17 @@ class OmnichannelController extends Controller
         $normalized = strtolower(trim((string) ($value ?? '')));
 
         return in_array($normalized, ['1', 'true', 't', 'yes', 'y', 'on'], true);
+    }
+
+    private function tiktokDisplaySkuName(mixed $value): ?string
+    {
+        $name = trim((string) ($value ?? ''));
+
+        if ($name === '' || strtoupper($name) === 'DEFAULT') {
+            return null;
+        }
+
+        return $name;
     }
 
     private function syncTiktokProductsToDatabase(): array
@@ -2934,12 +2967,17 @@ class OmnichannelController extends Controller
         $activeSkuKeys = [];
 
         if (! is_array($skus) || $skus === []) {
-            $skus = [[
-                'id' => $productId.'-default',
-                'sku_name' => 'Default',
-                'stock' => data_get($data, 'stock', 0),
-                'price' => ['sale_price' => data_get($data, 'price', 0)],
-            ]];
+            DB::table('tiktok_products')
+                ->where('product_id', $productId)
+                ->whereRaw("UPPER(TRIM(COALESCE(sku_name, ''))) = 'DEFAULT'")
+                ->whereRaw("TRIM(COALESCE(sku_id, '')) = ''")
+                ->whereRaw("TRIM(COALESCE(seller_sku, '')) = ''")
+                ->update([
+                    'is_active' => DB::raw('false'),
+                    'updated_at' => now(),
+                ]);
+
+            return;
         }
 
         foreach ($skus as $sku) {
@@ -3269,7 +3307,7 @@ class OmnichannelController extends Controller
             return trim($sellerSku);
         }
 
-        return 'Default';
+        return '';
     }
 
     private function normalizeTiktokSkuList(array $data): array
