@@ -975,6 +975,7 @@ class OmnichannelController extends Controller
     {
         $shopNames = $this->shopeeShopNames();
         $products = DB::table('shopee_product')
+            ->whereRaw('COALESCE(is_active, true) = true')
             ->select(
                 'item_id',
                 'shop_id',
@@ -987,7 +988,6 @@ class OmnichannelController extends Controller
                 'liked_count',
                 'rating',
                 'status',
-                'is_active',
                 'create_time',
                 'update_time',
                 'updated_at'
@@ -1052,8 +1052,7 @@ class OmnichannelController extends Controller
                 'likes' => (int) ($item->liked_count ?? 0),
                 'rating' => (float) ($item->rating ?? 0),
                 'status' => $item->status,
-                'is_active' => (bool) ($item->is_active ?? true),
-                'is_live' => (bool) ($item->is_active ?? true) && $this->isLiveShopeeStatus($item->status),
+                'is_live' => $this->isLiveShopeeStatus($item->status),
                 'created_at' => $item->create_time,
                 'updated_at' => $item->update_time ?: $item->updated_at,
                 'models' => ($models[$item->item_id] ?? collect())->map(fn ($model) => [
@@ -1430,7 +1429,7 @@ class OmnichannelController extends Controller
         ];
     }
 
-    private function normalizeShopeeAddVariantRows(array $rows, string $itemId = '', bool $syncSku = true): array
+    private function normalizeShopeeAddVariantRows(array $rows, string $itemId = ''): array
     {
         $variants = [];
 
@@ -1447,11 +1446,11 @@ class OmnichannelController extends Controller
             $price = $this->normalizePositiveInt($row['price'] ?? 0);
             $stock = $this->normalizeNonNegativeInt($row['stock'] ?? 0);
             $sellerSku = trim((string) ($row['seller_sku'] ?? ''));
-            if ($syncSku && $itemId !== '' && ! $this->shopeeSellerSkuLooksGenerated($sellerSku, $itemId) && ! $this->sellerSkuLooksInternal($sellerSku)) {
+            if ($itemId !== '' && ! $this->shopeeSellerSkuLooksGenerated($sellerSku, $itemId) && ! $this->sellerSkuLooksInternal($sellerSku)) {
                 $sellerSku = $this->buildShopeeTemplateSellerSku($itemId, $variantName);
             }
 
-            if ($syncSku && $sellerSku === '') {
+            if ($sellerSku === '') {
                 $tiktokSkuId = trim((string) ($row['tiktok_sku_id'] ?? ''));
                 $sellerSku = $tiktokSkuId !== '' ? 'TT-'.$tiktokSkuId : '';
             }
@@ -2179,14 +2178,15 @@ class OmnichannelController extends Controller
         }
 
         $rows = DB::table('tiktok_products')
-            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'price', 'subtotal', 'product_status', 'audit_status', 'is_active', 'updated_at')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('product_id', 'product_name', 'image_url', 'sku_id', 'sku_name', 'seller_sku', 'stock_qty', 'price', 'subtotal', 'updated_at')
             ->orderBy('product_name')
             ->orderBy('sku_name')
             ->get()
             ->groupBy('product_id');
 
         $lastSyncAt = Schema::hasTable('tiktok_products')
-            ? DB::table('tiktok_products')->max('updated_at')
+            ? DB::table('tiktok_products')->whereRaw('COALESCE(is_active, true) = true')->max('updated_at')
             : null;
 
         return response()->json([
@@ -2207,9 +2207,6 @@ class OmnichannelController extends Controller
                 'product_id' => $productId,
                 'product_name' => $first->product_name,
                 'image_url' => $first->image_url ?? null,
-                'product_status' => $first->product_status ?? null,
-                'audit_status' => $first->audit_status ?? null,
-                'is_active' => $group->contains(fn ($sku) => $this->databaseBool($sku->is_active ?? true)),
                 'updated_at' => $first->updated_at,
                 'skus' => $group->map(fn ($sku) => [
                         'sku_id' => $sku->sku_id ?? null,
@@ -2219,29 +2216,11 @@ class OmnichannelController extends Controller
                         'stock_qty' => (int) ($sku->stock_qty ?? 0),
                         'price' => (int) ($sku->price ?? 0),
                         'subtotal' => (int) ($sku->subtotal ?? 0),
-                        'product_status' => $sku->product_status ?? null,
-                        'audit_status' => $sku->audit_status ?? null,
-                        'is_active' => $this->databaseBool($sku->is_active ?? true),
                         'image_url' => $sku->image_url ?? null,
                     ])->values(),
                 ];
             })->values(),
         ]);
-    }
-
-    private function databaseBool(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if (is_int($value) || is_float($value)) {
-            return (int) $value === 1;
-        }
-
-        $normalized = strtolower(trim((string) ($value ?? '')));
-
-        return in_array($normalized, ['1', 'true', 't', 'yes', 'y', 'on'], true);
     }
 
     private function syncTiktokProductsToDatabase(): array
@@ -4443,19 +4422,13 @@ class OmnichannelController extends Controller
 
         foreach ([
             $productId !== '' && $sellerSkuKey !== '' ? ['by_product_seller_sku', $productId.'|'.$sellerSkuKey] : null,
+            $sellerSkuKey !== '' ? ['by_seller_sku', $sellerSkuKey] : null,
             $productId !== '' && $skuId !== '' ? ['by_product_sku_id', $productId.'|'.$skuId] : null,
             $skuId !== '' ? ['by_sku_id', $skuId] : null,
             $productId !== '' && $lookupSkuNameKey !== '' ? ['by_product_sku_name', $productId.'|'.$lookupSkuNameKey] : null,
         ] as $candidate) {
             if ($candidate && isset($lookup[$candidate[0]][$candidate[1]])) {
                 return [$lookup[$candidate[0]][$candidate[1]], 'saved'];
-            }
-        }
-
-        if ($productId === '' && $sellerSkuKey !== '') {
-            $match = $lookup['by_seller_sku'][$sellerSkuKey] ?? null;
-            if ($match && $this->skuMappingProductNamesCompatible($row->product_name ?? '', $match->product_name ?? '')) {
-                return [$match, 'saved'];
             }
         }
 
@@ -4504,27 +4477,6 @@ class OmnichannelController extends Controller
         }
 
         return [null, null];
-    }
-
-    private function skuMappingProductNamesCompatible(mixed $left, mixed $right): bool
-    {
-        $leftKey = $this->normalizeSkuMatchValue($left);
-        $rightKey = $this->normalizeSkuMatchValue($right);
-
-        if ($leftKey === '' || $rightKey === '') {
-            return false;
-        }
-
-        if ($leftKey === $rightKey || str_contains($leftKey, $rightKey) || str_contains($rightKey, $leftKey)) {
-            return true;
-        }
-
-        $overlap = count(array_intersect(
-            $this->skuMappingNameTokens($left),
-            $this->skuMappingNameTokens($right)
-        ));
-
-        return $overlap >= 3;
     }
 
     private function bestTiktokVariantCandidateForStockRow(object $row, array $candidates, array $tiktokProductGroups): ?object
@@ -5551,7 +5503,6 @@ class OmnichannelController extends Controller
             'access_token' => ['nullable', 'string'],
             'account_key' => ['nullable', 'string'],
             'dry_run' => ['nullable'],
-            'sync_sku' => ['nullable'],
             'variants' => ['required', 'array', 'min:1'],
             'variants.*.stock_master_id' => ['nullable'],
             'variants.*.variant_name' => ['required', 'string'],
@@ -5569,7 +5520,6 @@ class OmnichannelController extends Controller
         $accessToken = trim((string) ($context['access_token'] ?? ''));
         $itemId = (int) trim((string) $data['item_id']);
         $dryRun = $this->boolString($data['dry_run'] ?? true) === 'true';
-        $syncSku = $this->boolString($data['sync_sku'] ?? true) === 'true';
 
         abort_if($itemId <= 0, 422, 'Item ID Shopee wajib diisi.');
         abort_if($shopId <= 0 || $accessToken === '', 422, 'Token Shopee aktif belum lengkap. Jalankan AUTH / REFRESH Shopee dulu.');
@@ -5634,7 +5584,7 @@ class OmnichannelController extends Controller
             }
         }
 
-        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants'], (string) $itemId, $syncSku);
+        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants'], (string) $itemId);
         abort_if($requestedVariants === [], 422, 'Tidak ada varian valid untuk ditambahkan ke Shopee.');
 
         $newOptionCount = 0;
