@@ -950,11 +950,11 @@ const resolveVariantChannelSubmitPrice = (source = null, channel = addVariantSou
   }
 
   return numericPrice(
-    source?.shopee?.original_price ??
-    source?.shopee_original_price ??
     source?.shopee?.price ??
     source?.shopee_variant_price ??
     source?.stock_shopee_price ??
+    source?.shopee?.original_price ??
+    source?.shopee_original_price ??
     source?.price
   )
 }
@@ -1462,12 +1462,9 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
     item.tiktok?.image_url ||
     ''
   ).trim()
-  const targetGroupPrice = groupChannelDominantPrice(activeGroup.value, addVariantTargetPriceChannel.value)
-  const priceValue = resolveVariantTargetMarketplacePrice(item)
-    || targetGroupPrice
-    || resolveVariantSourceMarketplacePrice(item)
-    || item.price
-    || addVariantTool.price
+  const priceValue = isShopeeFlow.value
+    ? (item.tiktok?.price ?? item.price ?? addVariantTool.price)
+    : (item.shopee_variant_price ?? item.shopee?.price ?? item.price ?? addVariantTool.price)
   const quantityValue = isShopeeFlow.value
     ? (item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
     : (item.shopee_variant_stock ?? item.shopee?.stock_qty ?? item.stock_qty ?? 0)
