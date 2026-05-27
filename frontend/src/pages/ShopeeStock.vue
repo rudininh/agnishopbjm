@@ -15,8 +15,8 @@
 
     <div class="summary-grid">
       <article class="metric">
-        <span>Total Produk</span>
-        <strong>{{ items.length }}</strong>
+        <span>Produk Live</span>
+        <strong>{{ liveCount }}</strong>
       </article>
       <article class="metric">
         <span>Total Varian</span>
@@ -27,9 +27,8 @@
         <strong>{{ grandStock }}</strong>
       </article>
       <article class="metric">
-        <span>Status Produk</span>
-        <strong>{{ liveCount }} / {{ soldOutCount }} / {{ inactiveCount }}</strong>
-        <small>Live / Sold Out / Tidak Live</small>
+        <span>Nilai Stok</span>
+        <strong>{{ formatCurrency(grandValue) }}</strong>
       </article>
     </div>
 
@@ -107,15 +106,21 @@
         <table>
           <thead>
             <tr>
-              <th>Produk</th>
-              <th>Variant</th>
-              <th>Total Stok</th>
-              <th>Status</th>
+              <th class="check-col"><input type="checkbox" /></th>
+              <th>Item & Store</th>
+              <th>Parent SKU</th>
+              <th>SKU</th>
+              <th>Price</th>
+              <th>Stock</th>
+              <th>Quality</th>
+              <th>Time</th>
+              <th>Operation</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="item in pagedItems" :key="item.item_id">
               <tr class="product-row">
+                <td class="check-col"><input type="checkbox" /></td>
                 <td>
                   <div class="product-cell">
                     <img v-if="item.image_url && !brokenImages[item.item_id]" :src="item.image_url" :alt="item.nama" @error="markImageBroken(item.item_id)" />
@@ -128,22 +133,42 @@
                     </div>
                   </div>
                 </td>
+                <td>--</td>
                 <td>
-                  <strong>{{ modelSummary(item) }}</strong>
-                  <small>{{ variantPreview(item.models) }}</small>
-                  <button class="inline-action" title="Lihat varian" @click="toggle(item.item_id)">{{ expanded[item.item_id] ? 'Hide' : 'Show' }}</button>
+                  <strong>{{ item.sku || '--' }}</strong>
+                  <small>{{ modelSummary(item) }}</small>
+                </td>
+                <td>
+                  <div class="price-cell">
+                    <small v-if="hasDiscount(item)">Harga asli: {{ originalPriceRange(item) }}</small>
+                    <strong>{{ hasDiscount(item) ? 'Harga diskon' : 'Harga' }}: {{ discountedPriceRange(item) }}</strong>
+                    <span v-if="hasDiscount(item)" class="discount-pill">{{ discountLabel(item) }}</span>
+                  </div>
                 </td>
                 <td>
                   <strong>{{ totalStock(item.models) }}</strong>
-                  <small>{{ activeModelCount(item.models) }} varian aktif</small>
+                  <small>{{ formatCurrency(totalValue(item.models)) }}</small>
                 </td>
                 <td>
                   <span :class="['status-badge', rowStatus(item).tone]">{{ rowStatus(item).label }}</span>
-                  <small>{{ statusNote(item) }}</small>
+                  <small>{{ qualityNote(item) }}</small>
+                </td>
+                <td>
+                  <small>Create Time</small>
+                  <strong>{{ formatDate(item.created_at) }}</strong>
+                  <small>Update Time</small>
+                  <strong>{{ formatDate(item.updated_at) }}</strong>
+                </td>
+                <td>
+                  <div class="actions">
+                    <button title="Lihat varian" @click="toggle(item.item_id)">{{ expanded[item.item_id] ? 'Hide' : 'Show' }}</button>
+                    <button title="Refresh produk" @click="loadData">Sync</button>
+                  </div>
                 </td>
               </tr>
               <tr v-if="expanded[item.item_id]" class="variant-row">
-                <td colspan="4">
+                <td></td>
+                <td colspan="8">
                   <div class="variant-list">
                     <div v-for="model in item.models" :key="model.model_id" class="variant-item">
                       <span class="variant-name">
@@ -152,8 +177,13 @@
                         <span>{{ model.name || 'Tanpa Varian' }}</span>
                       </span>
                       <span>Kode Variasi: {{ variationCode(item, model) }}</span>
+                      <span>SKU ID: {{ model.model_id || '-' }}</span>
+                      <span class="variant-price">
+                        <small v-if="modelHasDiscount(model)" class="original-price">Harga asli: {{ formatCurrency(modelOriginalPrice(model)) }}</small>
+                        <small v-if="modelHasDiscount(model)" class="discount-label">Harga Diskon <span title="Diskon dari harga asli">?</span>:</small>
+                        <strong>{{ modelDiscountDetail(model) }}</strong>
+                      </span>
                       <strong>Stock {{ model.stock || 0 }}</strong>
-                      <span :class="['status-badge', modelStatus(model, item).tone]">{{ modelStatus(model, item).label }}</span>
                     </div>
                     <div v-if="!item.models?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
                   </div>
@@ -161,7 +191,7 @@
               </tr>
             </template>
             <tr v-if="!filteredItems.length">
-              <td colspan="4" class="empty">{{ loading ? 'Sedang memuat produk...' : 'Belum ada produk yang cocok dengan filter.' }}</td>
+              <td colspan="9" class="empty">{{ loading ? 'Sedang memuat produk...' : 'Belum ada produk yang cocok dengan filter.' }}</td>
             </tr>
           </tbody>
         </table>
@@ -202,12 +232,11 @@ const formatCurrency = (value) => new Intl.NumberFormat('id-ID', { style: 'curre
 const totalStock = (models) => (models || []).reduce((sum, item) => sum + Number(item.stock || 0), 0)
 const totalValue = (models) => (models || []).reduce((sum, item) => sum + Number(item.stock || 0) * Number(item.price || 0), 0)
 const numberValue = (value) => Number(value || 0)
+const isSoldOut = (item) => totalStock(item.models) <= 0
 const isLive = (item) => Boolean(item.is_live)
-const isInactive = (item) => !isLive(item)
-const isSoldOut = (item) => isLive(item) && totalStock(item.models) <= 0
 const liveCount = computed(() => items.value.filter((item) => isLive(item) && !isSoldOut(item)).length)
 const soldOutCount = computed(() => items.value.filter((item) => isSoldOut(item)).length)
-const inactiveCount = computed(() => items.value.filter((item) => isInactive(item)).length)
+const inactiveCount = computed(() => items.value.filter((item) => !isLive(item)).length)
 const variantCount = computed(() => items.value.reduce((sum, item) => sum + (item.models?.length || 0), 0))
 const grandStock = computed(() => visibleItems.value.reduce((sum, item) => sum + totalStock(item.models), 0))
 const grandValue = computed(() => visibleItems.value.reduce((sum, item) => sum + totalValue(item.models), 0))
@@ -281,22 +310,10 @@ const variationCode = (item, model) => {
   return model?.kode_variasi || `INT-${item?.item_id || 'ITEM'}-${skuFragment(model?.name)}`
 }
 const modelSummary = (item) => `${item.models?.length || 0} varian`
-const activeModelCount = (models) => (models || []).filter((model) => Number(model.stock || 0) > 0).length
-const variantPreview = (models) => (models || []).slice(0, 3).map((model) => model.name || 'Tanpa Varian').join(', ') || '-'
 const qualityNote = (item) => isSoldOut(item) ? 'Stok perlu dicek' : 'Produk sedang dijual'
-const statusNote = (item) => {
-  if (isInactive(item)) return item.status || 'Produk tidak live.'
-  if (isSoldOut(item)) return 'Produk live, stok habis.'
-  return 'Produk aktif/live.'
-}
 const rowStatus = (item) => {
   if (isSoldOut(item)) return { label: 'Sold Out', tone: 'warning' }
   if (!isLive(item)) return { label: item.status || 'Tidak Live', tone: 'muted' }
-  return { label: 'Live', tone: 'success' }
-}
-const modelStatus = (model, item) => {
-  if (!isLive(item)) return { label: 'Tidak Live', tone: 'muted' }
-  if (Number(model?.stock || 0) <= 0) return { label: 'Sold Out', tone: 'warning' }
   return { label: 'Live', tone: 'success' }
 }
 const priceRange = (item) => {
@@ -446,7 +463,7 @@ select, input { width: 100%; height: 36px; border: 1px solid #d7dde8; border-rad
 .sync-message.error { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
 .panel { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; overflow: hidden; }
 .table-wrap { max-height: 68vh; overflow: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 860px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1180px; }
 th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vertical-align: top; }
 thead th { position: sticky; top: 0; background: #f8fafc; color: #0f172a; z-index: 2; }
 .check-col { width: 34px; text-align: center; }
@@ -467,10 +484,11 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .success { color: #047857; background: #d1fae5; }
 .warning { color: #b45309; background: #fef3c7; }
 .muted { color: #64748b; background: #eef2f7; }
-.inline-action { color: #4f2ec7; background: #f1efff; padding: 6px 10px; margin-top: 8px; }
+.actions { display: grid; gap: 6px; }
+.actions button { color: #4f2ec7; background: #f1efff; padding: 7px 9px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .6fr) minmax(0, .6fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; align-items:center; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .95fr) minmax(0, .9fr) minmax(0, .7fr) minmax(0, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
