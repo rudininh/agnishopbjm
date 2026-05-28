@@ -163,7 +163,7 @@
                 >
                   <td>
                     <div class="variant-title">
-                      <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
+                      <strong>{{ resolveTargetVariantName(item) || item.variant_name || 'Tanpa Varian' }}</strong>
                       <small>SKU internal: {{ item.internal_sku }} | Stock Master: {{ item.stock_qty }}</small>
                     </div>
                   </td>
@@ -408,6 +408,11 @@
                   <span>seller_sku</span>
                   <input v-model.trim="addVariantTool.seller_sku" placeholder="SKU-BARU-001" />
                 </label>
+                <label v-if="!isShopeeFlow" class="dry-run-row sku-source-row">
+                  <input type="checkbox" v-model="addVariantTool.use_real_shopee_sku" @change="syncRealShopeeSkuToInput" />
+                  <span>Pakai SKU real dari stok Shopee</span>
+                </label>
+                <p v-if="!isShopeeFlow" class="field-hint">Jika dicentang, setiap varian memakai seller_sku Shopee asli yang tersimpan, bukan SKU hasil template.</p>
                 <label>
                   <span>color_name</span>
                   <input v-model.trim="addVariantTool.color_name" placeholder="Biru" />
@@ -630,7 +635,7 @@ const actionLog = ref('')
 const items = ref([])
 const pagination = reactive({
   page: 1,
-  per_page: 50,
+  per_page: 5000,
   total: 0,
   last_page: 1
 })
@@ -728,7 +733,8 @@ const addVariantTool = reactive({
   price_mode: 'fixed',
   discount: 0,
   quantity: 1,
-  dry_run: true
+  dry_run: true,
+  use_real_shopee_sku: true
 })
 
 const resetForm = () => {
@@ -763,6 +769,18 @@ const buildShopeeTemplateSku = (variantName, itemId = '') => {
 }
 const isMarketplaceNumericSku = (value) => /^\d{10,19}$/.test(String(value || '').trim())
 const isInternalMarketplaceSku = (value) => String(value || '').trim().toUpperCase().startsWith('INT-')
+const resolveRealShopeeSellerSku = (source) => {
+  const candidates = [
+    source?.shopee?.seller_sku,
+    source?.stock_shopee_seller_sku,
+    source?.shopee_seller_sku,
+    source?.shopee_model_sku
+  ]
+
+  return candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || ''
+}
 const resolveOppositeMarketplaceInternalSku = (source, targetChannel) => {
   const candidates = targetChannel === 'shopee'
     ? [
@@ -779,6 +797,10 @@ const resolveOppositeMarketplaceInternalSku = (source, targetChannel) => {
     .find((value) => isInternalMarketplaceSku(value)) || ''
 }
 const resolveStandardSellerSku = (source, variantName = '', productId = '') => {
+  if (!isShopeeFlow.value && addVariantTool.use_real_shopee_sku) {
+    return resolveRealShopeeSellerSku(source)
+  }
+
   const candidates = [
     resolveOppositeMarketplaceInternalSku(source, 'tiktok'),
     source?.shopee?.seller_sku,
@@ -1137,15 +1159,31 @@ const selectedVariantItems = computed(() => {
     .map((value) => resolveSelectedVariantSource(value))
     .filter(Boolean)
 })
+const resolveTargetVariantName = (source) => String(
+  isShopeeFlow.value
+    ? (
+      source?.tiktok?.variant_name ||
+      source?.tiktok?.sku_name ||
+      source?.variant_name ||
+      ''
+    )
+    : (
+      source?.shopee?.variant_name ||
+      source?.variant_name ||
+      source?.tiktok?.variant_name ||
+      source?.tiktok?.sku_name ||
+      ''
+    )
+).trim()
 const selectedVariantPayloadLabels = computed(() => {
   return selectedVariantItems.value.map((variant) => {
-    const variantName = String(variant?.variant_name || 'Tanpa Varian').trim() || 'Tanpa Varian'
+    const variantName = String(resolveTargetVariantName(variant) || 'Tanpa Varian').trim() || 'Tanpa Varian'
     const sellerSku = displaySelectedVariantSellerSku(variant)
     return `${variantName} (${sellerSku})`
   })
 })
 const displaySelectedVariantSellerSku = (variant) => {
-  const variantName = String(variant?.variant_name || '').trim()
+  const variantName = String(resolveTargetVariantName(variant) || variant?.variant_name || '').trim()
   const sellerSku = isShopeeFlow.value
     ? (
       resolveOppositeMarketplaceInternalSku(variant, 'shopee') ||
@@ -1153,7 +1191,16 @@ const displaySelectedVariantSellerSku = (variant) => {
     )
     : resolveStandardSellerSku(variant, variantName, resolveShopeeItemId(variant) || resolveSelectedShopeeItemId())
 
-  return sellerSku || '-'
+  return sellerSku || (!isShopeeFlow.value && addVariantTool.use_real_shopee_sku ? 'Tidak ada SKU Shopee' : '-')
+}
+const syncRealShopeeSkuToInput = () => {
+  if (isShopeeFlow.value || !addVariantTool.use_real_shopee_sku) return
+
+  const source = selectedVariantItems.value[0] || selectedItem.value
+  const realShopeeSku = resolveRealShopeeSellerSku(source)
+  if (realShopeeSku) {
+    addVariantTool.seller_sku = realShopeeSku
+  }
 }
 const allDisplayedVariantsSelected = computed(() => displayVariants.value.length > 0 && displayVariants.value.every((item) => isVariantSelected(item)))
 const someDisplayedVariantsSelected = computed(() => displayVariants.value.some((item) => isVariantSelected(item)))
@@ -1340,7 +1387,7 @@ const buildShopeeAddVariantPayload = () => {
   const seen = new Set()
 
   sources.forEach((source) => {
-    const variantName = String(source?.tiktok?.variant_name || source?.tiktok?.sku_name || source?.variant_name || addVariantTool.color_name || '').trim()
+    const variantName = String(resolveTargetVariantName(source) || addVariantTool.color_name || '').trim()
     const variantKey = normalizeText(variantName)
     if (!variantName || seen.has(variantKey)) return
     seen.add(variantKey)
@@ -1426,13 +1473,7 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
     ? (contextProductId || resolveShopeeItemId(item) || '')
     : (contextProductId || resolveTiktokProductId(item))
 
-  const colorName = String(
-    (isShopeeFlow.value ? item.tiktok?.variant_name : item.shopee?.variant_name) ||
-    item.variant_name ||
-    item.tiktok?.variant_name ||
-    item.tiktok?.sku_name ||
-    ''
-  ).trim()
+  const colorName = String(resolveTargetVariantName(item)).trim()
   const sellerSku = isShopeeFlow.value
     ? (
       resolveOppositeMarketplaceInternalSku(item, 'shopee') ||
@@ -2018,10 +2059,16 @@ const buildAddVariantRequestPreview = () => {
   const discountPercent = normalizeDiscountPercent(addVariantTool.discount)
   const generatedSkus = []
   const existingVariantIndexByKey = new Map()
+  const existingSellerSkuIndexByKey = new Map()
   existingSkus.forEach((sku, index) => {
     const key = normalizeText(sku?.sales_attributes?.[0]?.value_name || sku?.sales_attributes?.[0]?.name || '')
     if (!key || existingVariantIndexByKey.has(key)) return
     existingVariantIndexByKey.set(key, index)
+  })
+  existingSkus.forEach((sku, index) => {
+    const key = normalizeTextForSku(sku?.seller_sku || '').toLowerCase()
+    if (!key || existingSellerSkuIndexByKey.has(key)) return
+    existingSellerSkuIndexByKey.set(key, index)
   })
   const processedVariantValueKeys = new Set()
   const existingSellerSkuKeys = new Set(
@@ -2029,11 +2076,12 @@ const buildAddVariantRequestPreview = () => {
       .map((sku) => normalizeTextForSku(sku?.seller_sku || '').toLowerCase())
       .filter(Boolean)
   )
+  const releasedSellerSkuKeys = new Set()
   const generatedSellerSkuKeys = new Set()
   const manualPriceInput = normalizePriceInput(addVariantTool.price)
 
   skuDrafts.forEach((source, sourceIndex) => {
-    const colorName = String(source?.variant_name || source?.tiktok?.variant_name || source?.tiktok?.sku_name || 'Variant Baru').trim() || 'Variant Baru'
+    const colorName = String(resolveTargetVariantName(source) || 'Variant Baru').trim() || 'Variant Baru'
     const colorKey = normalizeText(colorName)
     if (!colorKey) {
       return
@@ -2047,12 +2095,35 @@ const buildAddVariantRequestPreview = () => {
     const existingVariantIndex = existingVariantIndexByKey.get(colorKey)
 
     let sellerSku = resolveStandardSellerSku(source, colorName, resolveShopeeItemId(source) || resolveSelectedShopeeItemId())
+    if (addVariantTool.use_real_shopee_sku && !sellerSku && existingVariantIndex === undefined) {
+      return
+    }
     if (!sellerSku) {
       sellerSku = `SKU-${buildNextNumericValue(
       existingSkus.map((sku) => sku.id || sku.sku_id),
       `${productTitle}|${colorName}|${sourceIndex}`,
       '65536'
       ).slice(-6)}`
+    }
+    const sellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
+    if (sellerSkuKey && existingVariantIndex === undefined && existingSellerSkuIndexByKey.has(sellerSkuKey)) {
+      const wrongSkuIndex = existingSellerSkuIndexByKey.get(sellerSkuKey)
+      const wrongSku = cloneJson(existingSkus[wrongSkuIndex]) || {}
+      const wrongColorName = String(
+        wrongSku?.sales_attributes?.[0]?.value_name ||
+        wrongSku?.sales_attributes?.[0]?.name ||
+        ''
+      ).trim()
+
+      if (wrongColorName && normalizeText(wrongColorName) !== colorKey) {
+        const restoredSellerSku = buildShopeeTemplateSku(wrongColorName, resolveShopeeItemId(source) || resolveSelectedShopeeItemId())
+        if (restoredSellerSku) {
+          wrongSku.seller_sku = restoredSellerSku
+          existingSkus[wrongSkuIndex] = wrongSku
+          existingSellerSkuKeys.add(normalizeTextForSku(restoredSellerSku).toLowerCase())
+          releasedSellerSkuKeys.add(sellerSkuKey)
+        }
+      }
     }
     const imageUri = String(
       source?.image_url ||
@@ -2124,8 +2195,7 @@ const buildAddVariantRequestPreview = () => {
       return
     }
 
-    const sellerSkuKey = normalizeTextForSku(sellerSku).toLowerCase()
-    if (sellerSkuKey && (existingSellerSkuKeys.has(sellerSkuKey) || generatedSellerSkuKeys.has(sellerSkuKey))) {
+    if (sellerSkuKey && ((existingSellerSkuKeys.has(sellerSkuKey) && !releasedSellerSkuKeys.has(sellerSkuKey)) || generatedSellerSkuKeys.has(sellerSkuKey))) {
       sellerSku = ''
     }
 
@@ -2894,7 +2964,7 @@ const selectItem = (item, options = {}) => {
     )
   form.tiktok_product_id = resolvedProductId
   form.tiktok_sku_id = resolvedSkuId
-  form.tiktok_sku_name = item.tiktok?.variant_name || item.tiktok?.sku_name || item.variant_name || ''
+  form.tiktok_sku_name = resolveTargetVariantName(item) || item.tiktok?.variant_name || item.tiktok?.sku_name || item.variant_name || ''
   form.warehouse_id = item.tiktok?.warehouse_id || form.warehouse_id || ''
   form.inventory_qty = Number(item.tiktok?.stock_qty ?? item.stock_qty ?? 0)
   form.notes = item.notes || ''
@@ -3089,6 +3159,7 @@ onMounted(async () => {
 .api-shop-auth span, .api-path-params span, .api-query-params span { display:block; color:#6b7280; font-size:12px; margin-bottom:6px; }
 .api-shop-auth em, .api-path-params em, .api-query-params em { font-style:normal; color:#9ca3af; }
 .field-hint { margin:-6px 0 12px; color:#64748b; font-size:12px; line-height:1.45; }
+.sku-source-row { margin:-2px 0 8px !important; padding:8px 10px; border:1px solid #dbeafe; border-radius:6px; background:#f8fbff; }
 .price-mode-box { display:grid; gap:8px; margin:-4px 0 12px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:6px; background:#f8fafc; }
 .api-bool-row { margin-bottom:12px; }
 .api-bool-row > span { display:block; color:#6b7280; font-size:12px; margin-bottom:6px; }
@@ -3118,6 +3189,18 @@ onMounted(async () => {
 .variant-panel { margin-top:14px; }
 .variant-tool { display:grid; grid-template-columns:minmax(0,1fr) minmax(360px, 0.95fr); gap:0; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
 .variant-panel .api-right { padding-top:12px; }
+.variant-selection-summary { margin-top:14px; border:1px solid #e5e7eb; border-radius:6px; padding:12px; background:#fff; }
+.variant-selection-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px; }
+.variant-selection-head strong { display:block; color:#111827; font-size:14px; line-height:1.2; }
+.variant-selection-head small { display:block; color:#64748b; font-size:12px; margin-top:3px; }
+.variant-selection-list { display:grid; gap:8px; }
+.variant-selection-list.compact { gap:6px; }
+.variant-selection-item { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; min-width:0; padding:8px 0; border-top:1px solid #f1f5f9; }
+.variant-selection-item:first-child { border-top:0; padding-top:0; }
+.variant-selection-copy { min-width:0; }
+.variant-selection-copy strong { display:block; color:#111827; font-size:13px; line-height:1.25; margin-bottom:3px; overflow-wrap:anywhere; }
+.variant-selection-copy small { display:block; color:#334155; font-size:12px; line-height:1.3; overflow-wrap:anywhere; }
+.variant-selection-item .mini { flex:0 0 auto; margin-top:0; }
 .mapping-table { width:100%; border-collapse:collapse; font-size:13px; min-width:1240px; table-layout:fixed; }
 .col-product { width:28%; }
 .col-channel { width:31%; }
