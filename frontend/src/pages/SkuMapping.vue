@@ -6,6 +6,7 @@
         <h1>SKU Mapping</h1>
       </div>
       <div class="header-actions">
+        <button class="ghost" @click="syncMarketplaces" :disabled="loading || syncingMarketplaces">{{ syncingMarketplaces ? 'Sync...' : 'Sync Marketplace' }}</button>
         <button class="ghost" @click="loadData" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
         <button class="primary" @click="submitSkuUpdate" :disabled="!canSubmitSkuUpdate">
           {{ submitting ? 'Mengirim...' : 'Update SKU Shopee + TikTok' }}
@@ -20,8 +21,12 @@
       <article class="metric"><span>Grup Produk</span><strong>{{ productGroups.length }}</strong></article>
       <article class="metric"><span>Variant Siap</span><strong>{{ readyVariantCount }}</strong></article>
       <article class="metric"><span>Perlu Edit SKU</span><strong>{{ needsSkuVariantCount }}</strong></article>
-      <article class="metric"><span>Last Sync</span><strong>{{ formatDate(summary?.last_shopee_sync_at || summary?.last_tiktok_sync_at) }}</strong></article>
+      <article class="metric"><span>Last Shopee Sync</span><strong>{{ formatDate(summary?.last_shopee_sync_at) }}</strong></article>
+      <article class="metric"><span>Last TikTok Sync</span><strong>{{ formatDate(summary?.last_tiktok_sync_at) }}</strong></article>
     </div>
+    <p v-if="summary?.auto_hidden_inactive_stock_master" class="notice compact">
+      {{ summary.auto_hidden_inactive_stock_master }} stock master lama otomatis disembunyikan karena varian marketplace aktif tidak ditemukan.
+    </p>
 
     <div class="layout">
       <div class="panel list-panel">
@@ -231,6 +236,7 @@ import { omnichannelService } from '@/services'
 
 const loading = ref(false)
 const submitting = ref(false)
+const syncingMarketplaces = ref(false)
 const loadError = ref('')
 const summary = ref(null)
 const items = ref([])
@@ -575,6 +581,36 @@ const submitSkuUpdate = async () => {
   }
 }
 
+const syncMarketplaces = async () => {
+  syncingMarketplaces.value = true
+  loadError.value = ''
+
+  try {
+    const response = await omnichannelService.syncSkuMappingMarketplaces()
+    const result = response.data || {}
+
+    summary.value = {
+      ...(summary.value || {}),
+      last_shopee_sync_at: result.last_shopee_sync_at,
+      last_tiktok_sync_at: result.last_tiktok_sync_at,
+      auto_hidden_inactive_stock_master: result.auto_hidden_inactive_stock_master || 0
+    }
+
+    if (result.status === 'partial_error') {
+      loadError.value = [
+        result.shopee?.status === 'error' ? `Shopee: ${result.shopee?.message || 'sync gagal'}` : '',
+        result.tiktok?.status === 'error' ? `TikTok: ${result.tiktok?.message || 'sync gagal'}` : ''
+      ].filter(Boolean).join(' ')
+    }
+
+    await loadData()
+  } catch (error) {
+    loadError.value = error.response?.data?.message || 'Sync marketplace gagal diproses.'
+  } finally {
+    syncingMarketplaces.value = false
+  }
+}
+
 const copyMarketplaceResponse = async (channel) => {
   const payload = marketplaceResponse[channel]
   if (!payload) return
@@ -617,7 +653,7 @@ onMounted(loadData)
 .notice { color:#334155; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
 .notice.error { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
 .notice.compact { margin:10px 0 0; }
-.summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+.summary-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
 .metric { background:#fff; border:1px solid #d9e2ec; border-radius:8px; padding:14px; }
 .metric span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
 .metric strong { font-size:22px; color:#111827; }
