@@ -281,6 +281,7 @@ const skuStatus = (item) => {
   const shopeeSku = channelSku(item, 'shopee')
   const tiktokSku = channelSku(item, 'tiktok')
 
+  if (['shopee_missing', 'tiktok_missing', 'belum_ada_variant'].includes(item?.status)) return item.status
   if (!hasShopeeIdentity(item) || !hasTiktokIdentity(item)) return 'incomplete'
   if (matchingMarketplaceSku(item)) return 'ready_to_sync'
   if (!internalSku) return 'internal_empty'
@@ -298,6 +299,9 @@ const skuStatusLabel = (status) => ({
   tiktok_empty: 'SKU TikTok kosong',
   internal_empty: 'SKU internal kosong',
   incomplete: 'ID belum lengkap',
+  shopee_missing: 'Belum ada variant Shopee',
+  tiktok_missing: 'Belum ada variant TikTok',
+  belum_ada_variant: 'Belum ada variant Shopee/TikTok',
   mismatch: 'SKU belum sama'
 }[status] || 'Perlu dicek')
 

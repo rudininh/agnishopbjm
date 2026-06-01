@@ -965,7 +965,10 @@ class OmnichannelController extends Controller
         $syncResult = null;
 
         if ($request->boolean('sync')) {
-            $syncResult = $this->syncShopeeProductsToDatabase();
+            $itemId = (int) $request->query('item_id', 0);
+            $syncResult = $itemId > 0
+                ? $this->syncShopeeProductToDatabase($itemId)
+                : $this->syncShopeeProductsToDatabase();
         }
 
         return $this->shopeeItemsResponse($syncResult);
@@ -1098,6 +1101,7 @@ class OmnichannelController extends Controller
         $productCount = 0;
         $variantCount = 0;
         $inactiveCount = 0;
+        $removedVariantCount = 0;
         $config = $this->shopeeConfig();
 
         foreach ($tokens as $token) {
@@ -1118,7 +1122,7 @@ class OmnichannelController extends Controller
                     $models = data_get($modelPayload, 'model', []);
                     $tierVariations = data_get($modelPayload, 'tier_variation', []);
                     $variantCount += max(1, count($models));
-                    $this->storeShopeeProductPayload($baseItem, $models, $tierVariations, $shopId);
+                    $removedVariantCount += $this->storeShopeeProductPayload($baseItem, $models, $tierVariations, $shopId);
                 }
 
                 $deactivatedForShop = $this->deactivateShopeeProductsMissingFromSync($shopId, $itemIds);
@@ -1149,6 +1153,9 @@ class OmnichannelController extends Controller
         if ($inactiveCount > 0) {
             $message .= ' '.$inactiveCount.' produk lama dinonaktifkan dari cache.';
         }
+        if ($removedVariantCount > 0) {
+            $message .= ' '.$removedVariantCount.' varian lama dihapus dari cache.';
+        }
 
         if ($hasError && $productCount === 0) {
             $message = collect($accounts)->firstWhere('status', 'error')['message'] ?? 'Gagal mengambil data Shopee.';
@@ -1172,6 +1179,7 @@ class OmnichannelController extends Controller
             'products' => $productCount,
             'variants' => $variantCount,
             'deactivated_products' => $inactiveCount,
+            'removed_variants' => $removedVariantCount,
             'accounts' => $accounts,
             'last_sync_at' => now()->toDateTimeString(),
         ];
@@ -1705,12 +1713,12 @@ class OmnichannelController extends Controller
         return $normalized ? 'true' : 'false';
     }
 
-    private function storeShopeeProductPayload(array $item, array $models, array $tierVariations, int $shopId): void
+    private function storeShopeeProductPayload(array $item, array $models, array $tierVariations, int $shopId): int
     {
         $itemId = (int) ($item['item_id'] ?? 0);
 
         if ($itemId <= 0) {
-            return;
+            return 0;
         }
 
         $priceMin = $this->shopeePrice($this->shopeePriceInfoValue($item['price_info'] ?? null, 'current_price', $item['price_min'] ?? 0));
@@ -1759,6 +1767,139 @@ class OmnichannelController extends Controller
             $this->storeShopeeModelPayload($itemId, (string) ($item['item_name'] ?? ''), $model);
             $this->storeShopeeImages($itemId, (string) ($model['model_id'] ?? '0'), $this->shopeeModelImageUrls($model, $tierVariations));
         }
+
+        return $this->deleteShopeeModelsMissingFromSync($itemId, $models);
+    }
+
+    private function syncShopeeProductToDatabase(int $itemId): array
+    {
+        $this->ensureShopeeAuthColumns();
+        $this->normalizeActiveMarketplaceTokens();
+
+        $product = DB::table('shopee_product')->where('item_id', $itemId)->first();
+        if (! $product) {
+            return [
+                'status' => 'error',
+                'message' => 'Produk Shopee tidak ditemukan di cache lokal.',
+                'products' => 0,
+                'variants' => 0,
+                'mode' => 'product',
+                'item_id' => (string) $itemId,
+            ];
+        }
+
+        $shopId = (int) ($product->shop_id ?? 0);
+        $token = $this->activeShopeeTokensForSync()
+            ->first(fn ($candidate) => (int) ($candidate->shop_id ?? 0) === $shopId);
+
+        if (! $token) {
+            return [
+                'status' => 'error',
+                'message' => 'Token Shopee aktif untuk toko produk ini tidak ditemukan.',
+                'products' => 0,
+                'variants' => 0,
+                'mode' => 'product',
+                'item_id' => (string) $itemId,
+            ];
+        }
+
+        try {
+            $config = $this->shopeeConfig();
+            $baseItems = $this->fetchShopeeBaseInfo($config, $shopId, (string) $token->access_token, [$itemId]);
+
+            if ($baseItems === []) {
+                DB::table('shopee_product')->where('item_id', $itemId)->update([
+                    'is_active' => DB::raw('false'),
+                    'status' => DB::raw("COALESCE(status, 'REMOVED')"),
+                    'updated_at' => now(),
+                ]);
+
+                return [
+                    'status' => 'ok',
+                    'message' => 'Produk Shopee tidak lagi ditemukan dan dinonaktifkan dari cache.',
+                    'products' => 0,
+                    'variants' => 0,
+                    'deactivated_products' => 1,
+                    'mode' => 'product',
+                    'item_id' => (string) $itemId,
+                    'last_sync_at' => now()->toDateTimeString(),
+                ];
+            }
+
+            $modelPayload = $this->fetchShopeeModelList($config, $shopId, (string) $token->access_token, $itemId);
+            $models = data_get($modelPayload, 'model', []);
+            $removedVariants = $this->storeShopeeProductPayload(
+                $baseItems[0],
+                $models,
+                data_get($modelPayload, 'tier_variation', []),
+                $shopId
+            );
+            $variantCount = max(1, count($models));
+            $message = 'Produk Shopee dipilih berhasil disinkronkan: '.$variantCount.' varian aktif.';
+            if ($removedVariants > 0) {
+                $message .= ' '.$removedVariants.' varian lama dihapus dari cache.';
+            }
+
+            DB::table('shopee_sync_logs')->insert([
+                'status' => 'ok',
+                'message' => $message,
+                'product_count' => 1,
+                'variant_count' => $variantCount,
+                'synced_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return [
+                'status' => 'ok',
+                'message' => $message,
+                'products' => 1,
+                'variants' => $variantCount,
+                'removed_variants' => $removedVariants,
+                'mode' => 'product',
+                'item_id' => (string) $itemId,
+                'last_sync_at' => now()->toDateTimeString(),
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+                'products' => 0,
+                'variants' => 0,
+                'mode' => 'product',
+                'item_id' => (string) $itemId,
+            ];
+        }
+    }
+
+    private function deleteShopeeModelsMissingFromSync(int $itemId, array $models): int
+    {
+        $activeModelIds = collect($models)
+            ->map(fn (array $model) => (string) ($model['model_id'] ?? '0'))
+            ->unique()
+            ->values()
+            ->all();
+
+        $staleModelIds = DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->whereNotIn('model_id', $activeModelIds)
+            ->pluck('model_id')
+            ->map(fn ($modelId) => (string) $modelId)
+            ->all();
+
+        if ($staleModelIds === []) {
+            return 0;
+        }
+
+        DB::table('shopee_product_image')
+            ->where('item_id', $itemId)
+            ->whereIn('model_id', $staleModelIds)
+            ->delete();
+
+        return DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->whereIn('model_id', $staleModelIds)
+            ->delete();
     }
 
     private function storeShopeeModelPayload(int $itemId, string $itemName, array $model): void
@@ -1785,22 +1926,61 @@ class OmnichannelController extends Controller
             ]
         );
 
-        $skuFragment = $modelSku !== '' ? $modelSku : $modelName;
-        $internalSku = 'INT-'.$itemId.'-'.$this->sanitizeSkuFragment($skuFragment);
+        $modelSkuIsShared = $modelSku !== '' && DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->where('model_sku', $modelSku)
+            ->where('model_id', '<>', $modelId)
+            ->exists();
+        $skuFragment = $modelSku !== '' && ! $modelSkuIsShared ? $modelSku : $modelName;
+        $internalSku = str_starts_with(strtoupper($skuFragment), 'INT-')
+            ? $skuFragment
+            : 'INT-'.$itemId.'-'.$this->sanitizeSkuFragment($skuFragment);
+        $stockValues = [
+            'internal_sku' => $internalSku,
+            'shopee_product_id' => (string) $itemId,
+            'shopee_sku' => $modelId,
+            'shopee_seller_sku' => $modelSku !== '' ? $modelSku : null,
+            'product_name' => $itemName,
+            'variant_name' => $modelName,
+            'stock_qty' => $stock,
+            'is_hidden_from_mapping' => DB::raw('false'),
+            'hidden_from_mapping_reason' => null,
+            'hidden_from_mapping_at' => null,
+            'hidden_from_mapping_by' => null,
+            'updated_at' => $now,
+        ];
 
-        DB::table('stock_master')->updateOrInsert(
-            ['internal_sku' => $internalSku],
-            [
-                'shopee_product_id' => (string) $itemId,
-                'shopee_sku' => $modelId,
-                'shopee_seller_sku' => $modelSku !== '' ? $modelSku : null,
-                'product_name' => $itemName,
-                'variant_name' => $modelName,
-                'stock_qty' => $stock,
+        $existingStock = DB::table('stock_master')
+            ->where('internal_sku', $internalSku)
+            ->first()
+            ?: DB::table('stock_master')
+                ->where('shopee_product_id', (string) $itemId)
+                ->where('shopee_sku', $modelId)
+                ->orderBy('id')
+                ->first();
+
+        if ($existingStock) {
+            DB::table('stock_master')->where('id', $existingStock->id)->update($stockValues);
+            $stockMasterId = (int) $existingStock->id;
+        } else {
+            DB::table('stock_master')->updateOrInsert(
+                ['internal_sku' => $internalSku],
+                $stockValues + ['created_at' => $now]
+            );
+            $stockMasterId = (int) DB::table('stock_master')->where('internal_sku', $internalSku)->value('id');
+        }
+
+        DB::table('stock_master')
+            ->where('shopee_product_id', (string) $itemId)
+            ->where('shopee_sku', $modelId)
+            ->where('id', '<>', $stockMasterId)
+            ->update([
+                'is_hidden_from_mapping' => DB::raw('true'),
+                'hidden_from_mapping_reason' => 'Auto-hide: duplikat stock master untuk varian Shopee yang sama.',
+                'hidden_from_mapping_at' => $now,
+                'hidden_from_mapping_by' => 'system',
                 'updated_at' => $now,
-                'created_at' => $now,
-            ]
-        );
+            ]);
     }
 
     private function storeShopeeImages(int $itemId, ?string $modelId, array $urls): void
@@ -2167,14 +2347,17 @@ class OmnichannelController extends Controller
             ->header('Content-Type', 'text/html');
     }
 
-    public function tiktokItems(): JsonResponse
+    public function tiktokItems(Request $request): JsonResponse
     {
         $this->ensureTiktokProductTables();
 
         $syncResult = null;
 
-        if (request()->boolean('sync')) {
-            $syncResult = $this->syncTiktokProductsToDatabase();
+        if ($request->boolean('sync')) {
+            $productId = trim((string) $request->query('product_id', ''));
+            $syncResult = $productId !== ''
+                ? $this->syncTiktokProductToDatabase($productId)
+                : $this->syncTiktokProductsToDatabase();
         }
 
         $rows = DB::table('tiktok_products')
@@ -2198,7 +2381,7 @@ class OmnichannelController extends Controller
                 'message' => $syncResult['message'] ?? ($lastSyncAt ? 'Terakhir sinkron: '.$lastSyncAt : 'Belum pernah sinkron.'),
                 'last_sync_at' => $lastSyncAt,
                 ...($syncResult ?? []),
-                'mode' => 'cache',
+                'mode' => $syncResult['mode'] ?? 'cache',
             ],
             'items' => $rows->map(function ($group, string $productId) {
                 $first = $group->first();
@@ -3431,6 +3614,70 @@ class OmnichannelController extends Controller
         $this->ensureSkuMappingVisibilityColumns();
     }
 
+    private function syncTiktokProductToDatabase(string $productId): array
+    {
+        $this->ensureTiktokProductTables();
+
+        try {
+            $config = $this->tiktokConfig();
+            $shop = $this->latestTiktokShop();
+            $accessToken = $this->activeTiktokAccessTokenForSync();
+
+            if (! $shop) {
+                throw new \RuntimeException('Belum ada shop TikTok tersimpan. Jalankan AUTH / GET SHOP dulu.');
+            }
+
+            if ($accessToken === '') {
+                throw new \RuntimeException('Belum ada access token TikTok aktif. Jalankan AUTH / GET TOKEN dulu.');
+            }
+
+            $detail = $this->fetchTiktokProductDetail(
+                $config,
+                $accessToken,
+                $shop,
+                $productId,
+                rtrim((string) $config['api_host'], '/').'/product/202309/products/'
+            );
+
+            if (! is_array($detail) || $detail === []) {
+                throw new \RuntimeException('Detail produk TikTok tidak berhasil diambil.');
+            }
+
+            $this->storeTiktokProductPayload($detail);
+            $variantCount = count($this->normalizeTiktokSkuList($detail));
+            $message = 'Produk TikTok dipilih berhasil disinkronkan: '.$variantCount.' varian aktif.';
+
+            DB::table('tiktok_sync_logs')->insert([
+                'status' => 'ok',
+                'message' => $message,
+                'product_count' => 1,
+                'variant_count' => $variantCount,
+                'synced_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return [
+                'status' => 'ok',
+                'message' => $message,
+                'products' => 1,
+                'variants' => $variantCount,
+                'mode' => 'product',
+                'product_id' => $productId,
+                'last_sync_at' => now()->toDateTimeString(),
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+                'products' => 0,
+                'variants' => 0,
+                'mode' => 'product',
+                'product_id' => $productId,
+            ];
+        }
+    }
+
     private function ensureSkuMappingVisibilityColumns(): void
     {
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS is_hidden_from_mapping BOOLEAN DEFAULT FALSE");
@@ -3935,6 +4182,10 @@ class OmnichannelController extends Controller
                       AND (
                         NULLIF(COALESCE(sm.shopee_sku, ''), '') IS NULL
                         OR spm.model_id = sm.shopee_sku
+                      )
+                      AND (
+                        NULLIF(COALESCE(sm.variant_name, ''), '') IS NULL
+                        OR LOWER(TRIM(spm.name)) = LOWER(TRIM(sm.variant_name))
                       )
                 )
             ")
@@ -8098,7 +8349,7 @@ class OmnichannelController extends Controller
             'shopee_product' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'price_before_discount BIGINT DEFAULT 0'],
             'shopee_product_model' => ['created_at TIMESTAMP DEFAULT NOW()', 'original_price BIGINT DEFAULT 0', 'model_sku TEXT NULL'],
             'shopee_product_image' => ['updated_at TIMESTAMP DEFAULT NOW()'],
-            'stock_master' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'shopee_seller_sku TEXT NULL', 'tiktok_product_id TEXT NULL', 'tiktok_sku TEXT NULL', 'tiktok_seller_sku TEXT NULL'],
+            'stock_master' => ['created_at TIMESTAMP DEFAULT NOW()', 'updated_at TIMESTAMP DEFAULT NOW()', 'shopee_seller_sku TEXT NULL', 'tiktok_product_id TEXT NULL', 'tiktok_sku TEXT NULL', 'tiktok_seller_sku TEXT NULL', 'is_hidden_from_mapping BOOLEAN DEFAULT FALSE', 'hidden_from_mapping_reason TEXT NULL', 'hidden_from_mapping_at TIMESTAMP NULL', 'hidden_from_mapping_by VARCHAR(255) NULL'],
         ] as $table => $columns) {
             foreach ($columns as $definition) {
                 DB::statement('ALTER TABLE '.$table.' ADD COLUMN IF NOT EXISTS '.$definition);
