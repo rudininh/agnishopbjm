@@ -143,7 +143,9 @@
                 <td>
                   <div class="actions">
                     <button title="Lihat varian" @click="toggle(item.product_id)">{{ expanded[item.product_id] ? 'Hide' : 'Show' }}</button>
-                    <button title="Refresh data" @click="loadData">Sync</button>
+                    <button title="Refresh produk ini" @click="syncProduct(item)" :disabled="syncingProductId === item.product_id">
+                      {{ syncingProductId === item.product_id ? 'Syncing...' : 'Sync' }}
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -198,6 +200,7 @@ import { omnichannelService } from '@/services'
 const items = ref([])
 const expanded = ref({})
 const loading = ref(false)
+const syncingProductId = ref('')
 const activeTab = ref('all')
 const page = ref(1)
 const PAGE_SIZE = 20
@@ -320,6 +323,23 @@ const loadData = async (syncMode = false) => {
 
 const syncAndLoad = async () => {
   await loadData(true)
+}
+
+const syncProduct = async (item) => {
+  syncingProductId.value = item.product_id
+  syncMessage.value = ''
+  try {
+    const response = await omnichannelService.tiktokItems(true, { product_id: item.product_id })
+    items.value = response.data.items || []
+    lastSyncAt.value = response.data.last_sync_at || response.data.sync?.last_sync_at || ''
+    syncMessage.value = response.data.sync?.message || response.data.message || ''
+    syncTone.value = response.data.sync?.status === 'error' ? 'error' : 'success'
+  } catch (error) {
+    syncMessage.value = error.response?.data?.message || 'Sinkronisasi produk TikTok gagal.'
+    syncTone.value = 'error'
+  } finally {
+    syncingProductId.value = ''
+  }
 }
 
 onMounted(loadData)

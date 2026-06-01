@@ -91,15 +91,15 @@ export const omnichannelService = {
     return api.get('/omnichannel/dashboard')
   },
 
-  shopeeItems(sync = false) {
+  shopeeItems(sync = false, params = {}) {
     return api.get('/get-shopee-items', {
-      params: sync ? { sync: 1 } : {}
+      params: { ...(sync ? { sync: 1 } : {}), ...params }
     })
   },
 
-  tiktokItems(sync = false) {
+  tiktokItems(sync = false, params = {}) {
     return api.get('/get-tiktok-items', {
-      params: sync ? { sync: 1 } : {}
+      params: { ...(sync ? { sync: 1 } : {}), ...params }
     })
   },
 

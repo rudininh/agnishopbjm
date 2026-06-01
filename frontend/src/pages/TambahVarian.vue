@@ -1087,7 +1087,17 @@ const tiktokPresenceLabel = (item) => {
   if (hasTiktokCandidate(item)) return 'Kode variasi cocok, varian TikTok belum ada'
   return 'Produk tidak ada dan variant tidak ada'
 }
-const getGroupKey = (item) => item?.group_key || item?.shopee?.item_id || item?.tiktok?.product_id || item?.product_name || item?.internal_sku || ''
+const getGroupKey = (item) => {
+  if (!item) return ''
+
+  const shopeeItemId = resolveShopeeItemId(item)
+  const tiktokProductId = resolveTiktokProductId(item)
+
+  if (!isShopeeFlow.value && shopeeItemId) return `shopee:${shopeeItemId}`
+  if (isShopeeFlow.value && tiktokProductId) return `tiktok:${tiktokProductId}`
+
+  return item?.group_key || (shopeeItemId ? `shopee:${shopeeItemId}` : '') || (tiktokProductId ? `tiktok:${tiktokProductId}` : '') || item?.product_name || item?.internal_sku || ''
+}
 const normalizeSelectionId = (value) => String(value ?? '').trim()
 const isVariantSelected = (item) => selectedVariantIds.value.includes(normalizeSelectionId(item?.id))
 const resolveGroupTiktokProductId = (group) => {
@@ -2231,6 +2241,11 @@ const buildAddVariantRequestPreview = () => {
   productBody.category_version = 'v2'
   productBody.title = productTitle
   productBody.skus = [...existingSkus, ...generatedSkus]
+  const tiktokImageUri = findExistingTiktokImageUri(
+    productBody,
+    existingSkus,
+    addVariantTool.color_name || selectedSources[0]?.variant_name || ''
+  )
 
   if (!Array.isArray(productBody.category_chains) || productBody.category_chains.length === 0) {
     productBody.category_chains = [

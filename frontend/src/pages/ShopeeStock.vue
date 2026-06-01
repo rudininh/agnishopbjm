@@ -162,7 +162,9 @@
                 <td>
                   <div class="actions">
                     <button title="Lihat varian" @click="toggle(item.item_id)">{{ expanded[item.item_id] ? 'Hide' : 'Show' }}</button>
-                    <button title="Refresh produk" @click="loadData">Sync</button>
+                    <button title="Refresh produk ini" @click="syncProduct(item)" :disabled="syncingItemId === item.item_id">
+                      {{ syncingItemId === item.item_id ? 'Syncing...' : 'Sync' }}
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -176,7 +178,10 @@
                         <span v-else class="variant-thumb-fallback">{{ initials(model.name) }}</span>
                         <span>{{ model.name || 'Tanpa Varian' }}</span>
                       </span>
-                      <span>Kode Variasi: {{ variationCode(item, model) }}</span>
+                      <span class="variant-code">
+                        <code>{{ variationCode(item, model) }}</code>
+                        <button type="button" title="Copy SKU" @click="copyVariationCode(item, model)" :disabled="!variationCode(item, model)">Copy</button>
+                      </span>
                       <span>SKU ID: {{ model.model_id || '-' }}</span>
                       <span class="variant-price">
                         <small v-if="modelHasDiscount(model)" class="original-price">Harga asli: {{ formatCurrency(modelOriginalPrice(model)) }}</small>
@@ -212,12 +217,14 @@ import { omnichannelService } from '@/services'
 const items = ref([])
 const expanded = ref({})
 const loading = ref(false)
+const syncingItemId = ref('')
 const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
 const brokenImages = ref({})
 const syncMessage = ref('')
 const syncTone = ref('info')
+const copyTimer = ref(null)
 const filters = reactive({
   store: 'all',
   status: 'all',
@@ -309,6 +316,37 @@ const variationCode = (item, model) => {
   if (modelSku.toUpperCase().startsWith('INT-')) return modelSku
   return model?.kode_variasi || `INT-${item?.item_id || 'ITEM'}-${skuFragment(model?.name)}`
 }
+const copyText = async (value) => {
+  const text = String(value || '').trim()
+  if (!text) return
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+
+    syncMessage.value = `SKU disalin: ${text}`
+    syncTone.value = 'success'
+    clearTimeout(copyTimer.value)
+    copyTimer.value = setTimeout(() => {
+      if (syncMessage.value === `SKU disalin: ${text}`) syncMessage.value = ''
+    }, 1600)
+  } catch (error) {
+    syncMessage.value = 'SKU belum bisa disalin.'
+    syncTone.value = 'error'
+  }
+}
+const copyVariationCode = (item, model) => copyText(variationCode(item, model))
 const modelSummary = (item) => `${item.models?.length || 0} varian`
 const qualityNote = (item) => isSoldOut(item) ? 'Stok perlu dicek' : 'Produk sedang dijual'
 const rowStatus = (item) => {
@@ -424,6 +462,22 @@ const syncAndLoad = async () => {
   await loadData(true)
 }
 
+const syncProduct = async (item) => {
+  syncingItemId.value = item.item_id
+  syncMessage.value = ''
+  try {
+    const response = await omnichannelService.shopeeItems(true, { item_id: item.item_id })
+    items.value = response.data.items || []
+    syncMessage.value = response.data.sync?.message || response.data.message || ''
+    syncTone.value = response.data.sync?.status === 'error' ? 'error' : 'success'
+  } catch (error) {
+    syncMessage.value = error.response?.data?.message || 'Sinkronisasi produk Shopee gagal.'
+    syncTone.value = 'error'
+  } finally {
+    syncingItemId.value = ''
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -492,6 +546,10 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
+.variant-code { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.variant-code code { color: #0f172a; font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
+.variant-code button:disabled { cursor: not-allowed; opacity: .45; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
 .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
 .pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }
