@@ -64,6 +64,7 @@ Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController:
 Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
 Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);
 Route::post('marketplace/auto-sync/run-safety-check', [MarketplaceAutoSyncController::class, 'runSafetyCheck']);
+Route::post('marketplace/auto-sync/sync-shopee-to-tiktok', [MarketplaceAutoSyncController::class, 'syncShopeeToTiktok']);
 Route::post('webhooks/shopee', [MarketplaceWebhookController::class, 'shopee']);
 Route::post('webhooks/tiktok', [MarketplaceWebhookController::class, 'tiktok']);
 

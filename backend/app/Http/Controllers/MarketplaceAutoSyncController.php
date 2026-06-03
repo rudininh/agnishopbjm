@@ -66,4 +66,11 @@ class MarketplaceAutoSyncController extends Controller
     {
         return response()->json($this->stockConsistencyService->run());
     }
+
+    public function syncShopeeToTiktok(): JsonResponse
+    {
+        set_time_limit(0);
+
+        return response()->json($this->syncService->syncShopeeStocksToTiktok(true));
+    }
 }

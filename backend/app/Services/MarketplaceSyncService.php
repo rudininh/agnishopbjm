@@ -199,6 +199,9 @@ class MarketplaceSyncService
             ->select(
                 'sm.*',
                 'map.seller_sku as mapped_seller_sku',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id as mapped_tiktok_sku_id',
+                'map.tiktok_sku_name as mapped_tiktok_sku_name',
                 'spm.stock as shopee_stock',
                 'spm.model_sku as shopee_model_sku',
                 'tp.stock_qty as tiktok_stock',
@@ -229,12 +232,101 @@ class MarketplaceSyncService
             ->select(
                 'sm.*',
                 'map.seller_sku as mapped_seller_sku',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id as mapped_tiktok_sku_id',
+                'map.tiktok_sku_name as mapped_tiktok_sku_name',
                 'spm.stock as shopee_stock',
                 'tp.stock_qty as tiktok_stock'
             )
             ->orderBy('sm.product_name')
             ->orderBy('sm.variant_name')
             ->get();
+    }
+
+    public function syncShopeeStocksToTiktok(bool $forceLive = false): array
+    {
+        $summary = [
+            'status' => 'success',
+            'message' => 'Sinkronisasi stok Shopee ke TikTok selesai.',
+            'checked' => 0,
+            'pushed' => 0,
+            'unchanged' => 0,
+            'skipped' => 0,
+            'skipped_inactive_tiktok' => 0,
+            'skipped_missing_shopee_stock' => 0,
+            'skipped_missing_tiktok_sku' => 0,
+            'failed' => 0,
+            'live_push' => $forceLive || $this->livePushEnabled(),
+        ];
+
+        foreach ($this->activeSkuMappings() as $mapping) {
+            $summary['checked']++;
+            $sku = $this->canonicalSku($mapping);
+            $shopeeStock = $mapping->shopee_stock === null ? null : (int) $mapping->shopee_stock;
+            $tiktokStock = $mapping->tiktok_stock === null ? null : (int) $mapping->tiktok_stock;
+
+            if ($shopeeStock === null) {
+                $summary['skipped']++;
+                $summary['skipped_missing_shopee_stock']++;
+                $this->logSync('manual_shopee_master', 'tiktok', $sku, $tiktokStock, null, 'skipped', 'Dilewati: stok Shopee tidak tersedia di cache.');
+                continue;
+            }
+
+            $tiktokSku = $this->resolveTiktokSku($mapping);
+            if (! $tiktokSku) {
+                $summary['skipped']++;
+                $inactiveTiktokSku = $this->resolveTiktokSku($mapping, false);
+                $message = $inactiveTiktokSku
+                    ? 'Dilewati: SKU TikTok ditemukan tetapi statusnya nonaktif.'
+                    : 'Dilewati: SKU TikTok aktif tidak ditemukan.';
+                if ($inactiveTiktokSku) {
+                    $summary['skipped_inactive_tiktok']++;
+                } else {
+                    $summary['skipped_missing_tiktok_sku']++;
+                }
+                $this->logSync('manual_shopee_master', 'tiktok', $sku, $tiktokStock, $shopeeStock, 'skipped', $message);
+                continue;
+            }
+            $mapping->tiktok_product_id = (string) $tiktokSku->product_id;
+            $mapping->tiktok_sku = (string) $tiktokSku->sku_id;
+            $mapping->tiktok_stock = $tiktokSku->stock_qty === null ? $tiktokStock : (int) $tiktokSku->stock_qty;
+            $tiktokStock = $mapping->tiktok_stock;
+
+            if ($tiktokStock !== null && $tiktokStock === $shopeeStock) {
+                $summary['unchanged']++;
+                $this->logSync('manual_shopee_master', 'tiktok', $sku, $tiktokStock, $shopeeStock, 'success', 'Manual Shopee -> TikTok: stok sudah sama, tidak perlu push.');
+                continue;
+            }
+
+            $pushResult = $this->pushTargetStock($mapping, 'tiktok', $shopeeStock, $forceLive);
+            $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : 'success';
+            if ($status === 'error') {
+                $summary['failed']++;
+            } else {
+                $summary['pushed']++;
+                $this->updateLocalStock($mapping, 'tiktok', $shopeeStock);
+            }
+
+            $this->logSync(
+                'manual_shopee_master',
+                'tiktok',
+                $sku,
+                $tiktokStock,
+                $shopeeStock,
+                $status,
+                sprintf('Manual Shopee -> TikTok: stok TikTok %s -> %s. %s', $tiktokStock ?? '-', $shopeeStock, $pushResult['message'] ?? '-')
+            );
+        }
+
+        if ($summary['failed'] > 0) {
+            $summary['status'] = 'warning';
+            $summary['message'] = 'Sinkronisasi selesai, tetapi sebagian SKU gagal dipush ke TikTok.';
+        }
+
+        $this->updateStatus('shopee', ['last_sync_at' => now(), 'status' => 'connected']);
+        $this->updateStatus('tiktok', ['last_sync_at' => now(), 'status' => $summary['failed'] > 0 ? 'disconnected' : 'connected']);
+
+        return $summary;
     }
 
     public function updateLocalStock(object $mapping, string $marketplace, int $stock): void
@@ -299,9 +391,9 @@ class MarketplaceSyncService
         DB::table('marketplace_sync_status')->updateOrInsert(['marketplace' => $marketplace], $payload);
     }
 
-    public function pushTargetStock(object $mapping, string $targetMarketplace, int $stock): array
+    public function pushTargetStock(object $mapping, string $targetMarketplace, int $stock, bool $forceLive = false): array
     {
-        if (! $this->livePushEnabled()) {
+        if (! $forceLive && ! $this->livePushEnabled()) {
             return [
                 'status' => 'dry_run',
                 'message' => 'Live push disabled (AUTO_SYNC_PUSH_LIVE=false); stok baru disimpan ke cache lokal.',
@@ -386,29 +478,15 @@ class MarketplaceSyncService
         $productId = trim((string) ($mapping->tiktok_product_id ?? ''));
         $skuId = trim((string) ($mapping->tiktok_sku ?? ''));
         $warehouseId = trim((string) env('TIKTOK_DEFAULT_WAREHOUSE_ID', ''));
-        if ($productId === '' || $skuId === '' || $warehouseId === '') {
-            return ['status' => 'error', 'message' => 'Push TikTok gagal: product_id/sku_id/warehouse_id belum lengkap.'];
+        if ($warehouseId === '') {
+            return ['status' => 'error', 'message' => 'Push TikTok gagal: warehouse_id belum lengkap.'];
         }
-        $activeSku = DB::table('tiktok_products')
-            ->where('product_id', $productId)
-            ->where('sku_id', $skuId)
-            ->whereRaw('COALESCE(is_active, true) = true')
-            ->first();
-        if (! $activeSku) {
-            $variantName = trim((string) ($mapping->variant_name ?? ''));
-            $activeSku = DB::table('tiktok_products')
-                ->where('product_id', $productId)
-                ->whereRaw('LOWER(sku_name) = ?', [mb_strtolower($variantName)])
-                ->whereRaw('COALESCE(is_active, true) = true')
-                ->orderByDesc('updated_at')
-                ->first();
-            if ($activeSku) {
-                $skuId = (string) $activeSku->sku_id;
-            }
-        }
+        $activeSku = $this->resolveTiktokSku($mapping);
         if (! $activeSku) {
             return ['status' => 'error', 'message' => 'Push TikTok dibatalkan: SKU TikTok aktif tidak ditemukan di cache.'];
         }
+        $productId = (string) $activeSku->product_id;
+        $skuId = (string) $activeSku->sku_id;
 
         $token = DB::table('tiktok_tokens')
             ->whereRaw('COALESCE(is_active, true) = true')
@@ -466,6 +544,65 @@ class MarketplaceSyncService
         }
 
         return ['status' => 'success', 'message' => 'Live push TikTok berhasil dikirim.'];
+    }
+
+    private function resolveTiktokSku(object $mapping, bool $activeOnly = true): ?object
+    {
+        $activeCondition = $activeOnly ? 'COALESCE(is_active, true) = true' : 'COALESCE(is_active, true) = false';
+        $productId = trim((string) ($mapping->tiktok_product_id ?? $mapping->mapped_tiktok_product_id ?? ''));
+        $skuId = trim((string) ($mapping->tiktok_sku ?? $mapping->mapped_tiktok_sku_id ?? ''));
+        if ($productId !== '' && $skuId !== '') {
+            $activeSku = DB::table('tiktok_products')
+                ->where('product_id', $productId)
+                ->where('sku_id', $skuId)
+                ->whereRaw($activeCondition)
+                ->first();
+            if ($activeSku) {
+                return $activeSku;
+            }
+        }
+
+        $sellerSkus = array_values(array_unique(array_filter(array_map(
+            fn ($value): string => trim((string) $value),
+            [
+                $mapping->internal_sku ?? null,
+                $mapping->mapped_seller_sku ?? null,
+                $mapping->tiktok_seller_sku ?? null,
+                $mapping->shopee_seller_sku ?? null,
+            ]
+        ))));
+        if ($sellerSkus !== []) {
+            $activeSku = DB::table('tiktok_products')
+                ->whereIn('seller_sku', $sellerSkus)
+                ->whereRaw($activeCondition)
+                ->orderByDesc('updated_at')
+                ->first();
+            if ($activeSku) {
+                return $activeSku;
+            }
+        }
+
+        $productName = $this->normalizeSkuMatchValue((string) ($mapping->product_name ?? ''));
+        $variantName = $this->normalizeSkuMatchValue((string) ($mapping->variant_name ?? $mapping->mapped_tiktok_sku_name ?? ''));
+        if ($productName === '' || $variantName === '') {
+            return null;
+        }
+
+        return DB::table('tiktok_products')
+            ->whereRaw($activeCondition)
+            ->whereRaw('LOWER(product_name) = ?', [mb_strtolower((string) ($mapping->product_name ?? ''))])
+            ->get()
+            ->first(function ($row) use ($variantName): bool {
+                return $this->normalizeSkuMatchValue((string) ($row->sku_name ?? '')) === $variantName;
+            });
+    }
+
+    private function normalizeSkuMatchValue(mixed $value): string
+    {
+        $value = strtolower(trim((string) ($value ?? '')));
+        $value = preg_replace('/[^a-z0-9]+/i', ' ', $value) ?? '';
+
+        return trim(preg_replace('/\s+/', ' ', $value) ?? '');
     }
 
     private function generateTiktokWriteSign(string $path, array $params, string $secret): string

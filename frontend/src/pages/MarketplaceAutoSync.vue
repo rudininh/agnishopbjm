@@ -7,6 +7,9 @@
       </div>
       <div class="header-actions">
         <button class="ghost" type="button" @click="loadAll" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
+        <button class="danger" type="button" @click="syncShopeeToTiktok" :disabled="runningShopeeToTiktok">
+          {{ runningShopeeToTiktok ? 'Sinkron real...' : 'Sync Real Shopee -> TikTok' }}
+        </button>
         <button class="primary" type="button" @click="runSafetyCheck" :disabled="runningSafety">
           {{ runningSafety ? 'Menjalankan...' : 'Run Safety Check Now' }}
         </button>
@@ -95,6 +98,22 @@
     </section>
 
     <section v-if="activeTab === 'sync'" class="panel">
+      <div class="filter-row">
+        <select v-model="syncFilters.marketplace" @change="loadSyncLogs(1)">
+          <option value="">Semua marketplace</option>
+          <option value="shopee">Shopee</option>
+          <option value="tiktok">TikTok</option>
+          <option value="manual_shopee_master">Manual Shopee Master</option>
+          <option value="safety_check">Safety Check</option>
+        </select>
+        <select v-model="syncFilters.status" @change="loadSyncLogs(1)">
+          <option value="">Semua status</option>
+          <option value="success">Success</option>
+          <option value="skipped">Skipped</option>
+          <option value="error">Error</option>
+        </select>
+        <input v-model="syncFilters.date" type="date" @change="loadSyncLogs(1)" />
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Time</th><th>Source Marketplace</th><th>Target Marketplace</th><th>SKU</th><th>Old Stock</th><th>New Stock</th><th>Status</th><th>Message</th></tr></thead>
@@ -149,6 +168,7 @@ import { omnichannelService } from '@/services'
 
 const loading = ref(false)
 const runningSafety = ref(false)
+const runningShopeeToTiktok = ref(false)
 const activeTab = ref('webhook')
 const notice = ref('')
 const noticeType = ref('success')
@@ -159,6 +179,7 @@ const webhookPagination = ref({ page: 1, last_page: 1, total: 0 })
 const syncPagination = ref({ page: 1, last_page: 1, total: 0 })
 const safety = ref({ summary: {}, items: [], pagination: { page: 1, last_page: 1, total: 0 } })
 const webhookFilters = reactive({ marketplace: '', status: '', date: '' })
+const syncFilters = reactive({ marketplace: '', status: '', date: '' })
 
 const Pagination = defineComponent({
   props: { pagination: { type: Object, required: true } },
@@ -178,6 +199,7 @@ const labelMarketplace = (value) => {
   if (text === 'shopee') return 'Shopee'
   if (text === 'tiktok') return 'TikTok'
   if (text === 'safety_check') return 'Safety Check'
+  if (text === 'manual_shopee_master') return 'Manual Shopee Master'
   if (text === 'all') return 'Shopee + TikTok'
   return text
 }
@@ -195,7 +217,7 @@ const loadWebhookLogs = async (page = webhookPagination.value.page || 1) => {
 }
 
 const loadSyncLogs = async (page = syncPagination.value.page || 1) => {
-  const { data } = await omnichannelService.autoSyncLogs({ page, per_page: 20 })
+  const { data } = await omnichannelService.autoSyncLogs({ ...syncFilters, page, per_page: 20 })
   syncLogs.value = data.items || []
   syncPagination.value = data.pagination || syncPagination.value
 }
@@ -239,6 +261,36 @@ const runSafetyCheck = async () => {
   }
 }
 
+const syncShopeeToTiktok = async () => {
+  const confirmed = window.confirm('Sinkron real semua stok TikTok mengikuti Shopee sekarang? Aksi ini akan mengirim update stok ke TikTok.')
+  if (!confirmed) return
+
+  runningShopeeToTiktok.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.syncAutoSyncShopeeToTiktok()
+    const parts = [
+      data.message || 'Sinkron Shopee ke TikTok selesai.',
+      `Dicek: ${data.checked || 0}`,
+      `Dikirim: ${data.pushed || 0}`,
+      `Sama: ${data.unchanged || 0}`,
+      `Dilewati: ${data.skipped || 0}`,
+      `Nonaktif TikTok: ${data.skipped_inactive_tiktok || 0}`,
+      `Stok Shopee kosong: ${data.skipped_missing_shopee_stock || 0}`,
+      `Gagal: ${data.failed || 0}`
+    ]
+    notice.value = parts.join(' | ')
+    noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
+    await Promise.all([loadDashboard(), loadSyncLogs(1), loadSafety(1)])
+    activeTab.value = 'sync'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Sinkron Shopee ke TikTok gagal dijalankan.'
+    noticeType.value = 'error'
+  } finally {
+    runningShopeeToTiktok.value = false
+  }
+}
+
 onMounted(loadAll)
 </script>
 
@@ -251,6 +303,7 @@ onMounted(loadAll)
 button { border:0; border-radius:6px; padding:9px 13px; font-weight:700; cursor:pointer; }
 button:disabled { opacity:.6; cursor:not-allowed; }
 .primary { background:#0f5fc7; color:#fff; }
+.danger { background:#b91c1c; color:#fff; }
 .ghost { background:#fff; color:#0f172a; border:1px solid #dbe3ef; }
 .notice { border-radius:6px; padding:10px 12px; margin-bottom:14px; border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; }
 .notice.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
