@@ -195,6 +195,10 @@ export const omnichannelService = {
     return api.post('/marketplace/auto-sync/run-safety-check')
   },
 
+  syncAutoSyncShopeeToTiktok() {
+    return api.post('/marketplace/auto-sync/sync-shopee-to-tiktok')
+  },
+
   syncShopeeToTiktok() {
     return api.post('/sync-shopee-to-tiktok')
   },
