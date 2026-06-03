@@ -19,6 +19,10 @@
       <RouterLink to="/analisa-product-variant">Analisa Product & Variant</RouterLink>
       <RouterLink to="/detail-produk-marketplace">Detail Produk</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
+      <div class="menu-group">
+        <span>Marketplace</span>
+        <RouterLink to="/marketplace/auto-sync">Sinkronisasi Otomatis</RouterLink>
+      </div>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
       <RouterLink to="/dokumentasi-tiktok">Dokumentasi TikTok</RouterLink>
     </nav>
@@ -92,6 +96,21 @@ import { RouterLink } from 'vue-router'
 .menu a:hover,
 .menu a.router-link-active {
   background: rgba(255, 255, 255, .16);
+}
+
+.menu-group {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.menu-group span {
+  color: #bfdbfe;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  padding: 8px 12px 0;
+  text-transform: uppercase;
 }
 
 .logout {
