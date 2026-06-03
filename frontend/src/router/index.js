@@ -12,6 +12,7 @@ import DetailProdukMarketplace from '@/pages/DetailProdukMarketplace.vue'
 import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
 import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
+import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
 
 const routes = [
   {
@@ -78,6 +79,11 @@ const routes = [
     path: '/sync-shopee-to-tiktok',
     name: 'sync-shopee-to-tiktok',
     component: SyncShopeeTiktok
+  },
+  {
+    path: '/marketplace/auto-sync',
+    name: 'marketplace-auto-sync',
+    component: MarketplaceAutoSync
   },
   {
     path: '/dokumentasi-shopee',

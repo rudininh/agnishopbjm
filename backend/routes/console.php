@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\OmnichannelController;
+use App\Services\StockConsistencyService;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 
@@ -20,5 +21,19 @@ Artisan::command('sku-mapping:sync-marketplaces', function (): int {
 });
 
 Schedule::command('sku-mapping:sync-marketplaces')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping();
+
+Artisan::command('sync:safety-check', function (): int {
+    $result = app(StockConsistencyService::class)->run();
+
+    $this->info($result['message'] ?? 'Safety check selesai.');
+    $this->line('Total checked: '.($result['total_checked'] ?? 0));
+    $this->line('Total corrected: '.($result['total_corrected'] ?? 0));
+
+    return ($result['status'] ?? 'ok') === 'ok' ? 0 : 1;
+});
+
+Schedule::command('sync:safety-check')
     ->everyFifteenMinutes()
     ->withoutOverlapping();

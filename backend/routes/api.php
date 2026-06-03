@@ -3,6 +3,8 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CartController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\MarketplaceAutoSyncController;
+use App\Http\Controllers\MarketplaceWebhookController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OmnichannelController;
 use App\Http\Controllers\ProductController;
@@ -57,6 +59,13 @@ Route::post('shopee/api-test', [OmnichannelController::class, 'shopeeApiTest']);
 Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiTestContext']);
 Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::match(['get', 'post'], 'sync-shopee-to-tiktok', [OmnichannelController::class, 'syncShopeeToTiktok']);
+Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
+Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController::class, 'webhookLogs']);
+Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
+Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);
+Route::post('marketplace/auto-sync/run-safety-check', [MarketplaceAutoSyncController::class, 'runSafetyCheck']);
+Route::post('webhooks/shopee', [MarketplaceWebhookController::class, 'shopee']);
+Route::post('webhooks/tiktok', [MarketplaceWebhookController::class, 'tiktok']);
 
 Route::prefix('auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);

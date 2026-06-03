@@ -175,6 +175,26 @@ export const omnichannelService = {
     })
   },
 
+  autoSyncDashboard() {
+    return api.get('/marketplace/auto-sync')
+  },
+
+  autoSyncWebhookLogs(params = {}) {
+    return api.get('/marketplace/auto-sync/webhook-logs', { params })
+  },
+
+  autoSyncLogs(params = {}) {
+    return api.get('/marketplace/auto-sync/sync-logs', { params })
+  },
+
+  autoSyncSafety(params = {}) {
+    return api.get('/marketplace/auto-sync/safety-check', { params })
+  },
+
+  runAutoSyncSafetyCheck() {
+    return api.post('/marketplace/auto-sync/run-safety-check')
+  },
+
   syncShopeeToTiktok() {
     return api.post('/sync-shopee-to-tiktok')
   },
