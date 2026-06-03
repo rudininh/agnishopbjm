@@ -30,6 +30,11 @@ class MarketplaceSyncService
                 'last_run' => $this->lastSafetyRun(),
                 'next_run' => $this->nextSafetyRun(),
             ],
+            'order_sync' => $this->orderSyncSummary($today),
+            'webhook_urls' => [
+                'shopee' => url('/api/webhooks/shopee'),
+                'tiktok' => url('/api/webhooks/tiktok'),
+            ],
         ];
     }
 
@@ -79,6 +84,167 @@ class MarketplaceSyncService
             ->orderByDesc('id');
 
         return $this->paginateQuery($query, $page, $perPage);
+    }
+
+    public function orderSyncHistory(array $filters = [], int $page = 1, int $perPage = 20): array
+    {
+        $query = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
+
+        $this->applyOrderSyncFilters($query, $filters);
+
+        return [
+            'summary' => $this->orderSyncSummary(Carbon::today()),
+            ...$this->paginateQuery($query, $page, $perPage),
+        ];
+    }
+
+    public function orderSyncExportRows(array $filters = [], int $limit = 5000)
+    {
+        $query = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
+
+        $this->applyOrderSyncFilters($query, $filters);
+
+        return $query->limit(min(5000, max(1, $limit)))->get();
+    }
+
+    public function orderSyncDetail(int $logId): array
+    {
+        $log = DB::table('marketplace_sync_logs')->where('id', $logId)->first();
+        if (! $log) {
+            return ['status' => 'error', 'message' => 'Log order sync tidak ditemukan.'];
+        }
+
+        $orderRef = $this->extractOrderReference($log);
+        $relatedQuery = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->orderBy('created_at')
+            ->orderBy('id');
+        if ($orderRef !== '') {
+            $relatedQuery->where(function ($query) use ($orderRef): void {
+                $query->where('sku', $orderRef)
+                    ->orWhere('message', 'like', '%'.$orderRef.'%');
+            });
+        } else {
+            $relatedQuery->where('id', $logId);
+        }
+
+        $related = $relatedQuery->limit(200)->get();
+        $order = null;
+        if ($orderRef !== '' && ($log->source_marketplace === 'shopee_order' || $related->contains('source_marketplace', 'shopee_order'))) {
+            $detail = $this->apiService->fetchShopeeOrderDetail($orderRef);
+            if (($detail['status'] ?? '') === 'success') {
+                $order = $this->formatShopeeOrderDetail($detail['order']);
+            }
+        }
+        if ($orderRef !== '' && $order === null && ($log->source_marketplace === 'tiktok_order' || $related->contains('source_marketplace', 'tiktok_order'))) {
+            $detail = $this->apiService->fetchTiktokOrderDetail($orderRef);
+            if (($detail['status'] ?? '') === 'success') {
+                $order = $this->formatTiktokOrderDetail($detail['order']);
+            }
+        }
+
+        return [
+            'status' => 'ok',
+            'order_ref' => $orderRef,
+            'log' => $log,
+            'order' => $order,
+            'stock_updates' => $related->map(fn ($row): array => [
+                'id' => $row->id,
+                'time' => $row->created_at,
+                'type' => $row->source_marketplace,
+                'target' => $row->target_marketplace,
+                'sku' => $row->sku,
+                'old_stock' => $row->old_stock,
+                'new_stock' => $row->new_stock,
+                'status' => $row->status,
+                'message' => $row->message,
+            ])->values(),
+        ];
+    }
+
+    public function orderReferenceFromLog(object $log): string
+    {
+        return $this->extractOrderReference($log);
+    }
+
+    private function extractOrderReference(object $log): string
+    {
+        if (in_array($log->source_marketplace, ['shopee_order', 'tiktok_order'], true)) {
+            return trim((string) $log->sku);
+        }
+
+        if (preg_match('/(?:Shopee|TikTok) order ([A-Z0-9]+)/i', (string) $log->message, $matches)) {
+            return $matches[1];
+        }
+
+        return '';
+    }
+
+    private function formatShopeeOrderDetail(array $order): array
+    {
+        $items = [];
+        foreach (($order['item_list'] ?? []) as $item) {
+            $items[] = [
+                'product_name' => $item['item_name'] ?? '-',
+                'variant_name' => $item['model_name'] ?? '-',
+                'qty' => (int) ($item['model_quantity_purchased'] ?? $item['active_qty'] ?? 0),
+                'item_id' => (string) ($item['item_id'] ?? ''),
+                'model_id' => (string) ($item['model_id'] ?? ''),
+                'seller_sku' => (string) ($item['model_sku'] ?? $item['item_sku'] ?? ''),
+                'image_url' => data_get($item, 'image_info.image_url'),
+            ];
+        }
+
+        return [
+            'order_sn' => $order['order_sn'] ?? null,
+            'order_status' => $order['order_status'] ?? null,
+            'create_time' => isset($order['create_time']) ? Carbon::createFromTimestamp((int) $order['create_time'])->toDateTimeString() : null,
+            'update_time' => isset($order['update_time']) ? Carbon::createFromTimestamp((int) $order['update_time'])->toDateTimeString() : null,
+            'items' => $items,
+        ];
+    }
+
+    private function formatTiktokOrderDetail(array $order): array
+    {
+        $items = [];
+        foreach (data_get($order, 'line_items', data_get($order, 'items', [])) as $item) {
+            $items[] = [
+                'product_name' => $item['product_name'] ?? '-',
+                'variant_name' => $item['sku_name'] ?? data_get($item, 'sku.name', '-'),
+                'qty' => (int) ($item['quantity'] ?? data_get($item, 'sku.quantity', 1)),
+                'item_id' => (string) ($item['product_id'] ?? ''),
+                'model_id' => (string) ($item['sku_id'] ?? data_get($item, 'sku.id', '')),
+                'seller_sku' => (string) ($item['seller_sku'] ?? data_get($item, 'sku.seller_sku', '')),
+                'image_url' => $item['sku_image'] ?? data_get($item, 'sku.image_url'),
+            ];
+        }
+
+        return [
+            'order_sn' => $order['id'] ?? $order['order_id'] ?? null,
+            'order_status' => $order['status'] ?? $order['order_status'] ?? data_get($order, 'line_items.0.display_status'),
+            'create_time' => isset($order['create_time']) ? Carbon::createFromTimestamp((int) $order['create_time'])->toDateTimeString() : null,
+            'update_time' => isset($order['update_time']) ? Carbon::createFromTimestamp((int) $order['update_time'])->toDateTimeString() : null,
+            'items' => $items,
+        ];
+    }
+
+    private function applyOrderSyncFilters($query, array $filters): void
+    {
+        if (($filters['status'] ?? '') !== '') {
+            $query->where('status', $filters['status']);
+        }
+        if (($filters['date'] ?? '') !== '') {
+            $query->whereDate('created_at', $filters['date']);
+        }
+        if (($filters['type'] ?? '') !== '') {
+            $query->where('source_marketplace', $filters['type']);
+        }
     }
 
     public function safetySummary(): array
@@ -196,9 +362,12 @@ class MarketplaceSyncService
                 $query->where('sm.internal_sku', $sku)
                     ->orWhere('sm.shopee_seller_sku', $sku)
                     ->orWhere('sm.tiktok_seller_sku', $sku)
+                    ->orWhere('sm.tiktok_sku', $sku)
                     ->orWhere('map.seller_sku', $sku)
+                    ->orWhere('map.tiktok_sku_id', $sku)
                     ->orWhere('spm.model_sku', $sku)
-                    ->orWhere('tp.seller_sku', $sku);
+                    ->orWhere('tp.seller_sku', $sku)
+                    ->orWhere('tp.sku_id', $sku);
             })
             ->select(
                 'sm.*',
@@ -523,6 +692,80 @@ class MarketplaceSyncService
     private function livePushEnabled(): bool
     {
         return filter_var(env('AUTO_SYNC_PUSH_LIVE', false), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function orderSyncSummary(Carbon $today): array
+    {
+        $lastOrderSync = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->max('created_at');
+        $lastError = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->where('status', 'error')
+            ->max('created_at');
+        $latestIssue = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('status', ['error', 'skipped'])
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->first();
+        $openIssueQuery = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('status', ['error', 'skipped']);
+        if ($lastOrderSync) {
+            $openIssueQuery->where('created_at', '>', $lastOrderSync);
+        } else {
+            $openIssueQuery->whereDate('created_at', $today);
+        }
+        $latestOpenIssue = (clone $openIssueQuery)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->first();
+
+        return [
+            'status' => $lastError && (! $lastOrderSync || $lastError >= $lastOrderSync) ? 'warning' : 'active',
+            'polling_interval' => 'Shopee + TikTok Every 5 Minutes',
+            'last_order_sync_at' => $lastOrderSync ? (string) $lastOrderSync : null,
+            'last_error_at' => $lastError ? (string) $lastError : null,
+            'open_issues' => (int) (clone $openIssueQuery)->count(),
+            'latest_open_issue_at' => $latestOpenIssue?->created_at ? (string) $latestOpenIssue->created_at : null,
+            'latest_open_issue_status' => $latestOpenIssue?->status,
+            'latest_open_issue_message' => $latestOpenIssue?->message,
+            'errors_today' => (int) DB::table('marketplace_sync_logs')
+                ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+                ->where('status', 'error')
+                ->whereDate('created_at', $today)
+                ->count(),
+            'skipped_today' => (int) DB::table('marketplace_sync_logs')
+                ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+                ->where('status', 'skipped')
+                ->whereDate('created_at', $today)
+                ->count(),
+            'latest_issue_at' => $latestIssue?->created_at ? (string) $latestIssue->created_at : null,
+            'latest_issue_status' => $latestIssue?->status,
+            'latest_issue_message' => $latestIssue?->message,
+            'shopee_orders_processed_today' => (int) DB::table('marketplace_sync_logs')
+                ->where('source_marketplace', 'shopee_order')
+                ->where('status', 'success')
+                ->whereDate('created_at', $today)
+                ->count(),
+            'tiktok_orders_processed_today' => (int) DB::table('marketplace_sync_logs')
+                ->where('source_marketplace', 'tiktok_order')
+                ->where('status', 'success')
+                ->whereDate('created_at', $today)
+                ->count(),
+            'stock_pushes_today' => (int) DB::table('marketplace_sync_logs')
+                ->where('source_marketplace', 'shopee_stock_refresh')
+                ->where('status', 'success')
+                ->whereDate('created_at', $today)
+                ->count(),
+            'tiktok_to_shopee_pushes_today' => (int) DB::table('marketplace_sync_logs')
+                ->where('source_marketplace', 'tiktok_order')
+                ->where('target_marketplace', 'shopee')
+                ->where('status', 'success')
+                ->whereDate('created_at', $today)
+                ->count(),
+        ];
     }
 
     private function pushShopeeStock(object $mapping, int $stock): array

@@ -53,3 +53,18 @@ Artisan::command('sync:shopee-orders {--hours=24}', function (): int {
 Schedule::command('sync:shopee-orders --hours=24')
     ->everyFiveMinutes()
     ->withoutOverlapping();
+
+Artisan::command('sync:tiktok-orders {--hours=24}', function (): int {
+    $result = app(MarketplaceOrderSyncService::class)->pollTiktokUpdatedOrders((int) $this->option('hours'));
+
+    $this->info($result['message'] ?? 'Polling order TikTok selesai.');
+    foreach ($result['messages'] ?? [] as $message) {
+        $this->line($message);
+    }
+
+    return ($result['status'] ?? 'success') === 'success' ? 0 : 1;
+});
+
+Schedule::command('sync:tiktok-orders --hours=24')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();

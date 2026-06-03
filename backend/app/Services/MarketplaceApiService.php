@@ -116,35 +116,27 @@ class MarketplaceApiService
 
     public function fetchTiktokOrderDetail(string $orderId): array
     {
-        $token = DB::table('tiktok_tokens')
-            ->whereRaw('COALESCE(is_active, true) = true')
-            ->orderByDesc('created_at')
-            ->first();
-        $shop = DB::table('tiktok_shops')->orderByDesc('updated_at')->first();
-        if (! $token || trim((string) $token->access_token) === '') {
-            return ['status' => 'error', 'message' => 'Token TikTok aktif belum tersedia.'];
-        }
-        $shopCipher = trim((string) ($shop->cipher ?? $shop->shop_cipher ?? ''));
-        if ($shopCipher === '') {
-            return ['status' => 'error', 'message' => 'shop_cipher TikTok belum tersedia.'];
+        $context = $this->activeTiktokContext();
+        if (($context['status'] ?? '') !== 'success') {
+            return $context;
         }
 
-        $config = config('tiktok');
-        $path = '/order/202309/orders/'.$orderId;
+        $path = '/order/202309/orders';
         $query = [
-            'app_key' => $config['app_key'],
-            'access_token' => (string) $token->access_token,
-            'shop_cipher' => $shopCipher,
+            'app_key' => $context['config']['app_key'],
+            'access_token' => $context['access_token'],
+            'shop_cipher' => $context['shop_cipher'],
             'timestamp' => time(),
+            'ids' => $orderId,
         ];
-        $query['sign'] = $this->generateTiktokSign($path, $query, (string) $config['app_secret']);
+        $query['sign'] = $this->generateTiktokSign($path, $query, (string) $context['config']['app_secret']);
 
         $response = Http::timeout(45)
             ->withHeaders([
-                'x-tts-access-token' => (string) $token->access_token,
+                'x-tts-access-token' => $context['access_token'],
                 'Accept' => 'application/json',
             ])
-            ->get($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+            ->get($context['config']['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
         $payload = $response->json();
 
         if (! is_array($payload) || (int) ($payload['code'] ?? -1) !== 0) {
@@ -156,7 +148,78 @@ class MarketplaceApiService
             ];
         }
 
-        return ['status' => 'success', 'order' => data_get($payload, 'data.order', data_get($payload, 'data')), 'response' => $payload];
+        $orders = data_get($payload, 'data.orders', []);
+        $order = is_array($orders) ? ($orders[0] ?? null) : null;
+        if (! is_array($order)) {
+            $order = data_get($payload, 'data.order', data_get($payload, 'data'));
+        }
+        if (! is_array($order)) {
+            return ['status' => 'error', 'message' => 'Detail order TikTok tidak ditemukan.', 'response' => $payload];
+        }
+
+        return ['status' => 'success', 'order' => $order, 'response' => $payload];
+    }
+
+    public function fetchTiktokOrderList(int $timeFrom, int $timeTo, ?string $orderStatus = null): array
+    {
+        $context = $this->activeTiktokContext();
+        if (($context['status'] ?? '') !== 'success') {
+            return $context;
+        }
+
+        $path = '/order/202309/orders/search';
+        $pageToken = '';
+        $orders = [];
+
+        do {
+            $query = [
+                'app_key' => $context['config']['app_key'],
+                'access_token' => $context['access_token'],
+                'shop_cipher' => $context['shop_cipher'],
+                'timestamp' => time(),
+                'page_size' => 50,
+                'sort_field' => 'update_time',
+                'sort_order' => 'ASC',
+            ];
+            if ($pageToken !== '') {
+                $query['page_token'] = $pageToken;
+            }
+
+            $body = [
+                'update_time_ge' => $timeFrom,
+                'update_time_lt' => $timeTo,
+            ];
+            if ($orderStatus) {
+                $body['order_status'] = $orderStatus;
+            }
+
+            $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $query['sign'] = $this->generateTiktokSign($path, $query, (string) $context['config']['app_secret'], $bodyString);
+
+            $response = Http::timeout(45)
+                ->withHeaders([
+                    'x-tts-access-token' => $context['access_token'],
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                ])
+                ->withBody($bodyString, 'application/json')
+                ->post($context['config']['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+            $payload = $response->json();
+
+            if (! is_array($payload) || (int) ($payload['code'] ?? -1) !== 0) {
+                return [
+                    'status' => 'error',
+                    'message' => is_array($payload) ? ($payload['message'] ?? 'Order list TikTok gagal diambil.') : 'TikTok tidak mengembalikan JSON valid.',
+                    'http_status' => $response->status(),
+                    'response' => $payload,
+                ];
+            }
+
+            $orders = array_merge($orders, data_get($payload, 'data.orders', []));
+            $pageToken = (string) data_get($payload, 'data.next_page_token', '');
+        } while ($pageToken !== '');
+
+        return ['status' => 'success', 'orders' => $orders];
     }
 
     private function activeShopeeToken(): ?object
@@ -195,6 +258,30 @@ class MarketplaceApiService
         }
 
         return [...$data, '_http_status' => $response->status()];
+    }
+
+    private function activeTiktokContext(): array
+    {
+        $token = DB::table('tiktok_tokens')
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->orderByDesc('created_at')
+            ->first();
+        $shop = DB::table('tiktok_shops')->orderByDesc('updated_at')->first();
+        if (! $token || trim((string) $token->access_token) === '') {
+            return ['status' => 'error', 'message' => 'Token TikTok aktif belum tersedia.'];
+        }
+
+        $shopCipher = trim((string) ($shop->cipher ?? $shop->shop_cipher ?? ''));
+        if ($shopCipher === '') {
+            return ['status' => 'error', 'message' => 'shop_cipher TikTok belum tersedia.'];
+        }
+
+        return [
+            'status' => 'success',
+            'access_token' => (string) $token->access_token,
+            'shop_cipher' => $shopCipher,
+            'config' => config('tiktok'),
+        ];
     }
 
     private function generateShopeeApiSign(int $partnerId, string $partnerKey, string $path, int $timestamp, string $accessToken, int $shopId): string

@@ -63,8 +63,14 @@ Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dash
 Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController::class, 'webhookLogs']);
 Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
 Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);
+Route::get('marketplace/auto-sync/order-sync', [MarketplaceAutoSyncController::class, 'orderSync']);
+Route::get('marketplace/auto-sync/order-sync/export', [MarketplaceAutoSyncController::class, 'exportOrderSync']);
+Route::get('marketplace/auto-sync/order-sync/{id}', [MarketplaceAutoSyncController::class, 'orderSyncDetail'])->whereNumber('id');
+Route::post('marketplace/auto-sync/order-sync/{id}/retry', [MarketplaceAutoSyncController::class, 'retryOrderSync'])->whereNumber('id');
 Route::post('marketplace/auto-sync/run-safety-check', [MarketplaceAutoSyncController::class, 'runSafetyCheck']);
 Route::post('marketplace/auto-sync/sync-shopee-to-tiktok', [MarketplaceAutoSyncController::class, 'syncShopeeToTiktok']);
+Route::post('marketplace/auto-sync/poll-shopee-orders', [MarketplaceAutoSyncController::class, 'pollShopeeOrders']);
+Route::post('marketplace/auto-sync/poll-tiktok-orders', [MarketplaceAutoSyncController::class, 'pollTiktokOrders']);
 Route::post('webhooks/shopee', [MarketplaceWebhookController::class, 'shopee']);
 Route::post('webhooks/tiktok', [MarketplaceWebhookController::class, 'tiktok']);
 

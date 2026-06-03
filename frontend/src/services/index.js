@@ -191,12 +191,39 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync/safety-check', { params })
   },
 
+  autoSyncOrderSync(params = {}) {
+    return api.get('/marketplace/auto-sync/order-sync', { params })
+  },
+
+  exportAutoSyncOrderSync(params = {}) {
+    return api.get('/marketplace/auto-sync/order-sync/export', {
+      params,
+      responseType: 'blob'
+    })
+  },
+
+  autoSyncOrderSyncDetail(id) {
+    return api.get(`/marketplace/auto-sync/order-sync/${id}`)
+  },
+
+  retryAutoSyncOrderSync(id) {
+    return api.post(`/marketplace/auto-sync/order-sync/${id}/retry`)
+  },
+
   runAutoSyncSafetyCheck() {
     return api.post('/marketplace/auto-sync/run-safety-check')
   },
 
   syncAutoSyncShopeeToTiktok() {
     return api.post('/marketplace/auto-sync/sync-shopee-to-tiktok')
+  },
+
+  pollAutoSyncShopeeOrders(hours = 24) {
+    return api.post('/marketplace/auto-sync/poll-shopee-orders', { hours })
+  },
+
+  pollAutoSyncTiktokOrders(hours = 24) {
+    return api.post('/marketplace/auto-sync/poll-tiktok-orders', { hours })
   },
 
   syncShopeeToTiktok() {
