@@ -6,8 +6,10 @@ use Illuminate\Http\Request;
 
 class ShopeeWebhookService
 {
-    public function __construct(private readonly MarketplaceSyncService $syncService)
-    {
+    public function __construct(
+        private readonly MarketplaceSyncService $syncService,
+        private readonly MarketplaceOrderSyncService $orderSyncService,
+    ) {
     }
 
     public function handle(Request $request): array
@@ -19,6 +21,14 @@ class ShopeeWebhookService
         }
 
         $eventType = $this->eventType($payload);
+        $orderSn = $this->orderSn($payload);
+        if ($orderSn !== '') {
+            $result = $this->orderSyncService->processShopeeOrder($orderSn, $eventType, $payload);
+            $this->syncService->logWebhook('shopee', $eventType, $orderSn, null, $payload, ($result['status'] ?? '') === 'error' ? 'error' : 'success', $result['message'] ?? null);
+
+            return $result;
+        }
+
         $sku = $this->sku($payload);
         $qty = $this->qty($payload);
 
@@ -60,6 +70,26 @@ class ShopeeWebhookService
             data_get($payload, 'data.items.0.seller_sku'),
             data_get($payload, 'data.item_list.0.model_sku'),
             data_get($payload, 'items.0.seller_sku'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function orderSn(array $payload): string
+    {
+        $candidates = [
+            $payload['order_sn'] ?? null,
+            $payload['ordersn'] ?? null,
+            data_get($payload, 'data.order_sn'),
+            data_get($payload, 'data.ordersn'),
+            data_get($payload, 'data.order_list.0.order_sn'),
         ];
 
         foreach ($candidates as $candidate) {
