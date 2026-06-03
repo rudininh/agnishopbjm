@@ -15,12 +15,12 @@
 
     <div class="summary-grid">
       <article class="metric">
-        <span>Produk</span>
-        <strong>{{ items.length }}</strong>
+        <span>Produk Live</span>
+        <strong>{{ liveCount }}</strong>
       </article>
       <article class="metric">
-        <span>Total SKU</span>
-        <strong>{{ skuCount }}</strong>
+        <span>Total Varian</span>
+        <strong>{{ variantCount }}</strong>
       </article>
       <article class="metric">
         <span>Total Stok</span>
@@ -35,10 +35,18 @@
     <div class="filter-panel">
       <div class="filter-row">
         <label>
+          <span>Stores</span>
+          <select v-model="filters.store">
+            <option value="all">All</option>
+            <option v-for="store in storeOptions" :key="store" :value="store">{{ store }}</option>
+          </select>
+        </label>
+        <label>
           <span>Status</span>
           <select v-model="filters.status">
             <option value="all">Semua Status</option>
             <option value="live">Live</option>
+            <option value="soldout">Sold Out</option>
             <option value="inactive">Tidak Live</option>
           </select>
         </label>
@@ -47,12 +55,11 @@
           <input v-model.number="filters.minimumStock" type="number" min="0" placeholder="0" />
         </label>
         <label>
-          <span>Sort By</span>
-          <select v-model="filters.sort">
-            <option value="updated_desc">Update Time</option>
-            <option value="created_desc">Create Time</option>
-            <option value="stock_desc">Stock</option>
-            <option value="name_asc">Product Name</option>
+          <span>Harga</span>
+          <select v-model="filters.price">
+            <option value="all">Semua Harga</option>
+            <option value="promo">Ada Promo</option>
+            <option value="high">Di atas Rp50.000</option>
           </select>
         </label>
       </div>
@@ -62,12 +69,23 @@
           <span>Search</span>
           <div class="search-box">
             <select v-model="filters.searchBy">
+              <option value="all">Semua</option>
               <option value="name">Product Name</option>
               <option value="sku">SKU</option>
               <option value="product_id">Product ID</option>
             </select>
-            <input v-model.trim="filters.search" type="search" placeholder="Cari produk TikTok" />
+            <input v-model.trim="filters.search" type="search" placeholder="Cari produk / SKU TikTok" />
           </div>
+        </label>
+        <label>
+          <span>Sort By</span>
+          <select v-model="filters.sort">
+            <option value="updated_desc">Update Time</option>
+            <option value="created_desc">Create Time</option>
+            <option value="stock_desc">Stock</option>
+            <option value="sales_desc">Sales</option>
+            <option value="name_asc">Product Name</option>
+          </select>
         </label>
       </div>
     </div>
@@ -75,6 +93,7 @@
     <div class="toolbar">
       <nav class="tabs">
         <button :class="{ active: activeTab === 'live' }" @click="setActiveTab('live')">Live ({{ liveCount }})</button>
+        <button :class="{ active: activeTab === 'soldout' }" @click="setActiveTab('soldout')">Sold Out ({{ soldOutCount }})</button>
         <button :class="{ active: activeTab === 'inactive' }" @click="setActiveTab('inactive')">Tidak Live ({{ inactiveCount }})</button>
         <button :class="{ active: activeTab === 'all' }" @click="setActiveTab('all')">Semua ({{ items.length }})</button>
       </nav>
@@ -84,13 +103,6 @@
     <p v-if="syncMessage" :class="['sync-message', syncTone]">{{ syncMessage }}</p>
 
     <div class="panel">
-      <div class="panel-head">
-        <div>
-          <span>TikTok Shop</span>
-          <strong>AgniShopBJM</strong>
-        </div>
-        <small>{{ lastSyncLabel }}</small>
-      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -116,18 +128,22 @@
                     <div v-else class="thumb-fallback">{{ initials(item.product_name) }}</div>
                     <div>
                       <strong>{{ item.product_name }}</strong>
-                      <small>Product ID: {{ item.product_id }}</small>
-                      <small>SKU: {{ item.skus?.length || 0 }} varian</small>
-                      <span class="store-pill">TikTok Shop AgniShopBJM</span>
+                      <small>Item ID: {{ item.product_id }}</small>
+                      <small>Sales: 0 | Likes: 0</small>
+                      <span class="store-pill">{{ item.shop_name || 'TikTok Shop AgniShopBJM' }}</span>
                     </div>
                   </div>
                 </td>
                 <td>--</td>
                 <td>
-                  <strong>{{ item.skus?.[0]?.sku_name || '--' }}</strong>
+                  <strong>{{ item.skus?.[0]?.seller_sku || variationCode(item, item.skus?.[0]) || '--' }}</strong>
                   <small>{{ skuSummary(item) }}</small>
                 </td>
-                <td>{{ priceRange(item.skus) }}</td>
+                <td>
+                  <div class="price-cell">
+                    <strong>Harga: {{ priceRange(item.skus) }}</strong>
+                  </div>
+                </td>
                 <td>
                   <strong>{{ totalStock(item.skus) }}</strong>
                   <small>{{ formatCurrency(totalValue(item.skus)) }}</small>
@@ -137,6 +153,8 @@
                   <small>{{ qualityNote(item) }}</small>
                 </td>
                 <td>
+                  <small>Create Time</small>
+                  <strong>-</strong>
                   <small>Update Time</small>
                   <strong>{{ formatDate(item.updated_at) }}</strong>
                 </td>
@@ -159,9 +177,14 @@
                         <span v-else class="variant-thumb-fallback">{{ initials(sku.sku_name) }}</span>
                         <span>{{ sku.sku_name || '-' }}</span>
                       </span>
-                      <span>Kode Variasi: {{ variationCode(item, sku) }}</span>
+                      <span class="variant-code">
+                        <code>{{ variationCode(item, sku) }}</code>
+                        <button type="button" title="Copy SKU" @click="copyVariationCode(item, sku)" :disabled="!variationCode(item, sku)">Copy</button>
+                      </span>
                       <span>SKU ID: {{ sku.sku_id || sku.tiktok_sku || '-' }}</span>
-                      <strong>{{ formatCurrency(sku.price || 0) }}</strong>
+                      <span class="variant-price">
+                        <strong>{{ formatCurrency(sku.price || 0) }}</strong>
+                      </span>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
                     </div>
                     <div v-if="!item.skus?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
@@ -173,15 +196,6 @@
               <td colspan="9" class="empty">{{ loading ? 'Sedang memuat produk...' : 'Belum ada produk yang cocok dengan filter.' }}</td>
             </tr>
           </tbody>
-          <tfoot v-if="filteredItems.length">
-            <tr>
-              <td colspan="5" class="right">Total semua produk</td>
-              <td class="center">{{ grandStock }}</td>
-              <td></td>
-              <td class="right">{{ formatCurrency(grandValue) }}</td>
-              <td></td>
-            </tr>
-          </tfoot>
         </table>
       </div>
       <div v-if="filteredItems.length" class="pagination">
@@ -194,23 +208,26 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
 
 const items = ref([])
 const expanded = ref({})
 const loading = ref(false)
 const syncingProductId = ref('')
-const activeTab = ref('all')
+const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
 const syncMessage = ref('')
 const syncTone = ref('info')
 const lastSyncAt = ref('')
+const copyTimer = ref(null)
 const filters = reactive({
+  store: 'all',
   status: 'all',
   minimumStock: null,
-  searchBy: 'name',
+  price: 'all',
+  searchBy: 'all',
   search: '',
   sort: 'updated_desc'
 })
@@ -218,32 +235,54 @@ const filters = reactive({
 const formatCurrency = (value) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value || 0)
 const totalStock = (skus) => (skus || []).reduce((sum, item) => sum + Number(item.stock_qty || 0), 0)
 const totalValue = (skus) => (skus || []).reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
-const skuCount = computed(() => items.value.reduce((sum, item) => sum + (item.skus?.length || 0), 0))
+const isSoldOut = (item) => totalStock(item.skus) <= 0
+const isLive = () => true
+const variantCount = computed(() => items.value.reduce((sum, item) => sum + (item.skus?.length || 0), 0))
 const grandStock = computed(() => filteredItems.value.reduce((sum, item) => sum + totalStock(item.skus), 0))
 const grandValue = computed(() => filteredItems.value.reduce((sum, item) => sum + totalValue(item.skus), 0))
-const liveCount = computed(() => items.value.filter((item) => totalStock(item.skus) > 0).length)
-const inactiveCount = computed(() => items.value.filter((item) => totalStock(item.skus) <= 0).length)
+const liveCount = computed(() => items.value.filter((item) => isLive(item) && !isSoldOut(item)).length)
+const soldOutCount = computed(() => items.value.filter((item) => isSoldOut(item)).length)
+const inactiveCount = computed(() => items.value.filter((item) => !isLive(item)).length)
+const storeOptions = computed(() => [...new Set(items.value.map((item) => item.shop_name || 'TikTok Shop AgniShopBJM'))].sort())
+
+const normalizedSearch = computed(() => filters.search.toLowerCase())
+const tiktokSkuHaystack = (item) => [
+  item.product_id,
+  ...(item.skus || []).flatMap((sku) => [
+    sku.sku_name,
+    sku.seller_sku,
+    sku.kode_variasi,
+    sku.sku_id,
+    sku.tiktok_sku,
+    variationCode(item, sku)
+  ])
+].filter(Boolean).join(' ')
+const tiktokSearchHaystack = (item) => ({
+  all: [item.product_name, item.product_id, tiktokSkuHaystack(item)].filter(Boolean).join(' '),
+  name: item.product_name,
+  sku: tiktokSkuHaystack(item),
+  product_id: item.product_id
+}[filters.searchBy] || item.product_name)
 
 const filteredItems = computed(() => {
-  const query = filters.search.toLowerCase()
+  const query = normalizedSearch.value
 
   return items.value
     .filter((item) => {
       const stock = totalStock(item.skus)
-      if (activeTab.value === 'live' && stock <= 0) return false
-      if (activeTab.value === 'inactive' && stock > 0) return false
-      if (filters.status === 'live' && stock <= 0) return false
-      if (filters.status === 'inactive' && stock > 0) return false
+      if (activeTab.value === 'live' && (!isLive(item) || isSoldOut(item))) return false
+      if (activeTab.value === 'soldout' && !isSoldOut(item)) return false
+      if (activeTab.value === 'inactive' && isLive(item)) return false
+      if (filters.status === 'live' && (!isLive(item) || isSoldOut(item))) return false
+      if (filters.status === 'soldout' && !isSoldOut(item)) return false
+      if (filters.status === 'inactive' && isLive(item)) return false
+      if (filters.store !== 'all' && (item.shop_name || 'TikTok Shop AgniShopBJM') !== filters.store) return false
       if (Number(filters.minimumStock || 0) > 0 && stock < Number(filters.minimumStock)) return false
+      if (filters.price === 'high' && maxSkuPrice(item.skus) <= 50000) return false
+      if (filters.price === 'promo') return false
       if (!query) return true
 
-      const haystack = {
-        name: item.product_name,
-        sku: [item.skus?.[0]?.sku_name, item.skus?.[0]?.seller_sku, item.skus?.[0]?.kode_variasi].filter(Boolean).join(' '),
-        product_id: item.product_id
-      }[filters.searchBy] || item.product_name
-
-      return String(haystack || '').toLowerCase().includes(query)
+      return String(tiktokSearchHaystack(item) || '').toLowerCase().includes(query)
     })
     .sort((a, b) => {
       if (filters.sort === 'stock_desc') return totalStock(b.skus) - totalStock(a.skus)
@@ -261,13 +300,49 @@ const lastSyncLabel = computed(() => lastSyncAt.value ? `Terakhir sinkron: ${for
 const skuSummary = (item) => `${item.skus?.length || 0} varian`
 const initials = (name) => String(name || 'TT').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
 const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
+const maxSkuPrice = (skus) => Math.max(0, ...(skus || []).map((sku) => Number(sku.price || 0)))
 const variationCode = (item, sku) => {
   const sellerSku = String(sku?.seller_sku || '').trim()
   if (sellerSku.toUpperCase().startsWith('INT-')) return sellerSku
   return sku?.kode_variasi || `INT-${item?.product_id || 'PRODUCT'}-${skuFragment(sku?.sku_name)}`
 }
-const qualityNote = (item) => totalStock(item.skus) > 0 ? 'Produk sedang dijual' : 'Stok perlu dicek'
-const rowStatus = (item) => totalStock(item.skus) > 0 ? { label: 'Live', tone: 'success' } : { label: 'Sold Out', tone: 'warning' }
+const copyText = async (value) => {
+  const text = String(value || '').trim()
+  if (!text) return
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+
+    syncMessage.value = `SKU disalin: ${text}`
+    syncTone.value = 'success'
+    clearTimeout(copyTimer.value)
+    copyTimer.value = setTimeout(() => {
+      if (syncMessage.value === `SKU disalin: ${text}`) syncMessage.value = ''
+    }, 1600)
+  } catch (error) {
+    syncMessage.value = 'SKU belum bisa disalin.'
+    syncTone.value = 'error'
+  }
+}
+const copyVariationCode = (item, sku) => copyText(variationCode(item, sku))
+const qualityNote = (item) => isSoldOut(item) ? 'Stok perlu dicek' : 'Produk sedang dijual'
+const rowStatus = (item) => {
+  if (isSoldOut(item)) return { label: 'Sold Out', tone: 'warning' }
+  if (!isLive(item)) return { label: item.status || 'Tidak Live', tone: 'muted' }
+  return { label: 'Live', tone: 'success' }
+}
 const priceRange = (skus) => {
   const prices = (skus || []).map((sku) => Number(sku.price || 0)).filter(Boolean)
   if (!prices.length) return '-'
@@ -281,12 +356,14 @@ const formatDate = (value) => {
 }
 
 const resetFilters = () => {
+  filters.store = 'all'
   filters.status = 'all'
   filters.minimumStock = null
-  filters.searchBy = 'name'
+  filters.price = 'all'
+  filters.searchBy = 'all'
   filters.search = ''
   filters.sort = 'updated_desc'
-  activeTab.value = 'all'
+  activeTab.value = 'live'
   page.value = 1
 }
 
@@ -294,6 +371,22 @@ const setActiveTab = (tab) => {
   activeTab.value = tab
   page.value = 1
 }
+
+watch(() => filters.search, () => {
+  page.value = 1
+  const query = normalizedSearch.value
+  if (!query || !['all', 'sku'].includes(filters.searchBy)) return
+
+  filteredItems.value.slice(0, PAGE_SIZE).forEach((item) => {
+    if (tiktokSkuHaystack(item).toLowerCase().includes(query)) {
+      expanded.value[item.product_id] = true
+    }
+  })
+})
+
+watch(() => filters.searchBy, () => {
+  page.value = 1
+})
 
 const toggle = (id) => {
   expanded.value[id] = !expanded.value[id]
@@ -380,13 +473,10 @@ select, input { width: 100%; height: 36px; border: 1px solid #d7dde8; border-rad
 .sync-message.warning { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
 .sync-message.error { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
 .panel { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; overflow: hidden; }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; background: #f8fafc; }
-.panel-head span, .panel-head small { color: #64748b; font-size: 12px; }
-.panel-head strong { color: #111827; display: block; margin-top: 3px; }
-.table-wrap { max-height: 72vh; overflow: auto; }
+.table-wrap { max-height: 68vh; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1180px; }
 th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vertical-align: top; }
-thead th { position: sticky; top: 0; background: #1f2937; color: #fff; }
+thead th { position: sticky; top: 0; background: #f8fafc; color: #0f172a; z-index: 2; }
 .check-col { width: 34px; text-align: center; }
 .product-row:hover { background: #fbfdff; }
 .product-cell { display: grid; grid-template-columns: 72px 1fr; gap: 10px; min-width: 380px; }
@@ -395,6 +485,8 @@ thead th { position: sticky; top: 0; background: #1f2937; color: #fff; }
 strong { display: block; color: #0f172a; line-height: 1.35; }
 small { display: block; color: #64748b; line-height: 1.55; }
 .store-pill { display: inline-block; margin-top: 6px; padding: 4px 8px; color: #64748b; background: #f6f7fb; border-radius: 4px; font-size: 12px; }
+.price-cell, .variant-price { display: grid; gap: 3px; align-content: start; }
+.variant-price strong { font-size: 13px; }
 .status-badge { display: inline-block; border-radius: 999px; padding: 4px 8px; margin-bottom: 4px; font-size: 12px; font-weight: 700; }
 .success { color: #047857; background: #d1fae5; }
 .warning { color: #b45309; background: #fef3c7; }
@@ -407,6 +499,10 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
+.variant-code { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.variant-code code { color: #0f172a; font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
+.variant-code button:disabled { cursor: not-allowed; opacity: .45; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
 .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
 .pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }

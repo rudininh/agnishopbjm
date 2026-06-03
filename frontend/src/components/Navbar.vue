@@ -22,6 +22,7 @@
       <div class="menu-group">
         <span>Marketplace</span>
         <RouterLink to="/marketplace/auto-sync">Sinkronisasi Otomatis</RouterLink>
+        <RouterLink to="/marketplace/stock-anomalies">Anomali Stok</RouterLink>
       </div>
       <RouterLink to="/dokumentasi-shopee">Dokumentasi Shopee</RouterLink>
       <RouterLink to="/dokumentasi-tiktok">Dokumentasi TikTok</RouterLink>

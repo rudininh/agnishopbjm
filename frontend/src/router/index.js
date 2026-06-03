@@ -13,6 +13,7 @@ import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
 import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
 import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
+import StockAnomalies from '@/pages/StockAnomalies.vue'
 
 const routes = [
   {
@@ -84,6 +85,11 @@ const routes = [
     path: '/marketplace/auto-sync',
     name: 'marketplace-auto-sync',
     component: MarketplaceAutoSync
+  },
+  {
+    path: '/marketplace/stock-anomalies',
+    name: 'marketplace-stock-anomalies',
+    component: StockAnomalies
   },
   {
     path: '/dokumentasi-shopee',

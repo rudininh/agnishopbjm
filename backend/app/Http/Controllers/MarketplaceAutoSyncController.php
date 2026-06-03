@@ -76,6 +76,31 @@ class MarketplaceAutoSyncController extends Controller
         ]);
     }
 
+    public function stockAnomalies(Request $request): JsonResponse
+    {
+        return response()->json([
+            'status' => 'ok',
+            ...$this->syncService->stockAnomalies(
+                $request->only(['type', 'search']),
+                (int) $request->integer('page', 1),
+                (int) $request->integer('per_page', 30)
+            ),
+        ]);
+    }
+
+    public function syncStockAnomaly(Request $request): JsonResponse
+    {
+        set_time_limit(0);
+        $data = $request->validate([
+            'sku' => ['required', 'string'],
+            'source_marketplace' => ['required', 'in:shopee,tiktok'],
+        ]);
+
+        $result = $this->syncService->syncStockAnomaly($data['sku'], $data['source_marketplace']);
+
+        return response()->json($result, ($result['status'] ?? 'success') === 'error' ? 422 : 200);
+    }
+
     public function exportOrderSync(Request $request)
     {
         $rows = $this->syncService->orderSyncExportRows($request->only(['type', 'status', 'date']));

@@ -113,6 +113,157 @@ class MarketplaceSyncService
         return $query->limit(min(5000, max(1, $limit)))->get();
     }
 
+    public function stockAnomalies(array $filters = [], int $page = 1, int $perPage = 30): array
+    {
+        $type = trim((string) ($filters['type'] ?? ''));
+        $search = mb_strtolower(trim((string) ($filters['search'] ?? '')));
+        $rows = $this->activeSkuMappings();
+
+        $items = $rows->map(function ($row): array {
+            $sku = $this->canonicalSku($row);
+            $shopeeStock = $row->shopee_stock !== null ? (int) $row->shopee_stock : null;
+            $resolvedTiktokSku = $this->resolveTiktokSku($row, true);
+            $tiktokStock = $row->tiktok_stock !== null
+                ? (int) $row->tiktok_stock
+                : ($resolvedTiktokSku && $resolvedTiktokSku->stock_qty !== null ? (int) $resolvedTiktokSku->stock_qty : null);
+            $hasShopeeMapping = trim((string) ($row->shopee_product_id ?? '')) !== '' && trim((string) ($row->shopee_sku ?? '')) !== '';
+            $hasTiktokSku = $resolvedTiktokSku !== null;
+
+            $issueType = null;
+            $severity = 'warning';
+            $message = '';
+            if (! $hasShopeeMapping) {
+                $issueType = 'incomplete_mapping';
+                $severity = 'error';
+                $message = 'Mapping Shopee belum lengkap.';
+            } elseif ($shopeeStock === null) {
+                $issueType = 'missing_shopee_stock';
+                $severity = 'error';
+                $message = 'Stok Shopee belum tersedia di cache.';
+            } elseif (! $hasTiktokSku || $tiktokStock === null) {
+                $issueType = 'missing_tiktok_stock';
+                $severity = 'error';
+                $message = 'Varian TikTok aktif belum ditemukan dari SKU/nama varian.';
+            } elseif ($shopeeStock !== $tiktokStock) {
+                $issueType = 'stock_mismatch';
+                $severity = 'warning';
+                $message = sprintf('Stok tidak sinkron. Shopee=%s TikTok=%s.', $shopeeStock, $tiktokStock);
+            }
+
+            return [
+                'sku' => $sku,
+                'product_name' => (string) ($row->product_name ?? ''),
+                'variant_name' => (string) ($row->variant_name ?? ''),
+                'shopee_stock' => $shopeeStock,
+                'tiktok_stock' => $tiktokStock,
+                'difference' => $shopeeStock !== null && $tiktokStock !== null ? $shopeeStock - $tiktokStock : null,
+                'issue_type' => $issueType,
+                'severity' => $severity,
+                'message' => $message,
+                'shopee_product_id' => (string) ($row->shopee_product_id ?? ''),
+                'shopee_model_id' => (string) ($row->shopee_sku ?? ''),
+                'tiktok_product_id' => (string) ($row->tiktok_product_id ?? $resolvedTiktokSku->product_id ?? ''),
+                'tiktok_sku_id' => (string) ($row->tiktok_sku ?? $resolvedTiktokSku->sku_id ?? ''),
+                'updated_at' => (string) ($row->updated_at ?? ''),
+            ];
+        })->filter(fn (array $row): bool => $row['issue_type'] !== null);
+
+        $summary = [
+            'total_anomalies' => $items->count(),
+            'stock_mismatch' => $items->where('issue_type', 'stock_mismatch')->count(),
+            'missing_shopee_stock' => $items->where('issue_type', 'missing_shopee_stock')->count(),
+            'missing_tiktok_stock' => $items->where('issue_type', 'missing_tiktok_stock')->count(),
+            'incomplete_mapping' => $items->where('issue_type', 'incomplete_mapping')->count(),
+            'last_safety_run' => $this->lastSafetyRun(),
+        ];
+
+        if ($type !== '') {
+            $items = $items->filter(fn (array $row): bool => $row['issue_type'] === $type);
+        }
+
+        if ($search !== '') {
+            $items = $items->filter(function (array $row) use ($search): bool {
+                return str_contains(mb_strtolower($row['sku']), $search)
+                    || str_contains(mb_strtolower($row['product_name']), $search)
+                    || str_contains(mb_strtolower($row['variant_name']), $search);
+            });
+        }
+
+        $items = $items
+            ->sortBy([
+                fn (array $row): int => $row['severity'] === 'error' ? 0 : 1,
+                fn (array $row): string => $row['product_name'],
+                fn (array $row): string => $row['variant_name'],
+            ])
+            ->values();
+
+        $page = max(1, $page);
+        $perPage = min(100, max(1, $perPage));
+        $total = $items->count();
+
+        return [
+            'summary' => $summary,
+            'items' => $items->forPage($page, $perPage)->values(),
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'last_page' => max(1, (int) ceil($total / $perPage)),
+            ],
+        ];
+    }
+
+    public function syncStockAnomaly(string $sku, string $sourceMarketplace): array
+    {
+        $sku = trim($sku);
+        $sourceMarketplace = strtolower(trim($sourceMarketplace));
+        if ($sku === '') {
+            return ['status' => 'error', 'message' => 'SKU anomali wajib diisi.'];
+        }
+        if (! in_array($sourceMarketplace, ['shopee', 'tiktok'], true)) {
+            return ['status' => 'error', 'message' => 'Sumber sinkron wajib Shopee atau TikTok.'];
+        }
+
+        $mapping = $this->findSkuMapping($sku);
+        if (! $mapping) {
+            return ['status' => 'error', 'message' => 'SKU mapping tidak ditemukan untuk '.$sku.'.'];
+        }
+
+        if ($sourceMarketplace === 'shopee') {
+            return $this->mirrorShopeeStockToTiktok($mapping, 'Manual anomali stok Shopee -> TikTok', true, true);
+        }
+
+        $resolvedTiktokSku = $this->resolveTiktokSku($mapping, true);
+        if (! $resolvedTiktokSku || $resolvedTiktokSku->stock_qty === null) {
+            $this->logSync('manual_anomaly_tiktok_master', 'shopee', $sku, null, null, 'error', 'Manual anomali TikTok -> Shopee gagal: SKU TikTok aktif tidak ditemukan.');
+
+            return ['status' => 'error', 'message' => 'SKU TikTok aktif tidak ditemukan untuk '.$sku.'.'];
+        }
+
+        $oldStock = $this->currentStockForMarketplace('shopee', $mapping) ?? (int) ($mapping->stock_qty ?? 0);
+        $newStock = (int) $resolvedTiktokSku->stock_qty;
+        $pushResult = $this->pushTargetStock($mapping, 'shopee', $newStock, true);
+        $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : 'success';
+
+        if ($status === 'success') {
+            $this->updateLocalStock($mapping, 'shopee', $newStock);
+        }
+
+        $message = sprintf('Manual anomali TikTok -> Shopee: stok Shopee %s -> %s. %s', $oldStock, $newStock, $pushResult['message'] ?? '-');
+        $this->logSync('manual_anomaly_tiktok_master', 'shopee', $sku, $oldStock, $newStock, $status, $message);
+        $this->updateStatus('tiktok', ['last_sync_at' => now(), 'status' => 'connected']);
+        $this->updateStatus('shopee', ['last_sync_at' => now(), 'status' => $status === 'error' ? 'disconnected' : 'connected']);
+
+        return [
+            'status' => $status,
+            'message' => $message,
+            'sku' => $sku,
+            'old_stock' => $oldStock,
+            'new_stock' => $newStock,
+            'push' => $pushResult,
+        ];
+    }
+
     public function orderSyncDetail(int $logId): array
     {
         $log = DB::table('marketplace_sync_logs')->where('id', $logId)->first();

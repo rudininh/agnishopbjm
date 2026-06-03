@@ -195,6 +195,14 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync/order-sync', { params })
   },
 
+  autoSyncStockAnomalies(params = {}) {
+    return api.get('/marketplace/auto-sync/stock-anomalies', { params })
+  },
+
+  syncAutoSyncStockAnomaly(data) {
+    return api.post('/marketplace/auto-sync/stock-anomalies/sync', data)
+  },
+
   exportAutoSyncOrderSync(params = {}) {
     return api.get('/marketplace/auto-sync/order-sync/export', {
       params,

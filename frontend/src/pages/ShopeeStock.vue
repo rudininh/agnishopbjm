@@ -69,11 +69,12 @@
           <span>Search</span>
           <div class="search-box">
             <select v-model="filters.searchBy">
+              <option value="all">Semua</option>
               <option value="name">Product Name</option>
               <option value="sku">SKU</option>
               <option value="item_id">Item ID</option>
             </select>
-            <input v-model.trim="filters.search" type="search" placeholder="Cari produk Shopee" />
+            <input v-model.trim="filters.search" type="search" placeholder="Cari produk / SKU Shopee" />
           </div>
         </label>
         <label>
@@ -211,7 +212,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
 
 const items = ref([])
@@ -230,7 +231,7 @@ const filters = reactive({
   status: 'all',
   minimumStock: null,
   price: 'all',
-  searchBy: 'name',
+  searchBy: 'all',
   search: '',
   sort: 'updated_desc'
 })
@@ -249,8 +250,27 @@ const grandStock = computed(() => visibleItems.value.reduce((sum, item) => sum +
 const grandValue = computed(() => visibleItems.value.reduce((sum, item) => sum + totalValue(item.models), 0))
 const storeOptions = computed(() => [...new Set(items.value.map((item) => item.shop_name || 'Agni Shop Banjarmasin'))].sort())
 
+const normalizedSearch = computed(() => filters.search.toLowerCase())
+const shopeeSkuHaystack = (item) => [
+  item.sku,
+  item.item_id,
+  ...(item.models || []).flatMap((model) => [
+    model.model_sku,
+    model.kode_variasi,
+    model.model_id,
+    model.name,
+    variationCode(item, model)
+  ])
+].filter(Boolean).join(' ')
+const shopeeSearchHaystack = (item) => ({
+  all: [item.nama, item.item_id, shopeeSkuHaystack(item)].filter(Boolean).join(' '),
+  name: item.nama,
+  sku: shopeeSkuHaystack(item),
+  item_id: item.item_id
+}[filters.searchBy] || item.nama)
+
 const filteredItems = computed(() => {
-  const query = filters.search.toLowerCase()
+  const query = normalizedSearch.value
 
   return items.value
     .filter((item) => {
@@ -266,13 +286,7 @@ const filteredItems = computed(() => {
       if (filters.price === 'promo' && Number(item.price_min || 0) >= Number(item.price_max || item.price_min || 0)) return false
       if (!query) return true
 
-      const haystack = {
-        name: item.nama,
-        sku: item.sku,
-        item_id: item.item_id
-      }[filters.searchBy] || item.nama
-
-      return String(haystack || '').toLowerCase().includes(query)
+      return String(shopeeSearchHaystack(item) || '').toLowerCase().includes(query)
     })
     .sort((a, b) => {
       if (filters.sort === 'stock_desc') return totalStock(b.models) - totalStock(a.models)
@@ -300,6 +314,22 @@ const setActiveTab = (tab) => {
   activeTab.value = tab
   page.value = 1
 }
+
+watch(() => filters.search, () => {
+  page.value = 1
+  const query = normalizedSearch.value
+  if (!query || !['all', 'sku'].includes(filters.searchBy)) return
+
+  filteredItems.value.slice(0, PAGE_SIZE).forEach((item) => {
+    if (shopeeSkuHaystack(item).toLowerCase().includes(query)) {
+      expanded.value[item.item_id] = true
+    }
+  })
+})
+
+watch(() => filters.searchBy, () => {
+  page.value = 1
+})
 
 const toggle = (id) => {
   expanded.value[id] = !expanded.value[id]
@@ -429,7 +459,7 @@ const resetFilters = () => {
   filters.status = 'all'
   filters.minimumStock = null
   filters.price = 'all'
-  filters.searchBy = 'name'
+  filters.searchBy = 'all'
   filters.search = ''
   filters.sort = 'updated_desc'
   activeTab.value = 'live'

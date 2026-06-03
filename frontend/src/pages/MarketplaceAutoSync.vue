@@ -34,7 +34,8 @@
       </div>
       <div><span>Running</span><strong>{{ browserAutoSyncRunning ? 'Sedang cek order' : '-' }}</strong></div>
       <div><span>Last run</span><strong>{{ formatDate(browserAutoSyncLastRun) }}</strong></div>
-      <div><span>Next run</span><strong>{{ formatDate(browserAutoSyncNextRun) }}</strong></div>
+      <div><span>Countdown</span><strong>{{ browserAutoSyncCountdownLabel }}</strong></div>
+      <div><span>Next run</span><strong>{{ browserAutoSyncNextRunLabel }}</strong></div>
     </section>
 
     <div class="status-grid">
@@ -333,7 +334,8 @@ import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref
 import { omnichannelService } from '@/services'
 
 const BROWSER_AUTO_SYNC_KEY = 'marketplace_auto_sync_browser_enabled'
-const BROWSER_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000
+const BROWSER_AUTO_SYNC_INTERVAL_MS = 60 * 1000
+const BROWSER_AUTO_SYNC_SAFETY_EVERY_RUNS = 15
 
 const loading = ref(false)
 const runningSafety = ref(false)
@@ -344,6 +346,7 @@ const browserAutoSyncEnabled = ref(false)
 const browserAutoSyncRunning = ref(false)
 const browserAutoSyncLastRun = ref(null)
 const browserAutoSyncNextRun = ref(null)
+const browserAutoSyncCountdownSeconds = ref(0)
 const exportingOrderSync = ref(false)
 const activeTab = ref('webhook')
 const notice = ref('')
@@ -360,6 +363,7 @@ const webhookFilters = reactive({ marketplace: '', status: '', date: '' })
 const syncFilters = reactive({ marketplace: '', status: '', date: '' })
 const orderFilters = reactive({ type: '', status: '', date: '' })
 let browserAutoSyncTimer = null
+let browserAutoSyncCountdownTimer = null
 let browserAutoSyncRunCount = 0
 
 const Pagination = defineComponent({
@@ -388,6 +392,18 @@ const labelMarketplace = (value) => {
   return text
 }
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'
+const formatTime = (value) => value ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)) : '-'
+const browserAutoSyncCountdownLabel = computed(() => {
+  if (!browserAutoSyncEnabled.value) return '-'
+  if (browserAutoSyncRunning.value) return 'Sedang berjalan'
+
+  const seconds = Math.max(0, browserAutoSyncCountdownSeconds.value)
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
+})
+const browserAutoSyncNextRunLabel = computed(() => browserAutoSyncNextRun.value ? `${formatTime(browserAutoSyncNextRun.value)} WITA` : '-')
 
 const loadDashboard = async () => {
   const { data } = await omnichannelService.autoSyncDashboard()
@@ -545,11 +561,34 @@ const clearBrowserAutoSyncTimer = () => {
   }
 }
 
+const clearBrowserAutoSyncCountdown = () => {
+  if (browserAutoSyncCountdownTimer) {
+    window.clearInterval(browserAutoSyncCountdownTimer)
+    browserAutoSyncCountdownTimer = null
+  }
+}
+
+const updateBrowserAutoSyncCountdown = () => {
+  if (!browserAutoSyncNextRun.value) {
+    browserAutoSyncCountdownSeconds.value = 0
+    return
+  }
+
+  browserAutoSyncCountdownSeconds.value = Math.max(0, Math.ceil((new Date(browserAutoSyncNextRun.value).getTime() - Date.now()) / 1000))
+}
+
+const startBrowserAutoSyncCountdown = () => {
+  clearBrowserAutoSyncCountdown()
+  updateBrowserAutoSyncCountdown()
+  browserAutoSyncCountdownTimer = window.setInterval(updateBrowserAutoSyncCountdown, 1000)
+}
+
 const scheduleBrowserAutoSync = (delay = BROWSER_AUTO_SYNC_INTERVAL_MS) => {
   clearBrowserAutoSyncTimer()
   if (!browserAutoSyncEnabled.value) return
 
   browserAutoSyncNextRun.value = new Date(Date.now() + delay).toISOString()
+  startBrowserAutoSyncCountdown()
   browserAutoSyncTimer = window.setTimeout(() => {
     runBrowserAutoSync()
   }, delay)
@@ -560,6 +599,7 @@ const runBrowserAutoSync = async () => {
 
   browserAutoSyncRunning.value = true
   browserAutoSyncNextRun.value = null
+  browserAutoSyncCountdownSeconds.value = 0
   try {
     const [shopeeResult, tiktokResult] = await Promise.allSettled([
       omnichannelService.pollAutoSyncShopeeOrders(24),
@@ -567,7 +607,7 @@ const runBrowserAutoSync = async () => {
     ])
 
     browserAutoSyncRunCount += 1
-    if (browserAutoSyncRunCount % 3 === 0) {
+    if (browserAutoSyncRunCount % BROWSER_AUTO_SYNC_SAFETY_EVERY_RUNS === 0) {
       await omnichannelService.runAutoSyncSafetyCheck()
     }
 
@@ -604,7 +644,9 @@ const stopBrowserAutoSync = () => {
   browserAutoSyncEnabled.value = false
   window.localStorage.removeItem(BROWSER_AUTO_SYNC_KEY)
   browserAutoSyncNextRun.value = null
+  browserAutoSyncCountdownSeconds.value = 0
   clearBrowserAutoSyncTimer()
+  clearBrowserAutoSyncCountdown()
 }
 
 const toggleBrowserAutoSync = () => {
@@ -695,6 +737,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearBrowserAutoSyncTimer()
+  clearBrowserAutoSyncCountdown()
 })
 </script>
 

@@ -64,6 +64,8 @@ Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController:
 Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
 Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);
 Route::get('marketplace/auto-sync/order-sync', [MarketplaceAutoSyncController::class, 'orderSync']);
+Route::get('marketplace/auto-sync/stock-anomalies', [MarketplaceAutoSyncController::class, 'stockAnomalies']);
+Route::post('marketplace/auto-sync/stock-anomalies/sync', [MarketplaceAutoSyncController::class, 'syncStockAnomaly']);
 Route::get('marketplace/auto-sync/order-sync/export', [MarketplaceAutoSyncController::class, 'exportOrderSync']);
 Route::get('marketplace/auto-sync/order-sync/{id}', [MarketplaceAutoSyncController::class, 'orderSyncDetail'])->whereNumber('id');
 Route::post('marketplace/auto-sync/order-sync/{id}/retry', [MarketplaceAutoSyncController::class, 'retryOrderSync'])->whereNumber('id');
