@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\OmnichannelController;
+use App\Services\MarketplaceOrderSyncService;
 use App\Services\StockConsistencyService;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -36,4 +37,19 @@ Artisan::command('sync:safety-check', function (): int {
 
 Schedule::command('sync:safety-check')
     ->everyFifteenMinutes()
+    ->withoutOverlapping();
+
+Artisan::command('sync:shopee-orders {--hours=24}', function (): int {
+    $result = app(MarketplaceOrderSyncService::class)->pollShopeeReadyOrders((int) $this->option('hours'));
+
+    $this->info($result['message'] ?? 'Polling order Shopee selesai.');
+    foreach ($result['messages'] ?? [] as $message) {
+        $this->line($message);
+    }
+
+    return ($result['status'] ?? 'success') === 'success' ? 0 : 1;
+});
+
+Schedule::command('sync:shopee-orders --hours=24')
+    ->everyFiveMinutes()
     ->withoutOverlapping();

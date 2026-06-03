@@ -8,6 +8,10 @@ use Illuminate\Support\Facades\Http;
 
 class MarketplaceSyncService
 {
+    public function __construct(private readonly MarketplaceApiService $apiService)
+    {
+    }
+
     public function dashboard(): array
     {
         $today = Carbon::today();
@@ -327,6 +331,100 @@ class MarketplaceSyncService
         $this->updateStatus('tiktok', ['last_sync_at' => now(), 'status' => $summary['failed'] > 0 ? 'disconnected' : 'connected']);
 
         return $summary;
+    }
+
+    public function mirrorShopeeStockToTiktok(object $mapping, string $reason, bool $forceLive = false, bool $allowCachedFallback = false): array
+    {
+        $sku = $this->canonicalSku($mapping);
+        $itemId = trim((string) ($mapping->shopee_product_id ?? ''));
+        $modelId = trim((string) ($mapping->shopee_sku ?? ''));
+        if ($itemId === '' || $modelId === '') {
+            $this->logSync('shopee_stock_refresh', 'tiktok', $sku, null, null, 'skipped', 'Mirror dilewati: item/model Shopee belum lengkap.');
+            return ['status' => 'skipped', 'message' => 'item/model Shopee belum lengkap.', 'sku' => $sku];
+        }
+
+        $stockResult = $this->apiService->fetchShopeeModelStock($itemId, $modelId);
+        if (($stockResult['status'] ?? '') !== 'success') {
+            if (! $allowCachedFallback) {
+                $this->logSync('shopee_stock_refresh', 'tiktok', $sku, null, null, 'error', $stockResult['message'] ?? 'Stok Shopee gagal diambil.');
+                return ['status' => 'error', 'message' => $stockResult['message'] ?? 'Stok Shopee gagal diambil.', 'sku' => $sku];
+            }
+
+            $stockResult = [
+                'status' => 'success',
+                'stock' => (int) ($mapping->shopee_stock ?? $mapping->stock_qty ?? 0),
+                'message' => 'Fallback stok lokal karena stok model Shopee live tidak tersedia.',
+            ];
+        }
+
+        $oldStock = $mapping->tiktok_stock === null ? null : (int) $mapping->tiktok_stock;
+        $newStock = (int) $stockResult['stock'];
+        $this->updateLocalStock($mapping, 'shopee', $newStock);
+
+        $pushResult = $this->pushTargetStock($mapping, 'tiktok', $newStock, $forceLive);
+        $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : 'success';
+        if ($status === 'error' && str_contains((string) ($pushResult['message'] ?? ''), 'SKU TikTok aktif tidak ditemukan')) {
+            $status = 'skipped';
+        }
+        if ($status === 'success') {
+            $this->updateLocalStock($mapping, 'tiktok', $newStock);
+        }
+
+        $prefix = isset($stockResult['message']) ? $stockResult['message'].' ' : '';
+        $message = sprintf('%s: %sstok Shopee terbaru %s, TikTok %s -> %s. %s', $reason, $prefix, $newStock, $oldStock ?? '-', $newStock, $pushResult['message'] ?? '-');
+        $this->logSync('shopee_stock_refresh', 'tiktok', $sku, $oldStock, $newStock, $status, $message);
+        $this->updateStatus('shopee', ['last_sync_at' => now(), 'status' => 'connected']);
+        $this->updateStatus('tiktok', ['last_sync_at' => now(), 'status' => $status === 'error' ? 'disconnected' : 'connected']);
+
+        return [
+            'status' => $status,
+            'message' => $message,
+            'sku' => $sku,
+            'old_stock' => $oldStock,
+            'new_stock' => $newStock,
+            'push' => $pushResult,
+        ];
+    }
+
+    public function findSkuMappingByShopeeModel(string $itemId, string $modelId, bool $includeHidden = false): ?object
+    {
+        $itemId = trim($itemId);
+        $modelId = trim($modelId);
+        if ($itemId === '' || $modelId === '') {
+            return null;
+        }
+
+        return DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->leftJoin('shopee_product_model as spm', function ($join): void {
+                $join->on(DB::raw('CAST(spm.item_id AS TEXT)'), '=', 'sm.shopee_product_id')
+                    ->on(DB::raw('CAST(spm.model_id AS TEXT)'), '=', 'sm.shopee_sku');
+            })
+            ->leftJoin('tiktok_products as tp', function ($join): void {
+                $join->on('tp.product_id', '=', 'sm.tiktok_product_id')
+                    ->on('tp.sku_id', '=', 'sm.tiktok_sku')
+                    ->whereRaw('COALESCE(tp.is_active, true) = true');
+            })
+            ->when(! $includeHidden, function ($query): void {
+                $query->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false');
+            })
+            ->where(function ($query) use ($itemId, $modelId): void {
+                $query->where(function ($inner) use ($itemId, $modelId): void {
+                    $inner->where('sm.shopee_product_id', $itemId)->where('sm.shopee_sku', $modelId);
+                })->orWhere(function ($inner) use ($itemId, $modelId): void {
+                    $inner->where('map.shopee_item_id', $itemId)->where('map.shopee_model_id', $modelId);
+                });
+            })
+            ->select(
+                'sm.*',
+                'map.seller_sku as mapped_seller_sku',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id as mapped_tiktok_sku_id',
+                'map.tiktok_sku_name as mapped_tiktok_sku_name',
+                'spm.stock as shopee_stock',
+                'tp.stock_qty as tiktok_stock'
+            )
+            ->first();
     }
 
     public function updateLocalStock(object $mapping, string $marketplace, int $stock): void

@@ -6,8 +6,10 @@ use Illuminate\Http\Request;
 
 class TikTokWebhookService
 {
-    public function __construct(private readonly MarketplaceSyncService $syncService)
-    {
+    public function __construct(
+        private readonly MarketplaceSyncService $syncService,
+        private readonly MarketplaceOrderSyncService $orderSyncService,
+    ) {
     }
 
     public function handle(Request $request): array
@@ -19,6 +21,14 @@ class TikTokWebhookService
         }
 
         $eventType = $this->eventType($payload);
+        $orderId = $this->orderId($payload);
+        if ($orderId !== '') {
+            $result = $this->orderSyncService->processTiktokOrder($orderId, $eventType, $payload);
+            $this->syncService->logWebhook('tiktok', $eventType, $orderId, null, $payload, ($result['status'] ?? '') === 'error' ? 'error' : 'success', $result['message'] ?? null);
+
+            return $result;
+        }
+
         $sku = $this->sku($payload);
         $qty = $this->qty($payload);
 
@@ -60,6 +70,27 @@ class TikTokWebhookService
             data_get($payload, 'data.line_items.0.seller_sku'),
             data_get($payload, 'data.skus.0.seller_sku'),
             data_get($payload, 'line_items.0.seller_sku'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function orderId(array $payload): string
+    {
+        $candidates = [
+            $payload['order_id'] ?? null,
+            $payload['orderId'] ?? null,
+            data_get($payload, 'data.order_id'),
+            data_get($payload, 'data.orderId'),
+            data_get($payload, 'data.order.id'),
+            data_get($payload, 'data.orders.0.id'),
         ];
 
         foreach ($candidates as $candidate) {
