@@ -408,11 +408,20 @@
                   <span>seller_sku</span>
                   <input v-model.trim="addVariantTool.seller_sku" placeholder="SKU-BARU-001" />
                 </label>
-                <label v-if="!isShopeeFlow" class="dry-run-row sku-source-row">
+                <label v-if="isShopeeFlow" class="dry-run-row sku-source-row">
+                  <input type="checkbox" v-model="addVariantTool.use_real_tiktok_sku" @change="syncRealTiktokSkuToInput" />
+                  <span>Pakai SKU real dari stok TikTok</span>
+                </label>
+                <label v-else class="dry-run-row sku-source-row">
                   <input type="checkbox" v-model="addVariantTool.use_real_shopee_sku" @change="syncRealShopeeSkuToInput" />
                   <span>Pakai SKU real dari stok Shopee</span>
                 </label>
-                <p v-if="!isShopeeFlow" class="field-hint">Jika dicentang, setiap varian memakai seller_sku Shopee asli yang tersimpan, bukan SKU hasil template.</p>
+                <label class="dry-run-row sku-source-row">
+                  <input type="checkbox" v-model="addVariantTool.use_sku_mapping_template" @change="syncSkuMappingTemplateToInput" />
+                  <span>Pakai SKU dari template SKU Mapping</span>
+                </label>
+                <p v-if="isShopeeFlow" class="field-hint">Jika SKU real dicentang, setiap varian memakai seller_sku TikTok asli. Jika template SKU Mapping dicentang, setiap varian memakai SKU internal/template dari SKU Mapping.</p>
+                <p v-if="!isShopeeFlow" class="field-hint">Jika SKU real dicentang, setiap varian memakai seller_sku Shopee asli. Jika template SKU Mapping dicentang, setiap varian memakai SKU internal/template dari SKU Mapping.</p>
                 <label>
                   <span>color_name</span>
                   <input v-model.trim="addVariantTool.color_name" placeholder="Biru" />
@@ -451,6 +460,11 @@
                     <span>Jangan ubah harga jika varian sudah punya harga</span>
                   </label>
                 </div>
+                <label v-if="!isShopeeFlow && addVariantTool.price_mode === 'marketplace'">
+                  <span>Tambahan harga dari Shopee</span>
+                  <input v-model.number="addVariantTool.price_adjustment" type="number" step="1" placeholder="2000" />
+                </label>
+                <p v-if="!isShopeeFlow && addVariantTool.price_mode === 'marketplace'" class="field-hint">Harga TikTok akan memakai harga Shopee per varian ditambah nilai ini.</p>
                 <label v-if="!isShopeeFlow">
                   <span>discount (%)</span>
                   <input v-model.number="addVariantTool.discount" type="number" min="0" max="100" step="0.01" placeholder="10" />
@@ -667,7 +681,7 @@ const sourcePriceChannelLabel = computed(() => isShopeeFlow.value ? 'TikTok' : '
 const targetPriceChannelLabel = computed(() => isShopeeFlow.value ? 'Shopee' : 'TikTok')
 const variantPriceHint = computed(() => isShopeeFlow.value
   ? `Harga submit Shopee: ${displayPrice(resolveAddVariantSubmitPrice(selectedItem.value))}. Fixed memakai input price, mode ${sourcePriceChannelLabel.value} memakai harga sumber per varian, mode jangan ubah mempertahankan harga ${targetPriceChannelLabel.value} jika sudah ada.`
-  : `Harga final per SKU: ${displayPrice(resolveAddVariantSubmitPrice(selectedItem.value))}. Fixed memakai input price, mode ${sourcePriceChannelLabel.value} memakai harga sumber per varian, mode jangan ubah mempertahankan harga ${targetPriceChannelLabel.value} jika sudah ada.`)
+  : `Harga final per SKU: ${displayPrice(resolveAddVariantSubmitPrice(selectedItem.value))}. Fixed memakai input price, mode ${sourcePriceChannelLabel.value} memakai harga sumber per varian${addVariantTool.price_mode === 'marketplace' ? ` + ${displayPrice(addVariantPriceAdjustment())}` : ''}, mode jangan ubah mempertahankan harga ${targetPriceChannelLabel.value} jika sudah ada.`)
 const addVariantSubmitLabel = computed(() => {
   if (isShopeeFlow.value) {
     return addVariantTool.dry_run ? 'Cek Payload Shopee' : 'Tambah ke Shopee'
@@ -731,10 +745,13 @@ const addVariantTool = reactive({
   image_uri: '',
   price: '50000',
   price_mode: 'fixed',
+  price_adjustment: 0,
   discount: 0,
   quantity: 1,
   dry_run: true,
-  use_real_shopee_sku: true
+  use_real_tiktok_sku: true,
+  use_real_shopee_sku: true,
+  use_sku_mapping_template: false
 })
 
 const resetForm = () => {
@@ -781,6 +798,17 @@ const resolveRealShopeeSellerSku = (source) => {
     .map((value) => String(value || '').trim())
     .find(Boolean) || ''
 }
+const resolveRealTiktokSellerSku = (source) => {
+  const candidates = [
+    source?.tiktok?.seller_sku,
+    source?.stock_tiktok_seller_sku,
+    source?.tiktok_seller_sku
+  ]
+
+  return candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || ''
+}
 const resolveOppositeMarketplaceInternalSku = (source, targetChannel) => {
   const candidates = targetChannel === 'shopee'
     ? [
@@ -796,7 +824,33 @@ const resolveOppositeMarketplaceInternalSku = (source, targetChannel) => {
     .map((value) => String(value || '').trim())
     .find((value) => isInternalMarketplaceSku(value)) || ''
 }
+const resolveSkuMappingTemplateSku = (source, variantName = '', itemId = '') => {
+  const shopeeSku = String(source?.shopee?.seller_sku || source?.stock_shopee_seller_sku || '').trim()
+  const tiktokSku = String(source?.tiktok?.seller_sku || source?.stock_tiktok_seller_sku || '').trim()
+  const matchingMarketplaceSku = shopeeSku && tiktokSku && normalizeText(shopeeSku) === normalizeText(tiktokSku)
+    ? shopeeSku
+    : ''
+  const targetVariantName = String(variantName || resolveTargetVariantName(source) || source?.variant_name || '').trim()
+  const targetItemId = String(itemId || resolveShopeeItemId(source) || resolveSelectedShopeeItemId() || resolveManualShopeeItemId() || '').trim()
+  const candidates = [
+    source?.mapped_seller_sku,
+    source?.internal_sku,
+    matchingMarketplaceSku,
+    source?.seller_sku,
+    source?.stock_master_sku
+  ]
+
+  const mappedSku = candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || ''
+
+  return mappedSku || buildShopeeTemplateSku(targetVariantName, targetItemId)
+}
 const resolveStandardSellerSku = (source, variantName = '', productId = '') => {
+  if (addVariantTool.use_sku_mapping_template) {
+    return resolveSkuMappingTemplateSku(source, variantName, productId)
+  }
+
   if (!isShopeeFlow.value && addVariantTool.use_real_shopee_sku) {
     return resolveRealShopeeSellerSku(source)
   }
@@ -930,6 +984,10 @@ const groupChannelDominantPrice = (group, channel) => {
     .sort((a, b) => b.count - a.count || a.price - b.price)[0]?.price || 0
 }
 const manualAddVariantPrice = () => numericPrice(addVariantTool.price)
+const addVariantPriceAdjustment = () => {
+  const value = Number(addVariantTool.price_adjustment ?? 0)
+  return Number.isFinite(value) ? value : 0
+}
 const setAddVariantPriceMode = (mode, checked) => {
   if (!checked) {
     addVariantTool.price_mode = 'fixed'
@@ -971,7 +1029,11 @@ const resolveAddVariantBasePrice = (source = null) => {
 
   if (addVariantTool.price_mode === 'marketplace') {
     const sourcePrice = resolveVariantSourceMarketplacePrice(source)
-    if (sourcePrice) return sourcePrice
+    if (sourcePrice) {
+      return !isShopeeFlow.value && addVariantSourcePriceChannel.value === 'shopee'
+        ? Math.max(0, sourcePrice + addVariantPriceAdjustment())
+        : sourcePrice
+    }
   }
 
   const manualPrice = manualAddVariantPrice()
@@ -1195,21 +1257,56 @@ const selectedVariantPayloadLabels = computed(() => {
 const displaySelectedVariantSellerSku = (variant) => {
   const variantName = String(resolveTargetVariantName(variant) || variant?.variant_name || '').trim()
   const sellerSku = isShopeeFlow.value
-    ? (
+    ? (addVariantTool.use_sku_mapping_template
+      ? resolveSkuMappingTemplateSku(variant, variantName, resolveShopeeItemId(variant) || resolveSelectedShopeeItemId() || resolveAddVariantProductId())
+      : addVariantTool.use_real_tiktok_sku
+      ? resolveRealTiktokSellerSku(variant)
+      : (
       resolveOppositeMarketplaceInternalSku(variant, 'shopee') ||
       String(variant?.seller_sku || variant?.internal_sku || '').trim()
-    )
+      ))
     : resolveStandardSellerSku(variant, variantName, resolveShopeeItemId(variant) || resolveSelectedShopeeItemId())
 
-  return sellerSku || (!isShopeeFlow.value && addVariantTool.use_real_shopee_sku ? 'Tidak ada SKU Shopee' : '-')
+  return sellerSku ||
+    (addVariantTool.use_sku_mapping_template
+      ? buildShopeeTemplateSku(variantName, resolveShopeeItemId(variant) || resolveSelectedShopeeItemId() || resolveAddVariantProductId())
+      : isShopeeFlow.value && addVariantTool.use_real_tiktok_sku
+      ? 'Tidak ada SKU TikTok'
+      : !isShopeeFlow.value && addVariantTool.use_real_shopee_sku
+        ? 'Tidak ada SKU Shopee'
+        : '-')
+}
+const syncRealTiktokSkuToInput = () => {
+  if (!isShopeeFlow.value || !addVariantTool.use_real_tiktok_sku) return
+  addVariantTool.use_sku_mapping_template = false
+
+  const source = selectedVariantItems.value[0] || selectedItem.value
+  const realTiktokSku = resolveRealTiktokSellerSku(source)
+  if (realTiktokSku) {
+    addVariantTool.seller_sku = realTiktokSku
+  }
 }
 const syncRealShopeeSkuToInput = () => {
   if (isShopeeFlow.value || !addVariantTool.use_real_shopee_sku) return
+  addVariantTool.use_sku_mapping_template = false
 
   const source = selectedVariantItems.value[0] || selectedItem.value
   const realShopeeSku = resolveRealShopeeSellerSku(source)
   if (realShopeeSku) {
     addVariantTool.seller_sku = realShopeeSku
+  }
+}
+const syncSkuMappingTemplateToInput = () => {
+  if (!addVariantTool.use_sku_mapping_template) return
+
+  addVariantTool.use_real_tiktok_sku = false
+  addVariantTool.use_real_shopee_sku = false
+
+  const source = selectedVariantItems.value[0] || selectedItem.value
+  const variantName = String(resolveTargetVariantName(source) || source?.variant_name || addVariantTool.color_name || '').trim()
+  const templateSku = resolveSkuMappingTemplateSku(source, variantName, resolveShopeeItemId(source) || resolveSelectedShopeeItemId() || resolveAddVariantProductId())
+  if (templateSku) {
+    addVariantTool.seller_sku = templateSku
   }
 }
 const allDisplayedVariantsSelected = computed(() => displayVariants.value.length > 0 && displayVariants.value.every((item) => isVariantSelected(item)))
@@ -1405,11 +1502,15 @@ const buildShopeeAddVariantPayload = () => {
     const targetPrice = resolveShopeeVariantSubmitPrice(source)
     const tiktokStock = source?.tiktok?.stock_qty ?? source?.stock_qty ?? addVariantTool.quantity ?? 0
     const sellerSku = isShopeeFlow.value
-      ? (
+      ? (addVariantTool.use_sku_mapping_template
+        ? resolveSkuMappingTemplateSku(source, variantName, resolveShopeeItemId(source) || resolveSelectedShopeeItemId() || resolveAddVariantProductId())
+        : addVariantTool.use_real_tiktok_sku
+        ? resolveRealTiktokSellerSku(source)
+        : (
         resolveOppositeMarketplaceInternalSku(source, 'shopee') ||
         String(source?.seller_sku || source?.internal_sku || addVariantTool.seller_sku || '').trim() ||
         buildShopeeTemplateSku(variantName)
-      )
+        ))
       : String(
         source?.tiktok?.seller_sku ||
         source?.seller_sku ||
@@ -1423,6 +1524,8 @@ const buildShopeeAddVariantPayload = () => {
       addVariantTool.image_uri ||
       ''
     ).trim()
+
+    if (isShopeeFlow.value && (addVariantTool.use_real_tiktok_sku || addVariantTool.use_sku_mapping_template) && !sellerSku) return
 
     variants.push({
       stock_master_id: typeof source?.stock_master_id === 'number' ? source.stock_master_id : null,
@@ -1485,11 +1588,15 @@ const fillAddVariantToolFromItem = (item, contextProductId = '') => {
 
   const colorName = String(resolveTargetVariantName(item)).trim()
   const sellerSku = isShopeeFlow.value
-    ? (
+    ? (addVariantTool.use_sku_mapping_template
+      ? resolveSkuMappingTemplateSku(item, colorName, contextProductId || resolveShopeeItemId(item) || resolveSelectedShopeeItemId())
+      : addVariantTool.use_real_tiktok_sku
+      ? resolveRealTiktokSellerSku(item)
+      : (
       resolveOppositeMarketplaceInternalSku(item, 'shopee') ||
       String(item?.seller_sku || item?.internal_sku || '').trim() ||
       buildShopeeTemplateSku(colorName, contextProductId || resolveShopeeItemId(item) || resolveSelectedShopeeItemId())
-    )
+      ))
     : resolveStandardSellerSku(item, colorName, contextProductId || resolveShopeeItemId(item) || resolveSelectedShopeeItemId())
   const imageUri = String(
     (isShopeeFlow.value ? item.tiktok?.image_url : item.shopee?.image_url) ||
@@ -2105,7 +2212,7 @@ const buildAddVariantRequestPreview = () => {
     const existingVariantIndex = existingVariantIndexByKey.get(colorKey)
 
     let sellerSku = resolveStandardSellerSku(source, colorName, resolveShopeeItemId(source) || resolveSelectedShopeeItemId())
-    if (addVariantTool.use_real_shopee_sku && !sellerSku && existingVariantIndex === undefined) {
+    if ((addVariantTool.use_real_shopee_sku || addVariantTool.use_sku_mapping_template) && !sellerSku && existingVariantIndex === undefined) {
       return
     }
     if (!sellerSku) {
@@ -2389,9 +2496,11 @@ const addVariantRequestPreview = computed(() => {
       image_uri: addVariantTool.image_uri,
       price: addVariantTool.price,
       price_mode: addVariantTool.price_mode,
+      price_adjustment: addVariantTool.price_adjustment,
       discount: addVariantTool.discount,
       quantity: addVariantTool.quantity,
       dry_run: addVariantTool.dry_run,
+      use_sku_mapping_template: addVariantTool.use_sku_mapping_template,
       preview_error: error?.message || 'Request demo gagal digenerate.'
     }, null, 2)
   }
