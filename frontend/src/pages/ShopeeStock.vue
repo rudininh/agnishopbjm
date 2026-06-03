@@ -119,7 +119,7 @@
           </thead>
           <tbody>
             <template v-for="item in pagedItems" :key="item.item_id">
-              <tr class="product-row">
+              <tr :class="['product-row', { 'missing-sku-row': itemHasMissingSku(item) }]">
                 <td class="check-col"><input type="checkbox" /></td>
                 <td>
                   <div class="product-cell">
@@ -135,7 +135,7 @@
                 </td>
                 <td>--</td>
                 <td>
-                  <strong>{{ item.sku || '--' }}</strong>
+                  <strong>{{ firstRealSku(item.models, 'model_sku') || 'Tidak ada SKU' }}</strong>
                   <small>{{ modelSummary(item) }}</small>
                 </td>
                 <td>
@@ -172,15 +172,20 @@
                 <td></td>
                 <td colspan="8">
                   <div class="variant-list">
-                    <div v-for="model in item.models" :key="model.model_id" class="variant-item">
+                    <div v-for="model in item.models" :key="model.model_id" :class="['variant-item', { 'missing-sku-row': missingShopeeSku(model) }]">
                       <span class="variant-name">
                         <img v-if="model.image_url" :src="model.image_url" :alt="model.name || 'Varian Shopee'" />
                         <span v-else class="variant-thumb-fallback">{{ initials(model.name) }}</span>
                         <span>{{ model.name || 'Tanpa Varian' }}</span>
                       </span>
                       <span class="variant-code">
-                        <code>{{ variationCode(item, model) }}</code>
-                        <button type="button" title="Copy SKU" @click="copyVariationCode(item, model)" :disabled="!variationCode(item, model)">Copy</button>
+                        <small>SKU Real</small>
+                        <strong>{{ shopeeRealSku(model) || 'Tidak ada SKU' }}</strong>
+                        <small>SKU Template</small>
+                        <span class="copy-line">
+                          <code>{{ templateSku(item, model) }}</code>
+                          <button type="button" title="Copy SKU Template" @click="copyVariationCode(item, model)" :disabled="!templateSku(item, model)">Copy</button>
+                        </span>
                       </span>
                       <span>SKU ID: {{ model.model_id || '-' }}</span>
                       <span class="variant-price">
@@ -189,6 +194,17 @@
                         <strong>{{ modelDiscountDetail(model) }}</strong>
                       </span>
                       <strong>Stock {{ model.stock || 0 }}</strong>
+                      <span class="variant-actions">
+                        <button
+                          type="button"
+                          class="update-sku-btn"
+                          title="Update SKU real Shopee dari SKU template"
+                          @click="updateMissingSku(item, model)"
+                          :disabled="!canUpdateMissingSku(item, model) || updatingSkuKey === shopeeSkuKey(item, model)"
+                        >
+                          {{ updatingSkuKey === shopeeSkuKey(item, model) ? 'Updating...' : 'Update SKU' }}
+                        </button>
+                      </span>
                     </div>
                     <div v-if="!item.models?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
                   </div>
@@ -218,6 +234,7 @@ const items = ref([])
 const expanded = ref({})
 const loading = ref(false)
 const syncingItemId = ref('')
+const updatingSkuKey = ref('')
 const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
@@ -310,12 +327,23 @@ const markImageBroken = (id) => {
 }
 
 const initials = (name) => String(name || 'SP').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
+const marketplaceSku = (value) => {
+  const sku = String(value || '').trim()
+  return sku === '-' ? '' : sku
+}
 const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
-const variationCode = (item, model) => {
+const shopeeRealSku = (model) => marketplaceSku(model?.model_sku)
+const firstRealSku = (rows, key) => (rows || []).map((row) => marketplaceSku(row?.[key])).find(Boolean) || ''
+const missingShopeeSku = (model) => !shopeeRealSku(model)
+const itemHasMissingSku = (item) => (item?.models || []).some((model) => missingShopeeSku(model))
+const templateSku = (item, model) => {
   const modelSku = String(model?.model_sku || '').trim()
   if (modelSku.toUpperCase().startsWith('INT-')) return modelSku
   return model?.kode_variasi || `INT-${item?.item_id || 'ITEM'}-${skuFragment(model?.name)}`
 }
+const variationCode = templateSku
+const shopeeSkuKey = (item, model) => `${item?.item_id || ''}:${model?.model_id || ''}`
+const canUpdateMissingSku = (item, model) => Boolean(missingShopeeSku(model) && item?.item_id && model?.model_id && templateSku(item, model))
 const copyText = async (value) => {
   const text = String(value || '').trim()
   if (!text) return
@@ -347,6 +375,32 @@ const copyText = async (value) => {
   }
 }
 const copyVariationCode = (item, model) => copyText(variationCode(item, model))
+const updateMissingSku = async (item, model) => {
+  if (!canUpdateMissingSku(item, model)) return
+
+  const key = shopeeSkuKey(item, model)
+  updatingSkuKey.value = key
+  syncMessage.value = ''
+
+  try {
+    const sellerSku = templateSku(item, model)
+    const response = await omnichannelService.updateMarketplaceVariantSku({
+      channel: 'shopee',
+      item_id: item.item_id,
+      model_id: model.model_id,
+      seller_sku: sellerSku
+    })
+
+    model.model_sku = sellerSku
+    syncMessage.value = response.data?.message || `SKU Shopee diupdate: ${sellerSku}`
+    syncTone.value = response.data?.status === 'error' ? 'error' : 'success'
+  } catch (error) {
+    syncMessage.value = error.response?.data?.response?.message || error.response?.data?.message || 'Update SKU Shopee gagal.'
+    syncTone.value = 'error'
+  } finally {
+    updatingSkuKey.value = ''
+  }
+}
 const modelSummary = (item) => `${item.models?.length || 0} varian`
 const qualityNote = (item) => isSoldOut(item) ? 'Stok perlu dicek' : 'Produk sedang dijual'
 const rowStatus = (item) => {
@@ -522,6 +576,8 @@ th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vert
 thead th { position: sticky; top: 0; background: #f8fafc; color: #0f172a; z-index: 2; }
 .check-col { width: 34px; text-align: center; }
 .product-row:hover { background: #fbfdff; }
+.product-row.missing-sku-row { background: #fffbeb; }
+.product-row.missing-sku-row:hover { background: #fef3c7; }
 .product-cell { display: grid; grid-template-columns: 72px 1fr; gap: 10px; min-width: 380px; }
 .product-cell img, .thumb-fallback { width: 72px; height: 72px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .thumb-fallback { display: grid; place-items: center; color: #64748b; font-weight: 800; }
@@ -542,14 +598,21 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .actions button { color: #4f2ec7; background: #f1efff; padding: 7px 9px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .95fr) minmax(0, .9fr) minmax(0, .7fr) minmax(0, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, .65fr) minmax(0, .35fr) minmax(112px, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item.missing-sku-row { background: #fffbeb; border-color: #facc15; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
-.variant-code { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.variant-code { display: grid; gap: 3px; min-width: 0; align-content: start; }
 .variant-code code { color: #0f172a; font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.variant-code small { color: #64748b; font-size: 11px; line-height: 1.25; }
+.variant-code strong { font-size: 12px; overflow-wrap: anywhere; }
+.copy-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
 .variant-code button:disabled { cursor: not-allowed; opacity: .45; }
+.variant-actions { display: flex; align-items: start; justify-content: flex-end; }
+.update-sku-btn { border: 1px solid #f59e0b; background: #fef3c7; color: #92400e; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
+.update-sku-btn:disabled { cursor: not-allowed; opacity: .55; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
 .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
 .pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }

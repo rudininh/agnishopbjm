@@ -108,7 +108,7 @@
           </thead>
           <tbody>
             <template v-for="item in pagedItems" :key="item.product_id">
-              <tr class="product-row">
+              <tr :class="['product-row', { 'missing-sku-row': itemHasMissingSku(item) }]">
                 <td class="check-col"><input type="checkbox" /></td>
                 <td>
                   <div class="product-cell">
@@ -124,7 +124,7 @@
                 </td>
                 <td>--</td>
                 <td>
-                  <strong>{{ item.skus?.[0]?.sku_name || '--' }}</strong>
+                  <strong>{{ firstRealSku(item.skus, 'seller_sku') || 'Tidak ada SKU' }}</strong>
                   <small>{{ skuSummary(item) }}</small>
                 </td>
                 <td>{{ priceRange(item.skus) }}</td>
@@ -153,16 +153,35 @@
                 <td></td>
                 <td colspan="8">
                   <div class="variant-list">
-                    <div v-for="(sku, index) in item.skus" :key="`${item.product_id}-${sku.sku_id || sku.sku_name || index}`" class="variant-item">
+                    <div v-for="(sku, index) in item.skus" :key="`${item.product_id}-${sku.sku_id || sku.sku_name || index}`" :class="['variant-item', { 'missing-sku-row': missingTiktokSku(sku) }]">
                       <span class="variant-name">
                         <img v-if="sku.image_url" :src="sku.image_url" :alt="sku.sku_name || 'Varian TikTok'" />
                         <span v-else class="variant-thumb-fallback">{{ initials(sku.sku_name) }}</span>
                         <span>{{ sku.sku_name || '-' }}</span>
                       </span>
-                      <span>Kode Variasi: {{ variationCode(item, sku) }}</span>
+                      <span class="variant-code">
+                        <small>SKU Real</small>
+                        <strong>{{ tiktokRealSku(sku) || 'Tidak ada SKU' }}</strong>
+                        <small>SKU Template</small>
+                        <span class="copy-line">
+                          <code>{{ templateSku(item, sku) }}</code>
+                          <button type="button" title="Copy SKU Template" @click="copyVariationCode(item, sku)" :disabled="!templateSku(item, sku)">Copy</button>
+                        </span>
+                      </span>
                       <span>SKU ID: {{ sku.sku_id || sku.tiktok_sku || '-' }}</span>
                       <strong>{{ formatCurrency(sku.price || 0) }}</strong>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
+                      <span class="variant-actions">
+                        <button
+                          type="button"
+                          class="update-sku-btn"
+                          title="Update SKU real TikTok dari SKU template"
+                          @click="updateMissingSku(item, sku)"
+                          :disabled="!canUpdateMissingSku(item, sku) || updatingSkuKey === tiktokSkuKey(item, sku)"
+                        >
+                          {{ updatingSkuKey === tiktokSkuKey(item, sku) ? 'Updating...' : 'Update SKU' }}
+                        </button>
+                      </span>
                     </div>
                     <div v-if="!item.skus?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
                   </div>
@@ -201,12 +220,14 @@ const items = ref([])
 const expanded = ref({})
 const loading = ref(false)
 const syncingProductId = ref('')
+const updatingSkuKey = ref('')
 const activeTab = ref('all')
 const page = ref(1)
 const PAGE_SIZE = 20
 const syncMessage = ref('')
 const syncTone = ref('info')
 const lastSyncAt = ref('')
+const copyTimer = ref(null)
 const filters = reactive({
   status: 'all',
   minimumStock: null,
@@ -260,11 +281,79 @@ const lastSyncLabel = computed(() => lastSyncAt.value ? `Terakhir sinkron: ${for
 
 const skuSummary = (item) => `${item.skus?.length || 0} varian`
 const initials = (name) => String(name || 'TT').split(' ').slice(0, 2).map((word) => word[0]).join('').toUpperCase()
+const marketplaceSku = (value) => {
+  const sku = String(value || '').trim()
+  return sku === '-' ? '' : sku
+}
 const skuFragment = (value) => String(value || 'VARIAN').trim().toUpperCase().replace(/[^A-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'VARIAN'
-const variationCode = (item, sku) => {
+const tiktokRealSku = (sku) => marketplaceSku(sku?.seller_sku)
+const firstRealSku = (rows, key) => (rows || []).map((row) => marketplaceSku(row?.[key])).find(Boolean) || ''
+const missingTiktokSku = (sku) => !tiktokRealSku(sku)
+const itemHasMissingSku = (item) => (item?.skus || []).some((sku) => missingTiktokSku(sku))
+const templateSku = (item, sku) => {
   const sellerSku = String(sku?.seller_sku || '').trim()
   if (sellerSku.toUpperCase().startsWith('INT-')) return sellerSku
   return sku?.kode_variasi || `INT-${item?.product_id || 'PRODUCT'}-${skuFragment(sku?.sku_name)}`
+}
+const variationCode = templateSku
+const tiktokSkuKey = (item, sku) => `${item?.product_id || ''}:${sku?.sku_id || sku?.tiktok_sku || ''}`
+const canUpdateMissingSku = (item, sku) => Boolean(missingTiktokSku(sku) && item?.product_id && (sku?.sku_id || sku?.tiktok_sku) && templateSku(item, sku))
+const copyText = async (value) => {
+  const text = String(value || '').trim()
+  if (!text) return
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+
+    syncMessage.value = `SKU disalin: ${text}`
+    syncTone.value = 'success'
+    clearTimeout(copyTimer.value)
+    copyTimer.value = setTimeout(() => {
+      if (syncMessage.value === `SKU disalin: ${text}`) syncMessage.value = ''
+    }, 1600)
+  } catch (error) {
+    syncMessage.value = 'SKU belum bisa disalin.'
+    syncTone.value = 'error'
+  }
+}
+const copyVariationCode = (item, sku) => copyText(variationCode(item, sku))
+const updateMissingSku = async (item, sku) => {
+  if (!canUpdateMissingSku(item, sku)) return
+
+  const key = tiktokSkuKey(item, sku)
+  updatingSkuKey.value = key
+  syncMessage.value = ''
+
+  try {
+    const sellerSku = templateSku(item, sku)
+    const response = await omnichannelService.updateMarketplaceVariantSku({
+      channel: 'tiktok',
+      product_id: item.product_id,
+      sku_id: sku.sku_id || sku.tiktok_sku,
+      seller_sku: sellerSku
+    })
+
+    sku.seller_sku = sellerSku
+    syncMessage.value = response.data?.message || `SKU TikTok diupdate: ${sellerSku}`
+    syncTone.value = response.data?.status === 'error' ? 'error' : 'success'
+  } catch (error) {
+    syncMessage.value = error.response?.data?.response?.message || error.response?.data?.message || 'Update SKU TikTok gagal.'
+    syncTone.value = 'error'
+  } finally {
+    updatingSkuKey.value = ''
+  }
 }
 const qualityNote = (item) => totalStock(item.skus) > 0 ? 'Produk sedang dijual' : 'Stok perlu dicek'
 const rowStatus = (item) => totalStock(item.skus) > 0 ? { label: 'Live', tone: 'success' } : { label: 'Sold Out', tone: 'warning' }
@@ -389,6 +478,8 @@ th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vert
 thead th { position: sticky; top: 0; background: #1f2937; color: #fff; }
 .check-col { width: 34px; text-align: center; }
 .product-row:hover { background: #fbfdff; }
+.product-row.missing-sku-row { background: #fffbeb; }
+.product-row.missing-sku-row:hover { background: #fef3c7; }
 .product-cell { display: grid; grid-template-columns: 72px 1fr; gap: 10px; min-width: 380px; }
 .thumb-image { width: 72px; height: 72px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .thumb-fallback { width: 72px; height: 72px; border-radius: 6px; display: grid; place-items: center; background: #eef2f7; color: #64748b; font-weight: 800; }
@@ -403,10 +494,21 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .actions button { color: #0f5fc7; background: #eaf1ff; padding: 7px 9px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .95fr) minmax(0, .9fr) minmax(0, .7fr) minmax(0, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, .65fr) minmax(0, .35fr) minmax(112px, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item.missing-sku-row { background: #fffbeb; border-color: #facc15; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
+.variant-code { display: grid; gap: 3px; min-width: 0; align-content: start; }
+.variant-code code { color: #0f172a; font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.variant-code small { color: #64748b; font-size: 11px; line-height: 1.25; }
+.variant-code strong { font-size: 12px; overflow-wrap: anywhere; }
+.copy-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
+.variant-code button:disabled { cursor: not-allowed; opacity: .45; }
+.variant-actions { display: flex; align-items: start; justify-content: flex-end; }
+.update-sku-btn { border: 1px solid #f59e0b; background: #fef3c7; color: #92400e; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
+.update-sku-btn:disabled { cursor: not-allowed; opacity: .55; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
 .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
 .pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }

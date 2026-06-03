@@ -96,13 +96,14 @@
                 v-for="item in group.variants"
                 v-show="isExpanded(group.key)"
                 :key="item.id"
-                :class="['variant-row', { active: selectedItem?.id === item.id }]"
+                :class="['variant-row', { active: selectedItem?.id === item.id, 'missing-sku-row': hasMissingRealSku(item) }]"
                 @click="selectItem(item)"
               >
                 <td>
                   <div class="variant-title">
                     <strong>{{ item.variant_name || 'Tanpa Varian' }}</strong>
                     <small>SKU Internal: {{ displayInternalSku(item) }}</small>
+                    <small class="inline-copy">SKU Template: <code>{{ templateSku(item) || '-' }}</code><button type="button" @click.stop="copySkuTemplate(item)" :disabled="!templateSku(item)">Copy</button></small>
                   </div>
                 </td>
                 <td>
@@ -111,7 +112,7 @@
                     <div v-else class="thumb fallback">SP</div>
                     <div>
                       <strong>{{ item.shopee?.variant_name || item.variant_name || '-' }}</strong>
-                      <small>SKU Shopee: {{ channelSku(item, 'shopee') || '-' }}</small>
+                      <small>SKU Real Shopee: {{ channelSku(item, 'shopee') || 'Tidak ada SKU' }}</small>
                       <small>Item ID: {{ item.shopee?.item_id || '-' }}</small>
                       <small>Model ID: {{ item.shopee?.model_id || '-' }}</small>
                     </div>
@@ -123,7 +124,7 @@
                     <div v-else class="thumb fallback">TT</div>
                     <div>
                       <strong>{{ item.tiktok?.variant_name || item.variant_name || '-' }}</strong>
-                      <small>SKU TikTok: {{ channelSku(item, 'tiktok') || '-' }}</small>
+                      <small>SKU Real TikTok: {{ channelSku(item, 'tiktok') || 'Tidak ada SKU' }}</small>
                       <small>Product ID: {{ item.tiktok?.product_id || '-' }}</small>
                       <small>SKU ID: {{ item.tiktok?.sku_id || '-' }}</small>
                     </div>
@@ -132,6 +133,15 @@
                 <td>
                   <span :class="['badge', skuStatus(item)]">{{ skuStatusLabel(skuStatus(item)) }}</span>
                   <small class="status-note">{{ itemStatusLabel(item.status) }}</small>
+                  <button
+                    v-if="hasMissingRealSku(item)"
+                    type="button"
+                    class="row-update-sku"
+                    @click.stop="updateMissingSku(item)"
+                    :disabled="!canUpdateMissingSku(item) || updatingSkuId === item.stock_master_id"
+                  >
+                    {{ updatingSkuId === item.stock_master_id ? 'Updating...' : 'Update SKU' }}
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -157,19 +167,21 @@
         </div>
 
         <div class="sku-card">
-          <span>SKU Internal</span>
-          <strong>{{ displayInternalSku(selectedItem) }}</strong>
+          <span>SKU Template</span>
+          <strong>{{ templateSku(selectedItem) || '-' }}</strong>
+          <button class="copy-btn" type="button" @click="copySkuTemplate(selectedItem)" :disabled="!templateSku(selectedItem)">Copy Template</button>
+          <small>SKU Internal: {{ displayInternalSku(selectedItem) }}</small>
           <small>Status: {{ skuStatusLabel(skuStatus(selectedItem)) }}</small>
         </div>
 
         <div class="current-grid">
           <div>
-            <span>Shopee SKU</span>
-            <strong>{{ channelSku(selectedItem, 'shopee') || '-' }}</strong>
+            <span>SKU Real Shopee</span>
+            <strong>{{ channelSku(selectedItem, 'shopee') || 'Tidak ada SKU' }}</strong>
           </div>
           <div>
-            <span>TikTok SKU</span>
-            <strong>{{ channelSku(selectedItem, 'tiktok') || '-' }}</strong>
+            <span>SKU Real TikTok</span>
+            <strong>{{ channelSku(selectedItem, 'tiktok') || 'Tidak ada SKU' }}</strong>
           </div>
         </div>
 
@@ -237,6 +249,7 @@ import { omnichannelService } from '@/services'
 const loading = ref(false)
 const submitting = ref(false)
 const syncingMarketplaces = ref(false)
+const updatingSkuId = ref(null)
 const loadError = ref('')
 const summary = ref(null)
 const items = ref([])
@@ -262,19 +275,28 @@ const normalizeSku = (value) => String(value || '').trim()
 const sameSku = (left, right) => normalizeSku(left).toLowerCase() === normalizeSku(right).toLowerCase()
 const formatJson = (value) => JSON.stringify(value, null, 2)
 const emptyResponse = (channel) => ({ message: `Belum ada response ${channel}.` })
+const marketplaceSku = (value) => {
+  const sku = normalizeSku(value)
+  return sku === '-' ? '' : sku
+}
 
 const hasShopeeActual = (item) => item?.shopee?.status === 'mapped' && item?.shopee?.source !== 'suggested_product'
 const hasTiktokActual = (item) => item?.tiktok?.status === 'mapped' && item?.tiktok?.source !== 'suggested_product'
 const hasShopeeIdentity = (item) => Boolean(item?.shopee?.item_id && item?.shopee?.model_id)
 const hasTiktokIdentity = (item) => Boolean(item?.tiktok?.product_id && item?.tiktok?.sku_id)
-const channelSku = (item, channel) => normalizeSku(item?.[channel]?.seller_sku)
+const channelSku = (item, channel) => marketplaceSku(item?.[channel]?.seller_sku)
 const matchingMarketplaceSku = (item) => {
   const shopeeSku = channelSku(item, 'shopee')
   const tiktokSku = channelSku(item, 'tiktok')
   return shopeeSku && tiktokSku && sameSku(shopeeSku, tiktokSku) ? shopeeSku : ''
 }
-const targetSku = (item) => matchingMarketplaceSku(item) || normalizeSku(item?.internal_sku) || channelSku(item, 'shopee') || channelSku(item, 'tiktok')
-const displayInternalSku = (item) => targetSku(item) || '-'
+const templateSku = (item) => normalizeSku(item?.template_sku) || normalizeSku(item?.internal_sku) || normalizeSku(item?.seller_sku) || matchingMarketplaceSku(item)
+const targetSku = (item) => templateSku(item) || matchingMarketplaceSku(item)
+const displayInternalSku = (item) => normalizeSku(item?.internal_sku) || '-'
+const missingShopeeSku = (item) => hasShopeeIdentity(item) && !channelSku(item, 'shopee')
+const missingTiktokSku = (item) => hasTiktokIdentity(item) && !channelSku(item, 'tiktok')
+const hasMissingRealSku = (item) => missingShopeeSku(item) || missingTiktokSku(item)
+const canUpdateMissingSku = (item) => Boolean(item?.stock_master_id && templateSku(item) && hasMissingRealSku(item))
 
 const skuStatus = (item) => {
   const internalSku = normalizeSku(item?.internal_sku)
@@ -585,6 +607,51 @@ const submitSkuUpdate = async () => {
   }
 }
 
+const updateMissingSku = async (item) => {
+  if (!canUpdateMissingSku(item)) return
+
+  updatingSkuId.value = item.stock_master_id
+  loadError.value = ''
+
+  try {
+    const sellerSku = templateSku(item)
+    const applyShopee = missingShopeeSku(item)
+    const applyTiktok = missingTiktokSku(item)
+    const response = await omnichannelService.updateSkuMappingMarketplaceSku({
+      stock_master_id: item.stock_master_id,
+      seller_sku: sellerSku,
+      apply_shopee: applyShopee,
+      apply_tiktok: applyTiktok,
+      dry_run: false
+    })
+
+    if (applyShopee && response.data?.shopee?.status === 'ok') {
+      item.shopee.seller_sku = sellerSku
+    }
+    if (applyTiktok && response.data?.tiktok?.status === 'ok') {
+      item.tiktok.seller_sku = sellerSku
+    }
+    if (selectedItem.value?.stock_master_id === item.stock_master_id) {
+      selectedItem.value = item
+    }
+
+    marketplaceResponse.shopee = response.data?.shopee || null
+    marketplaceResponse.tiktok = response.data?.tiktok || null
+    copyMessage.value = response.data?.message || 'SKU marketplace berhasil diupdate.'
+
+    if (response.data?.status === 'partial_error') {
+      loadError.value = response.data?.message || 'Sebagian request SKU gagal.'
+    }
+  } catch (error) {
+    const data = error.response?.data || { message: error.message || 'Update SKU gagal diproses.' }
+    loadError.value = data.message || 'Update SKU gagal diproses.'
+    marketplaceResponse.shopee = data.shopee || null
+    marketplaceResponse.tiktok = data.tiktok || null
+  } finally {
+    updatingSkuId.value = null
+  }
+}
+
 const syncMarketplaces = async () => {
   syncingMarketplaces.value = true
   loadError.value = ''
@@ -615,17 +682,16 @@ const syncMarketplaces = async () => {
   }
 }
 
-const copyMarketplaceResponse = async (channel) => {
-  const payload = marketplaceResponse[channel]
-  if (!payload) return
+const copyText = async (text, successMessage) => {
+  const value = normalizeSku(text)
+  if (!value) return
 
-  const text = formatJson(payload)
   try {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(value)
     } else {
       const textarea = document.createElement('textarea')
-      textarea.value = text
+      textarea.value = value
       textarea.setAttribute('readonly', '')
       textarea.style.position = 'fixed'
       textarea.style.opacity = '0'
@@ -635,10 +701,19 @@ const copyMarketplaceResponse = async (channel) => {
       document.body.removeChild(textarea)
     }
 
-    copyMessage.value = `${channel === 'shopee' ? 'Shopee' : 'TikTok'} response disalin.`
+    copyMessage.value = successMessage
   } catch {
     copyMessage.value = 'Copy gagal. Browser tidak memberi akses clipboard.'
   }
+}
+
+const copySkuTemplate = (item) => copyText(templateSku(item), 'SKU template disalin.')
+
+const copyMarketplaceResponse = async (channel) => {
+  const payload = marketplaceResponse[channel]
+  if (!payload) return
+
+  await copyText(formatJson(payload), `${channel === 'shopee' ? 'Shopee' : 'TikTok'} response disalin.`)
 }
 
 onMounted(loadData)
@@ -679,7 +754,13 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .product-row strong { color:#111827; overflow-wrap:anywhere; }
 .variant-row { cursor:pointer; }
 .variant-row:hover,.variant-row.active { background:#ecfeff; }
+.variant-row.missing-sku-row { background:#fffbeb; }
+.variant-row.missing-sku-row:hover,.variant-row.missing-sku-row.active { background:#fef3c7; }
 .variant-title strong { display:block; margin-bottom:4px; }
+.inline-copy { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.inline-copy code { color:#0f172a; font-family:inherit; font-weight:700; overflow-wrap:anywhere; }
+.inline-copy button { border:1px solid #d9e2ec; border-radius:5px; background:#fff; color:#334155; cursor:pointer; font-size:11px; font-weight:700; padding:3px 7px; }
+.inline-copy button:disabled { cursor:not-allowed; opacity:.55; }
 .channel-cell { display:grid; grid-template-columns:58px minmax(0,1fr); gap:10px; align-items:start; min-width:0; }
 .channel-cell strong { display:block; line-height:1.25; margin-bottom:4px; overflow-wrap:anywhere; }
 .channel-cell small,.variant-title small { overflow-wrap:anywhere; }
@@ -696,6 +777,8 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .badge.shopee_empty,.badge.tiktok_empty,.badge.both_empty { background:#ffedd5; color:#c2410c; }
 .badge.incomplete,.badge.internal_empty { background:#fee2e2; color:#b91c1c; }
 .status-note { margin-top:6px; }
+.row-update-sku { display:block; margin-top:8px; border:1px solid #f59e0b; border-radius:5px; background:#fef3c7; color:#92400e; cursor:pointer; font-size:11px; font-weight:800; padding:6px 8px; }
+.row-update-sku:disabled { cursor:not-allowed; opacity:.55; }
 .detail-panel label { display:block; margin-bottom:10px; }
 .detail-panel span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
 .detail-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
@@ -703,6 +786,7 @@ td small { color:#64748b; display:block; margin-top:3px; }
 .sku-card { border:1px solid #d9e2ec; border-radius:8px; padding:12px; margin-bottom:10px; background:#f8fafc; }
 .sku-card strong { display:block; font-size:18px; color:#111827; overflow-wrap:anywhere; }
 .sku-card small { color:#64748b; display:block; margin-top:4px; }
+.sku-card .copy-btn { margin:8px 0 2px; }
 .current-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
 .current-grid > div { border:1px solid #e5e7eb; border-radius:8px; padding:10px; min-width:0; }
 .current-grid strong { display:block; color:#111827; overflow-wrap:anywhere; }
