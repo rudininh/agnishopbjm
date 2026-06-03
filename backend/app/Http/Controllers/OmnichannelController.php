@@ -1538,7 +1538,7 @@ class OmnichannelController extends Controller
         ], fn ($value) => $value !== null);
     }
 
-    private function buildShopeeAddModel(array $variant, int $optionIndex, string $sellerStockLocationId = '', ?float $modelWeight = null): array
+    private function buildShopeeAddModel(array $variant, int|array $optionIndex, string $sellerStockLocationId = '', ?float $modelWeight = null): array
     {
         $sellerStock = [
             'stock' => $variant['stock'],
@@ -1547,8 +1547,12 @@ class OmnichannelController extends Controller
             $sellerStock['location_id'] = $sellerStockLocationId;
         }
 
+        $tierIndex = is_array($optionIndex)
+            ? array_map('intval', $optionIndex)
+            : [(int) $optionIndex];
+
         $model = [
-            'tier_index' => [$optionIndex],
+            'tier_index' => $tierIndex,
             'original_price' => $variant['price'],
             'seller_stock' => [$sellerStock],
         ];
@@ -1562,6 +1566,111 @@ class OmnichannelController extends Controller
         }
 
         return $model;
+    }
+
+    private function shopeeTierOptionList(array $tier, bool $useStandardiseTier): array
+    {
+        $options = $useStandardiseTier
+            ? data_get($tier, 'variation_option_list', [])
+            : data_get($tier, 'option_list', []);
+
+        return is_array($options) ? $options : [];
+    }
+
+    private function shopeeTierOptionName(mixed $option, bool $useStandardiseTier): string
+    {
+        return trim((string) ($useStandardiseTier
+            ? data_get($option, 'variation_option_name')
+            : data_get($option, 'option')));
+    }
+
+    private function shopeeTierName(array $tier, bool $useStandardiseTier): string
+    {
+        return trim((string) ($useStandardiseTier
+            ? (data_get($tier, 'variation_name') ?: data_get($tier, 'name'))
+            : data_get($tier, 'name')));
+    }
+
+    private function resolveShopeeAddVariantTierIndex(array $activeTierVariation, bool $useStandardiseTier, array $requestedVariants): int
+    {
+        $requestedKeys = [];
+        foreach ($requestedVariants as $variant) {
+            $key = $this->normalizeSkuMatchValue($variant['variant_name'] ?? '');
+            if ($key !== '') {
+                $requestedKeys[$key] = true;
+            }
+        }
+
+        $bestTierIndex = 0;
+        $bestMatchCount = -1;
+        $largestOptionCount = -1;
+        $bestTierNameScore = -1;
+        foreach ($activeTierVariation as $tierIndex => $tier) {
+            if (! is_array($tier)) {
+                continue;
+            }
+
+            $options = $this->shopeeTierOptionList($tier, $useStandardiseTier);
+            $tierNameKey = $this->normalizeSkuMatchValue($this->shopeeTierName($tier, $useStandardiseTier));
+            $tierNameScore = preg_match('/\b(warna|color|colour|varian|variant)\b/i', $tierNameKey) ? 1 : 0;
+            $matchCount = 0;
+            foreach ($options as $option) {
+                $key = $this->normalizeSkuMatchValue($this->shopeeTierOptionName($option, $useStandardiseTier));
+                if ($key !== '' && isset($requestedKeys[$key])) {
+                    $matchCount += 1;
+                }
+            }
+
+            $optionCount = count($options);
+            if (
+                $matchCount > $bestMatchCount
+                || ($matchCount === $bestMatchCount && $tierNameScore > $bestTierNameScore)
+                || ($matchCount === $bestMatchCount && $tierNameScore === $bestTierNameScore && $optionCount > $largestOptionCount)
+            ) {
+                $bestTierIndex = (int) $tierIndex;
+                $bestMatchCount = $matchCount;
+                $bestTierNameScore = $tierNameScore;
+                $largestOptionCount = $optionCount;
+            }
+        }
+
+        return $bestTierIndex;
+    }
+
+    private function defaultShopeeTierIndexes(array $models, int $tierCount): array
+    {
+        foreach ($models as $model) {
+            if (! is_array($model)) {
+                continue;
+            }
+
+            $tierIndex = array_map('intval', $this->normalizeShopeeIndexList($model['tier_index'] ?? []));
+            if (count($tierIndex) === $tierCount) {
+                return $tierIndex;
+            }
+        }
+
+        return array_fill(0, $tierCount, 0);
+    }
+
+    private function splitShopeeVariantTierValues(string $variantName, int $tierCount, int $targetTierIndex): array
+    {
+        $values = array_fill(0, $tierCount, '');
+        if ($tierCount > 1 && str_contains($variantName, ',')) {
+            $parts = array_map('trim', explode(',', $variantName));
+            if (count($parts) === $tierCount && collect($parts)->every(fn ($part) => $part !== '')) {
+                return array_values($parts);
+            }
+        }
+
+        $values[$targetTierIndex] = trim($variantName);
+        return $values;
+    }
+
+    private function fallbackShopeeTierOptionName(array $tierOptions, int $index, bool $useStandardiseTier): string
+    {
+        $option = $tierOptions[$index] ?? $tierOptions[0] ?? null;
+        return $this->shopeeTierOptionName($option, $useStandardiseTier);
     }
 
     private function buildShopeeUpdateModel(array $variant, array $existingModel): array
@@ -1595,26 +1704,25 @@ class OmnichannelController extends Controller
         $useStandardiseTier = is_array($standardiseTierVariation) && $standardiseTierVariation !== [];
         $activeTierVariation = $useStandardiseTier ? $standardiseTierVariation : $tierVariation;
 
-        if (! is_array($activeTierVariation) || count($activeTierVariation) !== 1) {
+        if (! is_array($activeTierVariation) || $activeTierVariation === [] || count($activeTierVariation) > 2) {
             return null;
         }
 
-        $tierOptions = $useStandardiseTier
-            ? data_get($activeTierVariation, '0.variation_option_list', [])
-            : data_get($activeTierVariation, '0.option_list', []);
+        $tierCount = count($activeTierVariation);
+        $targetTierIndex = (int) ($plannedVariants[0]['target_tier_index'] ?? 0);
+        $optionIndexByTierName = [];
+        foreach ($activeTierVariation as $tierIndex => $tier) {
+            if (! is_array($tier)) {
+                return null;
+            }
 
-        if (! is_array($tierOptions)) {
-            return null;
-        }
-
-        $optionIndexByName = [];
-        foreach ($tierOptions as $index => $option) {
-            $name = $useStandardiseTier
-                ? data_get($option, 'variation_option_name')
-                : data_get($option, 'option');
-            $key = $this->normalizeSkuMatchValue($name ?? '');
-            if ($key !== '') {
-                $optionIndexByName[$key] = (int) $index;
+            $optionIndexByTierName[$tierIndex] = [];
+            foreach ($this->shopeeTierOptionList($tier, $useStandardiseTier) as $index => $option) {
+                $name = $this->shopeeTierOptionName($option, $useStandardiseTier);
+                $key = $this->normalizeSkuMatchValue($name);
+                if ($key !== '') {
+                    $optionIndexByTierName[$tierIndex][$key] = (int) $index;
+                }
             }
         }
 
@@ -1622,16 +1730,30 @@ class OmnichannelController extends Controller
         $updatedPlannedVariants = [];
 
         foreach ($plannedVariants as $variant) {
-            $variantKey = $this->normalizeSkuMatchValue($variant['variant_name'] ?? '');
-            if ($variantKey === '' || ! array_key_exists($variantKey, $optionIndexByName)) {
-                return null;
+            $defaultTierIndexes = $variant['default_tier_indexes'] ?? array_fill(0, $tierCount, 0);
+            $tierIndex = array_map('intval', is_array($defaultTierIndexes) ? $defaultTierIndexes : []);
+            if (count($tierIndex) !== $tierCount) {
+                $tierIndex = array_fill(0, $tierCount, 0);
             }
 
-            $optionIndex = $optionIndexByName[$variantKey];
-            $modelList[] = $this->buildShopeeAddModel($variant, $optionIndex, $sellerStockLocationId, $modelWeight);
+            $tierValues = $variant['tier_values'] ?? $this->splitShopeeVariantTierValues((string) ($variant['variant_name'] ?? ''), $tierCount, $targetTierIndex);
+            foreach ($tierValues as $currentTierIndex => $tierValue) {
+                $tierValueKey = $this->normalizeSkuMatchValue($tierValue);
+                if ($tierValueKey === '') {
+                    continue;
+                }
+
+                if (! array_key_exists($tierValueKey, $optionIndexByTierName[$currentTierIndex] ?? [])) {
+                    return null;
+                }
+
+                $tierIndex[$currentTierIndex] = $optionIndexByTierName[$currentTierIndex][$tierValueKey];
+            }
+
+            $modelList[] = $this->buildShopeeAddModel($variant, $tierIndex, $sellerStockLocationId, $modelWeight);
             $updatedPlannedVariants[] = [
                 ...$variant,
-                'tier_index' => [$optionIndex],
+                'tier_index' => $tierIndex,
             ];
         }
 
@@ -3898,6 +4020,13 @@ class OmnichannelController extends Controller
                 ? false
                 : $hasTiktokVariantIdentity;
 
+            if ($hasTiktokActual) {
+                $tiktokProductId = $tiktokMatch->product_id ?? $tiktokProductId;
+                $tiktokSkuId = $tiktokMatch->sku_id ?? $tiktokSkuId;
+                $tiktokSkuName = $tiktokMatch->sku_name ?? $tiktokSkuName;
+                $tiktokSellerSku = $tiktokMatch->seller_sku ?? $tiktokSellerSku;
+            }
+
             $shopeeImageUrl = $row->shopee_model_image_url
                 ?: $row->internal_image_url
                 ?: $row->shopee_image_url
@@ -5933,21 +6062,27 @@ class OmnichannelController extends Controller
         $activeTierVariation = $useStandardiseTier ? $standardiseTierVariation : $tierVariation;
 
         abort_if(! is_array($activeTierVariation) || $activeTierVariation === [], 422, 'Produk Shopee belum punya tier variation. Untuk produk tanpa varian perlu init_tier_variation dulu.');
-        abort_if(count($activeTierVariation) !== 1, 422, 'Tool ini sementara hanya menangani produk Shopee 1 level varian.');
+        abort_if(count($activeTierVariation) > 2, 422, 'Tool ini sementara hanya menangani produk Shopee maksimal 2 level varian.');
 
-        $tierOptions = $useStandardiseTier
-            ? data_get($activeTierVariation, '0.variation_option_list', [])
-            : data_get($activeTierVariation, '0.option_list', []);
-        abort_if(! is_array($tierOptions), 422, 'Struktur opsi varian Shopee tidak terbaca.');
+        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants'], (string) $itemId);
+        abort_if($requestedVariants === [], 422, 'Tidak ada varian valid untuk ditambahkan ke Shopee.');
 
-        $optionIndexByName = [];
-        foreach ($tierOptions as $index => $option) {
-            $name = $useStandardiseTier
-                ? data_get($option, 'variation_option_name')
-                : data_get($option, 'option');
-            $key = $this->normalizeSkuMatchValue($name ?? '');
-            if ($key !== '') {
-                $optionIndexByName[$key] = (int) $index;
+        $tierCount = count($activeTierVariation);
+        $targetTierIndex = $this->resolveShopeeAddVariantTierIndex($activeTierVariation, $useStandardiseTier, $requestedVariants);
+        $defaultTierIndexes = $this->defaultShopeeTierIndexes(is_array($models) ? $models : [], $tierCount);
+
+        $tierOptionsByTier = [];
+        $optionIndexByTierName = [];
+        foreach ($activeTierVariation as $tierIndex => $tier) {
+            $tierOptionsByTier[$tierIndex] = $this->shopeeTierOptionList(is_array($tier) ? $tier : [], $useStandardiseTier);
+            $optionIndexByTierName[$tierIndex] = [];
+
+            foreach ($tierOptionsByTier[$tierIndex] as $index => $option) {
+                $name = $this->shopeeTierOptionName($option, $useStandardiseTier);
+                $key = $this->normalizeSkuMatchValue($name);
+                if ($key !== '') {
+                    $optionIndexByTierName[$tierIndex][$key] = (int) $index;
+                }
             }
         }
 
@@ -5985,9 +6120,6 @@ class OmnichannelController extends Controller
             }
         }
 
-        $requestedVariants = $this->normalizeShopeeAddVariantRows($data['variants'], (string) $itemId);
-        abort_if($requestedVariants === [], 422, 'Tidak ada varian valid untuk ditambahkan ke Shopee.');
-
         $newOptionCount = 0;
         $addModels = [];
         $updateModels = [];
@@ -5998,38 +6130,67 @@ class OmnichannelController extends Controller
 
         foreach ($requestedVariants as $variant) {
             $variantName = $variant['variant_name'];
-            $variantKey = $this->normalizeSkuMatchValue($variantName);
+            $tierValues = $this->splitShopeeVariantTierValues($variantName, $tierCount, $targetTierIndex);
+            foreach ($tierValues as $tierIndex => $value) {
+                if (trim((string) $value) !== '') {
+                    continue;
+                }
+
+                $fallbackIndex = (int) ($defaultTierIndexes[$tierIndex] ?? 0);
+                $tierValues[$tierIndex] = $this->fallbackShopeeTierOptionName($tierOptionsByTier[$tierIndex] ?? [], $fallbackIndex, $useStandardiseTier);
+            }
+            $variantKey = implode('|', array_map(fn ($value) => $this->normalizeSkuMatchValue($value), $tierValues));
             if ($variantKey === '' || isset($seenVariantNames[$variantKey])) {
                 continue;
             }
             $seenVariantNames[$variantKey] = true;
 
-            $optionAlreadyExists = array_key_exists($variantKey, $optionIndexByName);
-            $optionIndex = $optionAlreadyExists ? $optionIndexByName[$variantKey] : count($tierOptions);
             $imageUpload = null;
             $imageId = '';
+            $modelTierIndex = $defaultTierIndexes;
+            $allOptionsAlreadyExist = true;
 
-            if (! $optionAlreadyExists) {
-                if (! $dryRun && $variant['image_url'] !== '') {
-                    $imageUpload = $this->uploadShopeeProductImage($config, $variant['image_url']);
-                    if (($imageUpload['ok'] ?? false) !== true) {
-                        return response()->json([
-                            'status' => 'error',
-                            'message' => $imageUpload['message'] ?? 'Upload gambar Shopee gagal.',
-                            'variant' => $variantName,
-                            'upload' => $imageUpload,
-                        ], 422);
-                    }
-
-                    $imageId = trim((string) ($imageUpload['image_id'] ?? ''));
+            foreach ($tierValues as $tierIndex => $tierValue) {
+                $tierValue = trim((string) $tierValue);
+                $tierValueKey = $this->normalizeSkuMatchValue($tierValue);
+                if ($tierValueKey === '') {
+                    continue;
                 }
 
-                $tierOptions[] = $this->buildShopeeTierOption($variantName, $useStandardiseTier, $imageId, $variant['image_url']);
-                $optionIndexByName[$variantKey] = $optionIndex;
-                $newOptionCount += 1;
+                $optionAlreadyExists = array_key_exists($tierValueKey, $optionIndexByTierName[$tierIndex] ?? []);
+                if (! $optionAlreadyExists) {
+                    $allOptionsAlreadyExist = false;
+                    if ($tierIndex === $targetTierIndex && ! $dryRun && $variant['image_url'] !== '' && $imageUpload === null) {
+                        $imageUpload = $this->uploadShopeeProductImage($config, $variant['image_url']);
+                        if (($imageUpload['ok'] ?? false) !== true) {
+                            return response()->json([
+                                'status' => 'error',
+                                'message' => $imageUpload['message'] ?? 'Upload gambar Shopee gagal.',
+                                'variant' => $variantName,
+                                'upload' => $imageUpload,
+                            ], 422);
+                        }
+
+                        $imageId = trim((string) ($imageUpload['image_id'] ?? ''));
+                    }
+
+                    $optionIndex = count($tierOptionsByTier[$tierIndex] ?? []);
+                    $tierOptionsByTier[$tierIndex][] = $this->buildShopeeTierOption(
+                        $tierValue,
+                        $useStandardiseTier,
+                        $tierIndex === $targetTierIndex ? $imageId : '',
+                        $tierIndex === $targetTierIndex ? $variant['image_url'] : ''
+                    );
+                    $optionIndexByTierName[$tierIndex][$tierValueKey] = $optionIndex;
+                    $newOptionCount += 1;
+                } else {
+                    $optionIndex = $optionIndexByTierName[$tierIndex][$tierValueKey];
+                }
+
+                $modelTierIndex[$tierIndex] = $optionIndex;
             }
 
-            $tierKey = (string) $optionIndex;
+            $tierKey = implode('|', $modelTierIndex);
             if (isset($existingModelTierKeys[$tierKey])) {
                 $existingModel = $existingModelByTierKey[$tierKey] ?? null;
                 if (is_array($existingModel) && ! empty($existingModel['model_id'])) {
@@ -6037,26 +6198,32 @@ class OmnichannelController extends Controller
                     $plannedUpdateVariants[] = [
                         ...$variant,
                         'model_id' => (int) $existingModel['model_id'],
-                        'tier_index' => [$optionIndex],
-                        'option_already_exists' => true,
+                        'tier_index' => $modelTierIndex,
+                        'tier_values' => $tierValues,
+                        'target_tier_index' => $targetTierIndex,
+                        'default_tier_indexes' => $defaultTierIndexes,
+                        'option_already_exists' => $allOptionsAlreadyExist,
                     ];
                 } else {
                     $skippedVariants[] = [
                         'variant_name' => $variantName,
                         'reason' => 'Model Shopee untuk opsi ini sudah ada, tetapi model_id tidak terbaca.',
-                        'tier_index' => [$optionIndex],
+                        'tier_index' => $modelTierIndex,
                     ];
                 }
                 continue;
             }
 
-            $addModels[] = $this->buildShopeeAddModel($variant, $optionIndex, $sellerStockLocationId, $modelWeight);
+            $addModels[] = $this->buildShopeeAddModel($variant, $modelTierIndex, $sellerStockLocationId, $modelWeight);
             $plannedVariants[] = [
                 ...$variant,
-                'tier_index' => [$optionIndex],
+                'tier_index' => $modelTierIndex,
+                'tier_values' => $tierValues,
+                'target_tier_index' => $targetTierIndex,
+                'default_tier_indexes' => $defaultTierIndexes,
                 'image_upload' => $imageUpload,
                 'image_id' => $imageId ?: null,
-                'option_already_exists' => $optionAlreadyExists,
+                'option_already_exists' => $allOptionsAlreadyExist,
             ];
         }
 
@@ -6064,15 +6231,21 @@ class OmnichannelController extends Controller
         if ($newOptionCount > 0) {
             $updatedTierVariation = $activeTierVariation;
 
+            foreach ($tierOptionsByTier as $tierIndex => $tierOptions) {
+                if ($useStandardiseTier) {
+                    $updatedTierVariation[$tierIndex]['variation_option_list'] = $tierOptions;
+                } else {
+                    $updatedTierVariation[$tierIndex]['option_list'] = $tierOptions;
+                }
+            }
+
             if ($useStandardiseTier) {
-                $updatedTierVariation[0]['variation_option_list'] = $tierOptions;
                 $updateTierPayload = [
                     'item_id' => $itemId,
                     'model_list' => $existingModelList,
                     'standardise_tier_variation' => $updatedTierVariation,
                 ];
             } else {
-                $updatedTierVariation[0]['option_list'] = $tierOptions;
                 $updateTierPayload = [
                     'item_id' => $itemId,
                     'model_list' => $existingModelList,
@@ -6094,6 +6267,9 @@ class OmnichannelController extends Controller
             'item_id' => (string) $itemId,
             'shop_id' => (string) $shopId,
             'dry_run' => $dryRun,
+            'tier_count' => $tierCount,
+            'target_tier_index' => $targetTierIndex,
+            'default_tier_indexes' => $defaultTierIndexes,
             'new_option_count' => $newOptionCount,
             'new_model_count' => count($addModels),
             'existing_model_update_count' => count($updateModels),
