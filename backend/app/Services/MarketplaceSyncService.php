@@ -534,6 +534,82 @@ class MarketplaceSyncService
             ->first();
     }
 
+    public function findSkuMappingByTiktokOrderItem(string $productId = '', string $skuId = '', string $sellerSku = ''): ?object
+    {
+        $productId = trim($productId);
+        $skuId = trim($skuId);
+        $sellerSku = trim($sellerSku);
+
+        if ($sellerSku !== '') {
+            $mapping = $this->findSkuMapping($sellerSku);
+            if ($mapping) {
+                return $mapping;
+            }
+        }
+
+        if ($skuId === '') {
+            return null;
+        }
+
+        $mapping = DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->leftJoin('shopee_product_model as spm', function ($join): void {
+                $join->on(DB::raw('CAST(spm.item_id AS TEXT)'), '=', 'sm.shopee_product_id')
+                    ->on(DB::raw('CAST(spm.model_id AS TEXT)'), '=', 'sm.shopee_sku');
+            })
+            ->leftJoin('tiktok_products as tp', function ($join): void {
+                $join->on('tp.product_id', '=', 'sm.tiktok_product_id')
+                    ->on('tp.sku_id', '=', 'sm.tiktok_sku')
+                    ->whereRaw('COALESCE(tp.is_active, true) = true');
+            })
+            ->leftJoin('tiktok_products as order_tp', function ($join) use ($productId, $skuId): void {
+                $join->where('order_tp.sku_id', '=', $skuId);
+                if ($productId !== '') {
+                    $join->where('order_tp.product_id', '=', $productId);
+                }
+            })
+            ->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false')
+            ->where(function ($query) use ($skuId): void {
+                $query->where('sm.tiktok_sku', $skuId)
+                    ->orWhere('map.tiktok_sku_id', $skuId)
+                    ->orWhere('tp.sku_id', $skuId)
+                    ->orWhere(function ($inner): void {
+                        $inner->whereNotNull('order_tp.seller_sku')
+                            ->where(function ($sellerMatch): void {
+                                $sellerMatch->whereColumn('order_tp.seller_sku', 'sm.internal_sku')
+                                    ->orWhereColumn('order_tp.seller_sku', 'sm.shopee_seller_sku')
+                                    ->orWhereColumn('order_tp.seller_sku', 'sm.tiktok_seller_sku')
+                                    ->orWhereColumn('order_tp.seller_sku', 'map.seller_sku')
+                                    ->orWhereColumn('order_tp.seller_sku', 'spm.model_sku');
+                            });
+                    });
+            })
+            ->select(
+                'sm.*',
+                'map.seller_sku as mapped_seller_sku',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id as mapped_tiktok_sku_id',
+                'map.tiktok_sku_name as mapped_tiktok_sku_name',
+                'spm.stock as shopee_stock',
+                'spm.model_sku as shopee_model_sku',
+                DB::raw('COALESCE(tp.stock_qty, order_tp.stock_qty) as tiktok_stock'),
+                DB::raw('COALESCE(tp.seller_sku, order_tp.seller_sku) as tiktok_product_seller_sku'),
+                'order_tp.product_id as order_tiktok_product_id',
+                'order_tp.sku_id as order_tiktok_sku_id'
+            )
+            ->first();
+
+        if (! $mapping) {
+            return null;
+        }
+
+        $mapping->tiktok_product_id = $mapping->tiktok_product_id ?: ($mapping->mapped_tiktok_product_id ?: $mapping->order_tiktok_product_id);
+        $mapping->tiktok_sku = $mapping->tiktok_sku ?: ($mapping->mapped_tiktok_sku_id ?: $mapping->order_tiktok_sku_id);
+        $mapping->tiktok_seller_sku = $mapping->tiktok_seller_sku ?: $mapping->tiktok_product_seller_sku;
+
+        return $mapping;
+    }
+
     public function activeSkuMappings()
     {
         return DB::table('stock_master as sm')

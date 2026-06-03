@@ -262,13 +262,10 @@ class MarketplaceOrderSyncService
         $results = [];
 
         foreach (is_array($lineItems) ? $lineItems : [] as $item) {
-            $sellerSku = trim((string) ($item['seller_sku'] ?? data_get($item, 'sku.seller_sku', '')));
+            $sellerSku = $this->normalizeOrderSku($item['seller_sku'] ?? data_get($item, 'sku.seller_sku', ''));
             $skuId = trim((string) ($item['sku_id'] ?? data_get($item, 'sku.id', '')));
-            $mapping = $sellerSku !== '' ? $this->syncService->findSkuMapping($sellerSku) : null;
-
-            if (! $mapping && $skuId !== '') {
-                $mapping = $this->syncService->findSkuMapping($skuId);
-            }
+            $productId = trim((string) ($item['product_id'] ?? data_get($item, 'product.id', '')));
+            $mapping = $this->syncService->findSkuMappingByTiktokOrderItem($productId, $skuId, $sellerSku);
 
             if (! $mapping) {
                 $skipped++;
@@ -293,6 +290,9 @@ class MarketplaceOrderSyncService
             $this->syncService->updateLocalStock($mapping, 'tiktok', $newStock);
             $pushResult = $this->syncService->pushTargetStock($mapping, 'shopee', $newStock, true);
             $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : 'success';
+            if ($status === 'success') {
+                $this->syncService->updateLocalStock($mapping, 'shopee', $newStock);
+            }
             $this->syncService->logSync('tiktok_order', 'shopee', $canonicalSku, $oldStock, $newStock, $status, sprintf('TikTok order %s %s: stok %s -> %s. %s', $orderId, $stockEvent, $oldStock, $newStock, $pushResult['message'] ?? '-'));
             $results[] = ['status' => $status, 'sku' => $canonicalSku];
             $status === 'success' ? $success++ : $failed++;
@@ -317,6 +317,13 @@ class MarketplaceOrderSyncService
         }
 
         return max(0, $oldStock - max(0, $qty));
+    }
+
+    private function normalizeOrderSku(mixed $value): string
+    {
+        $sku = trim((string) $value);
+
+        return $sku === '-' ? '' : $sku;
     }
 
     private function tiktokStockEventType(string $eventType, array $order): ?string
