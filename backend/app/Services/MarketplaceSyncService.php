@@ -5,11 +5,14 @@ namespace App\Services;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 
 class MarketplaceSyncService
 {
-    public function __construct(private readonly MarketplaceApiService $apiService)
-    {
+    public function __construct(
+        private readonly MarketplaceApiService $apiService,
+        private readonly MarketplaceFailureNotifier $failureNotifier,
+    ) {
     }
 
     public function dashboard(): array
@@ -26,11 +29,17 @@ class MarketplaceSyncService
                 'realtime_sync' => true,
                 'safety_check' => true,
                 'live_push' => $this->livePushEnabled(),
+                'failure_notifications' => [
+                    'enabled' => (bool) config('marketplace_notifications.failure.enabled'),
+                    'telegram' => (bool) config('marketplace_notifications.telegram.enabled'),
+                    'whatsapp' => (bool) config('marketplace_notifications.whatsapp.enabled'),
+                ],
                 'cron_interval' => 'Every 15 Minutes',
                 'last_run' => $this->lastSafetyRun(),
                 'next_run' => $this->nextSafetyRun(),
             ],
             'order_sync' => $this->orderSyncSummary($today),
+            'alerts' => $this->autoSyncAlerts($today),
             'webhook_urls' => [
                 'shopee' => url('/api/webhooks/shopee'),
                 'tiktok' => url('/api/webhooks/tiktok'),
@@ -111,6 +120,52 @@ class MarketplaceSyncService
         $this->applyOrderSyncFilters($query, $filters);
 
         return $query->limit(min(5000, max(1, $limit)))->get();
+    }
+
+    public function autoSyncAlerts(?Carbon $today = null): array
+    {
+        $today ??= Carbon::today();
+        $openIssueCount = (int) DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('status', ['error', 'skipped'])
+            ->count();
+        $todayIssueCount = (int) DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('status', ['error', 'skipped'])
+            ->whereDate('created_at', $today)
+            ->count();
+        $latestIssue = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('status', ['error', 'skipped'])
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->first();
+        $stockSummary = $this->stockAnomalies([], 1, 1)['summary'] ?? [];
+
+        $alerts = [];
+        if ($openIssueCount > 0) {
+            $alerts[] = [
+                'type' => 'order_issue',
+                'severity' => 'error',
+                'title' => $openIssueCount.' issue order/stok masih terbuka',
+                'message' => $latestIssue?->message ?: 'Ada order sync yang perlu dicek atau di-retry.',
+                'created_at' => $latestIssue?->created_at,
+                'count_today' => $todayIssueCount,
+            ];
+        }
+
+        if (($stockSummary['total_anomalies'] ?? 0) > 0) {
+            $alerts[] = [
+                'type' => 'stock_anomaly',
+                'severity' => 'warning',
+                'title' => $stockSummary['total_anomalies'].' anomali stok terdeteksi',
+                'message' => 'Buka tab Anomali Stok untuk menyamakan stok Shopee dan TikTok.',
+                'created_at' => $stockSummary['last_safety_run'] ?? null,
+                'count_today' => null,
+            ];
+        }
+
+        return $alerts;
     }
 
     public function stockAnomalies(array $filters = [], int $page = 1, int $perPage = 30): array
@@ -210,6 +265,165 @@ class MarketplaceSyncService
                 'total' => $total,
                 'last_page' => max(1, (int) ceil($total / $perPage)),
             ],
+        ];
+    }
+
+    public function skuChangeHistory(array $filters = [], int $page = 1, int $perPage = 20): array
+    {
+        if (! Schema::hasTable('marketplace_sku_change_logs')) {
+            return $this->emptyPagination($page, $perPage);
+        }
+
+        $query = DB::table('marketplace_sku_change_logs as log')
+            ->leftJoin('stock_master as sm', 'sm.id', '=', 'log.stock_master_id')
+            ->select(
+                'log.*',
+                'sm.product_name',
+                'sm.variant_name',
+                'sm.internal_sku'
+            )
+            ->orderByDesc('log.created_at')
+            ->orderByDesc('log.id');
+
+        if (($filters['channel'] ?? '') !== '') {
+            $query->where('log.channel', $filters['channel']);
+        }
+        if (($filters['status'] ?? '') !== '') {
+            $query->where('log.status', $filters['status']);
+        }
+        if (($filters['date'] ?? '') !== '') {
+            $query->whereDate('log.created_at', $filters['date']);
+        }
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $query->where(function ($inner) use ($search): void {
+                $inner->where('log.old_seller_sku', 'like', '%'.$search.'%')
+                    ->orWhere('log.new_seller_sku', 'like', '%'.$search.'%')
+                    ->orWhere('log.product_id', 'like', '%'.$search.'%')
+                    ->orWhere('log.variant_id', 'like', '%'.$search.'%')
+                    ->orWhere('sm.product_name', 'like', '%'.$search.'%')
+                    ->orWhere('sm.variant_name', 'like', '%'.$search.'%')
+                    ->orWhere('sm.internal_sku', 'like', '%'.$search.'%');
+            });
+        }
+
+        return $this->paginateQuery($query, $page, $perPage);
+    }
+
+    public function orderWatchdog(int $minutes = 5, int $hours = 24): array
+    {
+        $minutes = max(1, min(180, $minutes));
+        $hours = max(1, min(168, $hours));
+        $threshold = now()->subMinutes($minutes);
+        $since = now()->subHours($hours);
+        $orders = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'tiktok_order'])
+            ->where('status', 'success')
+            ->where('created_at', '>=', $since)
+            ->where('created_at', '<=', $threshold)
+            ->orderByDesc('created_at')
+            ->limit(300)
+            ->get();
+
+        $items = $orders->map(function ($order) use ($minutes): ?array {
+            $orderRef = $this->extractOrderReference($order);
+            if ($orderRef === '') {
+                return null;
+            }
+
+            $hasStockUpdate = DB::table('marketplace_sync_logs')
+                ->where('id', '<>', $order->id)
+                ->where('created_at', '>=', Carbon::parse($order->created_at)->subMinutes(10))
+                ->where(function ($query) use ($orderRef): void {
+                    $query->where('sku', $orderRef)
+                        ->orWhere('message', 'like', '%'.$orderRef.'%');
+                })
+                ->where(function ($query): void {
+                    $query->whereNotNull('old_stock')
+                        ->orWhereNotNull('new_stock')
+                        ->orWhere('source_marketplace', 'shopee_stock_refresh');
+                })
+                ->exists();
+
+            if ($hasStockUpdate) {
+                return null;
+            }
+
+            return [
+                'id' => $order->id,
+                'order_ref' => $orderRef,
+                'source_marketplace' => $order->source_marketplace,
+                'target_marketplace' => $order->target_marketplace,
+                'status' => 'watch',
+                'created_at' => $order->created_at,
+                'age_minutes' => Carbon::parse($order->created_at)->diffInMinutes(now()),
+                'message' => 'Order sudah lebih dari '.$minutes.' menit tetapi belum ada log update stok terkait.',
+            ];
+        })->filter()->values();
+
+        return [
+            'summary' => [
+                'threshold_minutes' => $minutes,
+                'window_hours' => $hours,
+                'watch_count' => $items->count(),
+                'checked_orders' => $orders->count(),
+            ],
+            'items' => $items,
+        ];
+    }
+
+    public function reconciliationReport(array $filters = []): array
+    {
+        $anomalyData = $this->stockAnomalies($filters, 1, 100);
+        $summary = $anomalyData['summary'] ?? [];
+        $totalMappings = $this->activeSkuMappings()->count();
+        $totalAnomalies = (int) ($summary['total_anomalies'] ?? 0);
+
+        return [
+            'generated_at' => now()->toDateTimeString(),
+            'summary' => [
+                'total_active_mappings' => $totalMappings,
+                'aligned' => max(0, $totalMappings - $totalAnomalies),
+                'total_anomalies' => $totalAnomalies,
+                'stock_mismatch' => (int) ($summary['stock_mismatch'] ?? 0),
+                'missing_shopee_stock' => (int) ($summary['missing_shopee_stock'] ?? 0),
+                'missing_tiktok_stock' => (int) ($summary['missing_tiktok_stock'] ?? 0),
+                'incomplete_mapping' => (int) ($summary['incomplete_mapping'] ?? 0),
+                'last_safety_run' => $summary['last_safety_run'] ?? null,
+            ],
+            'items' => $anomalyData['items'] ?? [],
+        ];
+    }
+
+    public function syncQueueDashboard(int $hours = 24, int $limit = 50): array
+    {
+        $hours = max(1, min(168, $hours));
+        $limit = max(1, min(100, $limit));
+        $since = now()->subHours($hours);
+        $base = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order', 'manual_shopee_master', 'manual_anomaly_tiktok_master', 'safety_check'])
+            ->where('created_at', '>=', $since);
+        $statusCounts = (clone $base)
+            ->select('status', DB::raw('COUNT(*) as total'))
+            ->groupBy('status')
+            ->pluck('total', 'status');
+        $items = (clone $base)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+
+        return [
+            'summary' => [
+                'window_hours' => $hours,
+                'pending' => (int) ($statusCounts['pending'] ?? 0),
+                'processing' => (int) ($statusCounts['processing'] ?? 0),
+                'success' => (int) ($statusCounts['success'] ?? 0),
+                'failed' => (int) (($statusCounts['error'] ?? 0) + ($statusCounts['skipped'] ?? 0)),
+                'checked' => (int) ($statusCounts['checked'] ?? 0),
+                'total' => (int) $statusCounts->sum(),
+            ],
+            'items' => $items,
         ];
     }
 
@@ -387,6 +601,7 @@ class MarketplaceSyncService
 
     private function applyOrderSyncFilters($query, array $filters): void
     {
+        $search = trim((string) ($filters['search'] ?? ''));
         if (($filters['status'] ?? '') !== '') {
             $query->where('status', $filters['status']);
         }
@@ -395,6 +610,12 @@ class MarketplaceSyncService
         }
         if (($filters['type'] ?? '') !== '') {
             $query->where('source_marketplace', $filters['type']);
+        }
+        if ($search !== '') {
+            $query->where(function ($inner) use ($search): void {
+                $inner->where('sku', 'like', '%'.$search.'%')
+                    ->orWhere('message', 'like', '%'.$search.'%');
+            });
         }
     }
 
@@ -477,7 +698,7 @@ class MarketplaceSyncService
 
     public function logSync(?string $source, ?string $target, ?string $sku, ?int $oldStock, ?int $newStock, string $status, ?string $message = null): int
     {
-        return (int) DB::table('marketplace_sync_logs')->insertGetId([
+        $payload = [
             'source_marketplace' => $source,
             'target_marketplace' => $target,
             'sku' => $sku,
@@ -487,7 +708,16 @@ class MarketplaceSyncService
             'message' => $message,
             'created_at' => now(),
             'updated_at' => now(),
-        ]);
+        ];
+        $id = (int) DB::table('marketplace_sync_logs')->insertGetId($payload);
+
+        try {
+            $this->failureNotifier->notifySyncLog(['id' => $id, ...$payload]);
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
+
+        return $id;
     }
 
     public function findSkuMapping(string $sku): ?object
@@ -1284,6 +1514,22 @@ class MarketplaceSyncService
                 'per_page' => $perPage,
                 'total' => $total,
                 'last_page' => (int) max(1, ceil($total / $perPage)),
+            ],
+        ];
+    }
+
+    private function emptyPagination(int $page, int $perPage): array
+    {
+        $page = max(1, $page);
+        $perPage = min(100, max(1, $perPage));
+
+        return [
+            'items' => collect(),
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => 0,
+                'last_page' => 1,
             ],
         ];
     }

@@ -143,6 +143,10 @@ export const omnichannelService = {
     return api.post('/tiktok-variant/action', data)
   },
 
+  tiktokDeleteVariant(data) {
+    return api.post('/tiktok/delete-variant', data)
+  },
+
   tiktokSubmitGeneratedPayload(data) {
     return api.post('/tiktok/submit-generated-payload', data, {
       responseType: 'text',
@@ -179,6 +183,10 @@ export const omnichannelService = {
     })
   },
 
+  shopeeDeleteVariant(data) {
+    return api.post('/shopee/delete-variant', data)
+  },
+
   autoSyncDashboard() {
     return api.get('/marketplace/auto-sync')
   },
@@ -201,6 +209,22 @@ export const omnichannelService = {
 
   autoSyncStockAnomalies(params = {}) {
     return api.get('/marketplace/auto-sync/stock-anomalies', { params })
+  },
+
+  autoSyncSkuChangeHistory(params = {}) {
+    return api.get('/marketplace/auto-sync/sku-change-history', { params })
+  },
+
+  autoSyncOrderWatchdog(params = {}) {
+    return api.get('/marketplace/auto-sync/order-watchdog', { params })
+  },
+
+  autoSyncReconciliationReport(params = {}) {
+    return api.get('/marketplace/auto-sync/reconciliation-report', { params })
+  },
+
+  autoSyncQueueDashboard(params = {}) {
+    return api.get('/marketplace/auto-sync/queue-dashboard', { params })
   },
 
   syncAutoSyncStockAnomaly(data) {
@@ -228,6 +252,18 @@ export const omnichannelService = {
 
   syncAutoSyncShopeeToTiktok() {
     return api.post('/marketplace/auto-sync/sync-shopee-to-tiktok')
+  },
+
+  instantAutoSyncCheck(marketplace = 'all') {
+    return api.post('/marketplace/auto-sync/instant-check', { marketplace })
+  },
+
+  retryAutoSyncOpenIssues(limit = 10) {
+    return api.post('/marketplace/auto-sync/retry-open-issues', { limit })
+  },
+
+  bulkUpdateAutoSyncEmptySkus(limit = 20, dryRun = false) {
+    return api.post('/marketplace/auto-sync/bulk-update-empty-skus', { limit, dry_run: dryRun })
   },
 
   pollAutoSyncShopeeOrders(hours = 24) {

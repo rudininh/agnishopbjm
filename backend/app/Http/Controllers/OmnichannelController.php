@@ -2396,6 +2396,66 @@ class OmnichannelController extends Controller
         ], 422);
     }
 
+    public function autoRefreshMarketplaceTokens(bool $force = false): array
+    {
+        $this->ensureShopeeAuthColumns();
+        $this->ensureTiktokAuthTables();
+        $this->normalizeActiveMarketplaceTokens();
+
+        $results = [];
+        foreach (self::MARKETPLACE_ACCOUNTS as $key => $account) {
+            $account = ['key' => $key, ...$account];
+            $channel = $account['channel'];
+            $token = $channel === 'shopee'
+                ? $this->latestActiveShopeeToken($account)
+                : $this->latestActiveTiktokToken($account);
+
+            if (! $token) {
+                $results[] = [
+                    'status' => 'skipped',
+                    'account_key' => $key,
+                    'account_name' => $account['name'],
+                    'channel' => $channel,
+                    'message' => 'Belum ada token aktif untuk di-refresh.',
+                ];
+                continue;
+            }
+
+            $needsRefresh = $channel === 'shopee'
+                ? $this->shopeeAccessTokenNeedsRefresh($token)
+                : $this->tiktokAccessTokenNeedsRefresh($token);
+            if (! $force && ! $needsRefresh) {
+                $expireAt = $channel === 'shopee'
+                    ? $this->shopeeAccessTokenExpireAt($token)
+                    : $this->tiktokAccessTokenExpireAt($token);
+                $results[] = [
+                    'status' => 'ok',
+                    'account_key' => $key,
+                    'account_name' => $account['name'],
+                    'channel' => $channel,
+                    'message' => 'Access token masih aman.',
+                    'access_token_expire_at' => $expireAt?->toDateTimeString(),
+                ];
+                continue;
+            }
+
+            $results[] = $channel === 'shopee'
+                ? $this->refreshShopeeToken($account)
+                : $this->refreshTiktokToken($account);
+        }
+
+        $failed = collect($results)->where('status', 'error')->count();
+
+        return [
+            'status' => $failed > 0 ? 'warning' : 'ok',
+            'message' => $failed > 0
+                ? 'Auto refresh token selesai dengan sebagian gagal.'
+                : 'Auto refresh token marketplace selesai.',
+            'failed' => $failed,
+            'items' => $results,
+        ];
+    }
+
     public function shopeeCallback(Request $request): Response
     {
         $this->ensureShopeeAuthColumns();
@@ -2680,7 +2740,7 @@ class OmnichannelController extends Controller
                     $this->storeTiktokProductPayload($detail ?: $product);
                     $syncedProductIds[$productId] = true;
                     $syncCount++;
-                    $variantCount += count(data_get($detail ?: $product, 'skus', []));
+                    $variantCount += $this->activeTiktokVariantCount($productId);
                 }
 
             } while ($pageToken);
@@ -2950,15 +3010,14 @@ class OmnichannelController extends Controller
         $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $bodyString);
 
         $response = Http::timeout(45)
-            ->asJson()
             ->withHeaders([
                 'x-tts-access-token' => $accessToken,
-                'content-type' => 'application/json',
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
             ])
+            ->withBody($bodyString, 'application/json')
             ->withOptions(['query' => $query])
-            ->send($method, $config['api_host'].$path, [
-                'json' => $body,
-            ]);
+            ->send($method, $config['api_host'].$path);
 
         $payload = $response->json();
         if (! is_array($payload)) {
@@ -3215,6 +3274,7 @@ class OmnichannelController extends Controller
         $imageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokImageUrl($data), 'tiktok', $productId, 'product');
         $skus = $this->normalizeTiktokSkuList($data);
         $statusInfo = $this->tiktokPayloadStatusInfo($data);
+        $deletedSkuIds = $this->tiktokDeletedVariantIdsForProduct($productId);
         $activeSkuKeys = [];
 
         if (! is_array($skus) || $skus === []) {
@@ -3228,6 +3288,10 @@ class OmnichannelController extends Controller
 
         foreach ($skus as $sku) {
             $skuId = (string) ($sku['id'] ?? $sku['sku_id'] ?? $sku['sku_no'] ?? $sku['sku_code'] ?? '');
+            if ($skuId !== '' && isset($deletedSkuIds[$this->normalizeSkuMatchValue($skuId)])) {
+                continue;
+            }
+
             $skuName = $this->deriveTiktokSkuName($sku);
             $sellerSku = $this->extractTiktokSellerSku($sku);
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
@@ -3291,7 +3355,20 @@ class OmnichannelController extends Controller
             }
         }
 
+        $this->deactivateDeletedTiktokVariantRows($productId, $deletedSkuIds);
         $this->deactivateDuplicateTiktokProductSkuRows($productId);
+    }
+
+    private function activeTiktokVariantCount(string $productId): int
+    {
+        if ($productId === '' || ! Schema::hasTable('tiktok_products')) {
+            return 0;
+        }
+
+        return DB::table('tiktok_products')
+            ->where('product_id', $productId)
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->count();
     }
 
     private function extractTiktokImageUrl(array $data): ?string
@@ -3766,7 +3843,7 @@ class OmnichannelController extends Controller
             }
 
             $this->storeTiktokProductPayload($detail);
-            $variantCount = count($this->normalizeTiktokSkuList($detail));
+            $variantCount = $this->activeTiktokVariantCount($productId);
             $message = 'Produk TikTok dipilih berhasil disinkronkan: '.$variantCount.' varian aktif.';
 
             DB::table('tiktok_sync_logs')->insert([
@@ -4266,6 +4343,7 @@ class OmnichannelController extends Controller
     public function syncMarketplaceCachesForSkuMapping(): array
     {
         $this->ensureSkuMappingTables();
+        $this->autoRefreshMarketplaceTokens();
 
         $shopee = $this->syncShopeeProductsToDatabase();
         $tiktok = $this->syncTiktokProductsToDatabase();
@@ -5225,11 +5303,16 @@ class OmnichannelController extends Controller
         $applyTiktok = $this->boolString($data['apply_tiktok'] ?? true) === 'true';
         $dryRun = $this->boolString($data['dry_run'] ?? false) === 'true';
         abort_if(! $applyShopee && ! $applyTiktok, 422, 'Pilih minimal satu marketplace untuk diedit.');
+        if (! $dryRun) {
+            $this->autoRefreshMarketplaceTokens();
+        }
 
         $shopeeItemId = trim((string) (($stock->shopee_item_id ?: $stock->shopee_product_id) ?? ''));
         $shopeeModelId = trim((string) (($stock->shopee_model_id ?: $stock->shopee_sku) ?? ''));
         $tiktokProductId = trim((string) (($stock->mapped_tiktok_product_id ?: $stock->tiktok_product_id) ?? ''));
         $tiktokSkuId = trim((string) (($stock->tiktok_sku_id ?: $stock->tiktok_sku) ?? ''));
+        $oldShopeeSellerSku = trim((string) ($stock->shopee_seller_sku ?? ''));
+        $oldTiktokSellerSku = trim((string) ($stock->tiktok_seller_sku ?? ''));
         $now = now();
 
         $result = [
@@ -5335,7 +5418,12 @@ class OmnichannelController extends Controller
                     abort_if(! is_array($detail), 422, 'Detail produk TikTok belum bisa dibaca untuk menjaga SKU lain tidak terhapus.');
                     $detailPayload = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
 
-                    $skuRows = $this->buildTiktokPartialEditSkuRows($detailPayload, $tiktokSkuId, $sellerSku);
+                    $skuRows = $this->buildTiktokPartialEditSkuRows(
+                        $detailPayload,
+                        $tiktokSkuId,
+                        $sellerSku,
+                        $this->tiktokDeletedVariantIdsForProduct($tiktokProductId)
+                    );
                     abort_if($skuRows === [], 422, 'SKU TikTok target tidak ditemukan di detail produk terbaru.');
 
                     $tiktokPayload = [
@@ -5412,6 +5500,39 @@ class OmnichannelController extends Controller
             DB::table('stock_master')->where('id', (int) $stock->id)->update($stockUpdate);
         }
 
+        if (! $dryRun) {
+            if ($applyShopee && ($result['shopee']['status'] ?? 'skipped') !== 'pending') {
+                $this->recordMarketplaceSkuChange(
+                    $stock->id,
+                    'shopee',
+                    $shopeeItemId,
+                    $shopeeModelId,
+                    $oldShopeeSellerSku,
+                    $sellerSku,
+                    'sku_mapping_update',
+                    (string) ($result['shopee']['status'] ?? 'unknown'),
+                    $result['shopee']['request'] ?? null,
+                    $result['shopee']['response'] ?? null,
+                    $result['shopee']['response']['message'] ?? $result['message'] ?? null
+                );
+            }
+            if ($applyTiktok && ($result['tiktok']['status'] ?? 'skipped') !== 'pending') {
+                $this->recordMarketplaceSkuChange(
+                    $stock->id,
+                    'tiktok',
+                    $tiktokProductId,
+                    $tiktokSkuId,
+                    $oldTiktokSellerSku,
+                    $sellerSku,
+                    'sku_mapping_update',
+                    (string) ($result['tiktok']['status'] ?? 'unknown'),
+                    $result['tiktok']['request'] ?? null,
+                    $result['tiktok']['response'] ?? null,
+                    $result['tiktok']['response']['message'] ?? $result['message'] ?? null
+                );
+            }
+        }
+
         if (($result['shopee']['status'] ?? 'skipped') === 'error' || ($result['tiktok']['status'] ?? 'skipped') === 'error') {
             $result['status'] = 'partial_error';
             $result['message'] = 'Sebagian request SKU gagal. Cek response Shopee dan TikTok.';
@@ -5436,6 +5557,7 @@ class OmnichannelController extends Controller
         $channel = strtolower(trim((string) $data['channel']));
         $sellerSku = trim((string) $data['seller_sku']);
         abort_if($sellerSku === '', 422, 'SKU template wajib diisi.');
+        $this->autoRefreshMarketplaceTokens();
 
         $now = now();
         $result = [
@@ -5451,6 +5573,10 @@ class OmnichannelController extends Controller
             $itemId = trim((string) ($data['item_id'] ?? ''));
             $modelId = trim((string) ($data['model_id'] ?? ''));
             abort_if($itemId === '' || $modelId === '', 422, 'Item ID atau Model ID Shopee belum lengkap.');
+            $oldSellerSku = (string) (DB::table('shopee_product_model')
+                ->where('item_id', $itemId)
+                ->where('model_id', $modelId)
+                ->value('model_sku') ?? '');
 
             $payload = [
                 'item_id' => is_numeric($itemId) ? (int) $itemId : $itemId,
@@ -5491,12 +5617,18 @@ class OmnichannelController extends Controller
                 $result['response'] = ['message' => $exception->getMessage()];
             }
 
+            $this->recordMarketplaceSkuChange(null, 'shopee', $itemId, $modelId, $oldSellerSku, $sellerSku, 'variant_update', $result['status'], $result['request'], $result['response'], $result['response']['message'] ?? null);
+
             return response()->json($result, $result['status'] === 'error' ? 422 : 200);
         }
 
         $productId = trim((string) ($data['product_id'] ?? ''));
         $skuId = trim((string) ($data['sku_id'] ?? ''));
         abort_if($productId === '' || $skuId === '', 422, 'Product ID atau SKU ID TikTok belum lengkap.');
+        $oldSellerSku = (string) (DB::table('tiktok_products')
+            ->where('product_id', $productId)
+            ->where('sku_id', $skuId)
+            ->value('seller_sku') ?? '');
 
         $tiktokPayload = null;
         $tiktokPath = '/product/202509/products/'.$productId.'/partial_edit';
@@ -5520,7 +5652,12 @@ class OmnichannelController extends Controller
             abort_if(! is_array($detail), 422, 'Detail produk TikTok belum bisa dibaca untuk menjaga SKU lain tidak terhapus.');
             $detailPayload = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
 
-            $skuRows = $this->buildTiktokPartialEditSkuRows($detailPayload, $skuId, $sellerSku);
+            $skuRows = $this->buildTiktokPartialEditSkuRows(
+                $detailPayload,
+                $skuId,
+                $sellerSku,
+                $this->tiktokDeletedVariantIdsForProduct($productId)
+            );
             abort_if($skuRows === [], 422, 'SKU TikTok target tidak ditemukan di detail produk terbaru.');
 
             $tiktokPayload = [
@@ -5557,13 +5694,267 @@ class OmnichannelController extends Controller
             $result['response'] = ['message' => $exception->getMessage()];
         }
 
+        $this->recordMarketplaceSkuChange(null, 'tiktok', $productId, $skuId, $oldSellerSku, $sellerSku, 'variant_update', $result['status'], $result['request'], $result['response'], $result['response']['message'] ?? null);
+
         return response()->json($result, $result['status'] === 'error' ? 422 : 200);
     }
 
-    private function buildTiktokPartialEditSkuRows(array $productDetail, string $targetSkuId, string $sellerSku): array
+    public function shopeeDeleteVariant(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'item_id' => ['required', 'string'],
+            'model_id' => ['required', 'string'],
+            'confirm_model_id' => ['required', 'string'],
+        ]);
+
+        $itemId = trim((string) $data['item_id']);
+        $modelId = trim((string) $data['model_id']);
+        $confirmModelId = trim((string) $data['confirm_model_id']);
+
+        abort_if(! preg_match('/^\d+$/', $itemId) || ! preg_match('/^\d+$/', $modelId), 422, 'Item ID dan Model ID Shopee wajib berupa angka.');
+        abort_if($modelId === '0', 422, 'Model default/tanpa varian tidak bisa dihapus dari tool ini.');
+        abort_if($confirmModelId !== $modelId, 422, 'Konfirmasi belum cocok. Ketik Model ID varian yang akan dihapus.');
+
+        $product = DB::table('shopee_product')->where('item_id', $itemId)->first();
+        abort_if(! $product, 422, 'Produk Shopee tidak ditemukan di cache lokal. Klik Sync produk dulu.');
+
+        $model = DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->where('model_id', $modelId)
+            ->first();
+        abort_if(! $model, 422, 'Varian Shopee tidak ditemukan di cache lokal. Klik Sync produk dulu.');
+
+        $modelCount = DB::table('shopee_product_model')->where('item_id', $itemId)->count();
+        abort_if($modelCount <= 1, 422, 'Varian terakhir tidak bisa dihapus dari tool ini. Hapus/nonaktifkan produk dari Seller Center jika memang mau menghapus produk.');
+
+        $stockMasterId = DB::table('stock_master')
+            ->where('shopee_product_id', $itemId)
+            ->where('shopee_sku', $modelId)
+            ->value('id');
+        $oldSellerSku = (string) ($model->model_sku ?? '');
+        $payload = [
+            'item_id' => (int) $itemId,
+            'model_id' => (int) $modelId,
+        ];
+        $requestPayload = [
+            'method' => 'POST',
+            'path' => '/api/v2/product/delete_model',
+            'body' => $payload,
+        ];
+        $result = [
+            'status' => 'ok',
+            'message' => 'Varian Shopee berhasil dihapus dari marketplace dan cache lokal.',
+            'item_id' => $itemId,
+            'model_id' => $modelId,
+            'model_name' => (string) ($model->name ?? ''),
+            'request' => $requestPayload,
+            'response' => null,
+            'cleanup' => null,
+        ];
+
+        try {
+            $this->autoRefreshMarketplaceTokens();
+
+            $config = $this->shopeeConfig();
+            $context = $this->resolveShopeeApiTestContext(['shop_id' => (string) ($product->shop_id ?? '')]);
+            $shopId = (int) ($context['shop_id'] ?? 0);
+            $accessToken = trim((string) ($context['access_token'] ?? ''));
+            $productShopId = (int) ($product->shop_id ?? 0);
+
+            abort_if($shopId <= 0 || $accessToken === '', 422, 'Token Shopee aktif belum lengkap. Jalankan AUTH / REFRESH Shopee dulu.');
+            abort_if($productShopId > 0 && $shopId !== $productShopId, 422, 'Token Shopee aktif tidak cocok dengan toko produk ini.');
+
+            $response = $this->shopeeSignedPost($config, '/api/v2/product/delete_model', $shopId, $accessToken, $payload);
+            $result['response'] = $response;
+            $result['status'] = ($response['error'] ?? '') === '' ? 'ok' : 'error';
+
+            if ($result['status'] === 'ok') {
+                $result['cleanup'] = $this->deleteShopeeVariantFromLocalCache($itemId, $modelId);
+            } else {
+                $result['message'] = $response['message'] ?? $response['error'] ?? 'Shopee menolak hapus varian.';
+            }
+        } catch (\Throwable $exception) {
+            $result['status'] = 'error';
+            $result['message'] = $exception->getMessage();
+            $result['response'] = ['message' => $exception->getMessage()];
+        }
+
+        $this->recordMarketplaceSkuChange(
+            $stockMasterId ? (int) $stockMasterId : null,
+            'shopee',
+            $itemId,
+            $modelId,
+            $oldSellerSku,
+            null,
+            'variant_delete',
+            $result['status'],
+            $requestPayload,
+            $result['response'],
+            $result['message']
+        );
+
+        return response()->json($result, $result['status'] === 'error' ? 422 : 200);
+    }
+
+    private function deleteShopeeVariantFromLocalCache(string $itemId, string $modelId): array
+    {
+        $now = now();
+        $stockMasterIds = DB::table('stock_master')
+            ->where('shopee_product_id', $itemId)
+            ->where('shopee_sku', $modelId)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $deletedImages = DB::table('shopee_product_image')
+            ->where('item_id', $itemId)
+            ->where('model_id', $modelId)
+            ->delete();
+        $deletedModels = DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->where('model_id', $modelId)
+            ->delete();
+
+        $remainingStock = (int) DB::table('shopee_product_model')
+            ->where('item_id', $itemId)
+            ->sum('stock');
+        DB::table('shopee_product')
+            ->where('item_id', $itemId)
+            ->update(['stock' => $remainingStock, 'updated_at' => $now]);
+
+        $updatedStockMasters = 0;
+        if ($stockMasterIds !== []) {
+            $updatedStockMasters = DB::table('stock_master')
+                ->whereIn('id', $stockMasterIds)
+                ->update([
+                    'shopee_product_id' => null,
+                    'shopee_sku' => null,
+                    'shopee_seller_sku' => null,
+                    'stock_qty' => 0,
+                    'is_hidden_from_mapping' => DB::raw('true'),
+                    'hidden_from_mapping_reason' => 'Varian Shopee dihapus dari marketplace.',
+                    'hidden_from_mapping_at' => $now,
+                    'hidden_from_mapping_by' => 'system',
+                    'updated_at' => $now,
+                ]);
+        }
+
+        $updatedSkuMappings = DB::table('sku_mappings')
+            ->where('shopee_item_id', $itemId)
+            ->where('shopee_model_id', $modelId)
+            ->update([
+                'shopee_item_id' => null,
+                'shopee_model_id' => null,
+                'shopee_image_url' => null,
+                'updated_at' => $now,
+            ]);
+
+        return [
+            'deleted_models' => $deletedModels,
+            'deleted_images' => $deletedImages,
+            'updated_stock_masters' => $updatedStockMasters,
+            'updated_sku_mappings' => $updatedSkuMappings,
+            'remaining_stock' => $remainingStock,
+        ];
+    }
+
+    private function recordMarketplaceSkuChange(?int $stockMasterId, string $channel, ?string $productId, ?string $variantId, ?string $oldSellerSku, ?string $newSellerSku, string $action, string $status, ?array $requestPayload = null, ?array $responsePayload = null, ?string $message = null): void
+    {
+        if (! Schema::hasTable('marketplace_sku_change_logs')) {
+            return;
+        }
+
+        DB::table('marketplace_sku_change_logs')->insert([
+            'stock_master_id' => $stockMasterId,
+            'channel' => $channel,
+            'product_id' => $productId ?: null,
+            'variant_id' => $variantId ?: null,
+            'old_seller_sku' => $oldSellerSku !== null && trim($oldSellerSku) !== '' ? $oldSellerSku : null,
+            'new_seller_sku' => $newSellerSku !== null && trim($newSellerSku) !== '' ? $newSellerSku : null,
+            'action' => $action,
+            'status' => $status,
+            'request_payload' => $requestPayload !== null ? json_encode($requestPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
+            'response_payload' => $responsePayload !== null ? json_encode($responsePayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
+            'message' => $message,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function tiktokDeletedVariantIdsForProduct(string $productId, array $includeSkuIds = []): array
+    {
+        $ids = [];
+        $add = function (mixed $value) use (&$ids): void {
+            $skuId = trim((string) ($value ?? ''));
+            $key = $this->normalizeSkuMatchValue($skuId);
+
+            if ($key !== '') {
+                $ids[$key] = $skuId;
+            }
+        };
+
+        foreach ($includeSkuIds as $skuId) {
+            $add($skuId);
+        }
+
+        static $hasLogTable = null;
+        if ($hasLogTable === null) {
+            $hasLogTable = Schema::hasTable('marketplace_sku_change_logs');
+        }
+
+        if (! $hasLogTable || trim($productId) === '') {
+            return $ids;
+        }
+
+        DB::table('marketplace_sku_change_logs')
+            ->where('channel', 'tiktok')
+            ->where('action', 'variant_delete')
+            ->where('status', 'ok')
+            ->where('product_id', $productId)
+            ->whereNotNull('variant_id')
+            ->pluck('variant_id')
+            ->each($add);
+
+        return $ids;
+    }
+
+    private function deactivateDeletedTiktokVariantRows(string $productId, array $deletedSkuIds): int
+    {
+        $skuIds = collect($deletedSkuIds)
+            ->map(fn (mixed $value): string => trim((string) $value))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($skuIds === [] || ! Schema::hasTable('tiktok_products')) {
+            return 0;
+        }
+
+        return DB::table('tiktok_products')
+            ->where('product_id', $productId)
+            ->whereIn('sku_id', $skuIds)
+            ->update([
+                'stock_qty' => 0,
+                'subtotal' => 0,
+                'is_active' => DB::raw('false'),
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function buildTiktokPartialEditSkuRows(array $productDetail, string $targetSkuId, string $sellerSku, array $excludedSkuIds = []): array
     {
         $rows = [];
         $targetFound = false;
+        $productId = trim((string) ($productDetail['id'] ?? $productDetail['product_id'] ?? ''));
+        $excludedKeys = collect($excludedSkuIds)
+            ->map(fn (mixed $value): string => $this->normalizeSkuMatchValue($value))
+            ->filter()
+            ->flip()
+            ->all();
+        unset($excludedKeys[$this->normalizeSkuMatchValue($targetSkuId)]);
 
         foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
             if (! is_array($sku)) {
@@ -5575,12 +5966,15 @@ class OmnichannelController extends Controller
                 continue;
             }
 
-            $row = [
-                'id' => $skuId,
-                'seller_sku' => $skuId === $targetSkuId
-                    ? $sellerSku
-                    : (string) ($this->extractTiktokSellerSku($sku) ?? ''),
-            ];
+            if (isset($excludedKeys[$this->normalizeSkuMatchValue($skuId)])) {
+                continue;
+            }
+
+            $row = $this->buildTiktokPartialEditSkuKeepRow(
+                $sku,
+                $skuId === $targetSkuId ? $sellerSku : null,
+                $productId
+            );
 
             $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
             if (is_array($salesAttributes) && $salesAttributes !== []) {
@@ -5594,6 +5988,393 @@ class OmnichannelController extends Controller
         }
 
         return $targetFound ? $rows : [];
+    }
+
+    private function buildTiktokPartialEditSkuDeleteRows(array $productDetail, string $targetSkuId, array $excludedSkuIds = []): array
+    {
+        $rows = [];
+        $targetFound = false;
+        $productId = trim((string) ($productDetail['id'] ?? $productDetail['product_id'] ?? ''));
+        $excludedKeys = collect([...array_values($excludedSkuIds), $targetSkuId])
+            ->map(fn (mixed $value): string => $this->normalizeSkuMatchValue($value))
+            ->filter()
+            ->flip()
+            ->all();
+
+        foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
+            if ($skuId === '') {
+                continue;
+            }
+
+            if ($skuId === $targetSkuId) {
+                $targetFound = true;
+                continue;
+            }
+
+            if (isset($excludedKeys[$this->normalizeSkuMatchValue($skuId)])) {
+                continue;
+            }
+
+            $row = $this->buildTiktokPartialEditSkuKeepRow($sku, null, $productId);
+
+            $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
+            if (is_array($salesAttributes) && $salesAttributes !== []) {
+                $row['sales_attributes'] = $salesAttributes;
+            }
+
+            $rows[] = $row;
+        }
+
+        return $targetFound ? $rows : [];
+    }
+
+    private function buildTiktokPartialEditSkuKeepRow(array $sku, ?string $sellerSkuOverride = null, string $productId = ''): array
+    {
+        $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
+        $row = ['id' => $skuId];
+        $sellerSku = $sellerSkuOverride !== null
+            ? trim($sellerSkuOverride)
+            : trim((string) ($this->extractTiktokSellerSku($sku) ?? ''));
+
+        if ($sellerSku !== '') {
+            $row['seller_sku'] = $sellerSku;
+        }
+
+        $price = $this->buildTiktokPartialEditSkuPrice($sku, $productId, $skuId);
+        if ($price !== null) {
+            $row['price'] = $price;
+        }
+
+        $inventory = $this->buildTiktokPartialEditSkuInventory($sku);
+        if ($inventory !== []) {
+            $row['inventory'] = $inventory;
+        }
+
+        return $row;
+    }
+
+    private function buildTiktokPartialEditSkuPrice(array $sku, string $productId = '', string $skuId = ''): ?array
+    {
+        $priceNode = data_get($sku, 'price');
+        $salePrice = is_array($priceNode)
+            ? data_get($priceNode, 'sale_price', data_get($priceNode, 'amount', data_get($priceNode, 'tax_exclusive_price')))
+            : $priceNode;
+        $salePrice = $this->normalizeTiktokPriceValue($salePrice);
+
+        if ($salePrice === '' && $productId !== '' && $skuId !== '') {
+            $salePrice = $this->normalizeTiktokPriceValue(DB::table('tiktok_products')
+                ->where('product_id', $productId)
+                ->where('sku_id', $skuId)
+                ->value('price'));
+        }
+
+        if ($salePrice === '') {
+            return null;
+        }
+
+        $currency = is_array($priceNode)
+            ? trim((string) data_get($priceNode, 'currency', 'IDR'))
+            : 'IDR';
+        $taxExclusivePrice = is_array($priceNode)
+            ? $this->normalizeTiktokPriceValue(data_get($priceNode, 'tax_exclusive_price', $salePrice))
+            : $salePrice;
+        $amount = is_array($priceNode)
+            ? $this->normalizeTiktokPriceValue(data_get($priceNode, 'amount', $salePrice))
+            : $salePrice;
+
+        return array_filter([
+            'currency' => $currency !== '' ? $currency : 'IDR',
+            'sale_price' => $salePrice,
+            'tax_exclusive_price' => $taxExclusivePrice !== '' ? $taxExclusivePrice : $salePrice,
+            'amount' => $amount !== '' ? $amount : $salePrice,
+        ], fn ($value) => $value !== null && $value !== '');
+    }
+
+    private function normalizeTiktokPriceValue(mixed $value): string
+    {
+        if (is_array($value)) {
+            $value = data_get($value, 'sale_price', data_get($value, 'amount', data_get($value, 'tax_exclusive_price')));
+        }
+
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if (is_numeric($value)) {
+            return (string) $value;
+        }
+
+        $normalized = preg_replace('/[^\d.]/', '', (string) $value) ?: '';
+
+        return trim($normalized);
+    }
+
+    private function buildTiktokPartialEditSkuInventory(array $sku): array
+    {
+        $inventoryRows = data_get($sku, 'inventory', data_get($sku, 'inventories', []));
+        if (! is_array($inventoryRows) || $inventoryRows === []) {
+            $stock = data_get($sku, 'stock', data_get($sku, 'stock_qty'));
+            if ($stock === null || $stock === '') {
+                return [];
+            }
+
+            $row = ['quantity' => max(0, (int) $stock)];
+            $warehouseId = trim((string) env('TIKTOK_DEFAULT_WAREHOUSE_ID', ''));
+            if ($warehouseId !== '') {
+                $row['warehouse_id'] = $warehouseId;
+            }
+
+            return [$row];
+        }
+
+        $rows = [];
+        foreach ($inventoryRows as $inventory) {
+            if (! is_array($inventory)) {
+                continue;
+            }
+
+            $quantity = data_get($inventory, 'quantity', data_get($inventory, 'stock'));
+            if ($quantity === null || $quantity === '') {
+                continue;
+            }
+
+            $row = ['quantity' => max(0, (int) $quantity)];
+            $warehouseId = trim((string) data_get($inventory, 'warehouse_id', data_get($inventory, 'warehouse.id', '')));
+            if ($warehouseId !== '') {
+                $row['warehouse_id'] = $warehouseId;
+            }
+
+            $rows[] = $row;
+        }
+
+        return $rows;
+    }
+
+    private function tiktokDeleteVariantConfirmationSkus(string $productId, string $skuId, object $sku): array
+    {
+        $candidates = [];
+        $add = function (mixed $value) use (&$candidates): void {
+            $skuValue = trim((string) ($value ?? ''));
+            if ($skuValue !== '') {
+                $candidates[] = $skuValue;
+            }
+        };
+
+        DB::table('sku_mappings as map')
+            ->leftJoin('stock_master as sm', 'sm.id', '=', 'map.stock_master_id')
+            ->where('map.tiktok_product_id', $productId)
+            ->where('map.tiktok_sku_id', $skuId)
+            ->select('map.seller_sku', 'sm.internal_sku', 'sm.tiktok_seller_sku')
+            ->get()
+            ->each(function ($row) use ($add): void {
+                $add($row->internal_sku ?? null);
+                $add($row->seller_sku ?? null);
+                $add($row->tiktok_seller_sku ?? null);
+            });
+
+        DB::table('stock_master')
+            ->where('tiktok_product_id', $productId)
+            ->where('tiktok_sku', $skuId)
+            ->select('internal_sku', 'tiktok_seller_sku')
+            ->get()
+            ->each(function ($row) use ($add): void {
+                $add($row->internal_sku ?? null);
+                $add($row->tiktok_seller_sku ?? null);
+            });
+
+        $add($sku->seller_sku ?? null);
+        $add($this->tiktokSkuVariationCode($productId, $sku));
+
+        return collect($candidates)
+            ->filter()
+            ->unique(fn (string $value): string => $this->normalizeSkuMatchValue($value))
+            ->values()
+            ->all();
+    }
+
+    public function tiktokDeleteVariant(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'product_id' => ['required', 'string'],
+            'sku_id' => ['required', 'string'],
+            'confirm_mapping_sku' => ['required', 'string'],
+        ]);
+
+        $productId = trim((string) $data['product_id']);
+        $skuId = trim((string) $data['sku_id']);
+        $confirmMappingSku = trim((string) $data['confirm_mapping_sku']);
+
+        abort_if($productId === '' || $skuId === '', 422, 'Product ID dan SKU ID TikTok wajib diisi.');
+        abort_if($confirmMappingSku === '', 422, 'SKU Mapping wajib diisi untuk konfirmasi hapus varian.');
+
+        $sku = DB::table('tiktok_products')
+            ->where('product_id', $productId)
+            ->where('sku_id', $skuId)
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->first();
+        abort_if(! $sku, 422, 'Varian TikTok tidak ditemukan di cache lokal. Klik Sync produk dulu.');
+
+        $confirmationSkus = $this->tiktokDeleteVariantConfirmationSkus($productId, $skuId, $sku);
+        $confirmKey = $this->normalizeSkuMatchValue($confirmMappingSku);
+        $confirmationValid = collect($confirmationSkus)
+            ->contains(fn (string $candidate): bool => $this->normalizeSkuMatchValue($candidate) === $confirmKey);
+        abort_if(! $confirmationValid, 422, 'Konfirmasi belum cocok. Ketik SKU Mapping varian yang akan dihapus.');
+
+        $activeSkuCount = DB::table('tiktok_products')
+            ->where('product_id', $productId)
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->count();
+        abort_if($activeSkuCount <= 1, 422, 'Varian terakhir tidak bisa dihapus dari tool ini. Nonaktifkan/hapus produk dari Seller Center jika memang mau menghapus produk.');
+
+        $stockMasterId = DB::table('stock_master')
+            ->where('tiktok_product_id', $productId)
+            ->where('tiktok_sku', $skuId)
+            ->value('id');
+        $oldSellerSku = (string) ($sku->seller_sku ?? '');
+        $tiktokPath = '/product/202509/products/'.$productId.'/partial_edit';
+        $requestPayload = [
+            'method' => 'POST',
+            'path' => $tiktokPath,
+            'body' => null,
+        ];
+        $result = [
+            'status' => 'ok',
+            'message' => 'Varian TikTok berhasil dihapus dari marketplace dan cache lokal.',
+            'product_id' => $productId,
+            'sku_id' => $skuId,
+            'sku_name' => (string) ($sku->sku_name ?? ''),
+            'mapping_sku' => $confirmationSkus[0] ?? null,
+            'request' => $requestPayload,
+            'response' => null,
+            'cleanup' => null,
+        ];
+
+        try {
+            $this->autoRefreshMarketplaceTokens();
+
+            $context = $this->resolveTiktokGetProductContext(['version' => '202509']);
+            $accessToken = trim((string) ($context['access_token'] ?? ''));
+            $shopId = trim((string) ($context['shop_id'] ?? ''));
+            $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+            abort_if($accessToken === '', 422, 'Token TikTok belum aktif.');
+            abort_if($shopId === '' || $shopCipher === '', 422, 'Shop TikTok belum lengkap.');
+
+            $config = $this->tiktokConfig();
+            $detail = $this->fetchTiktokProductDetail(
+                $config,
+                $accessToken,
+                (object) ['shop_id' => $shopId, 'shop_cipher' => $shopCipher, 'cipher' => $shopCipher],
+                $productId,
+                $config['api_host'].'/product/202309/products/'
+            );
+            abort_if(! is_array($detail), 422, 'Detail produk TikTok belum bisa dibaca untuk menjaga SKU lain tidak terhapus.');
+            $detailPayload = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
+
+            $skuRows = $this->buildTiktokPartialEditSkuDeleteRows(
+                $detailPayload,
+                $skuId,
+                $this->tiktokDeletedVariantIdsForProduct($productId, [$skuId])
+            );
+            abort_if($skuRows === [], 422, 'SKU TikTok target tidak ditemukan di detail produk terbaru atau varian tersisa kosong.');
+
+            $payload = [
+                'save_mode' => 'LISTING',
+                'skus' => $skuRows,
+            ];
+            $requestPayload['body'] = $payload;
+            $result['request'] = $requestPayload;
+
+            $response = $this->submitTiktokPartialEditPayload($tiktokPath, $payload, $context);
+            $result['response'] = $response;
+            $result['status'] = (int) ($response['code'] ?? -1) === 0 ? 'ok' : 'error';
+
+            if ($result['status'] === 'ok') {
+                $result['cleanup'] = $this->deleteTiktokVariantFromLocalCache($productId, $skuId);
+            } else {
+                $result['message'] = $response['message'] ?? 'TikTok menolak hapus varian.';
+            }
+        } catch (\Throwable $exception) {
+            $result['status'] = 'error';
+            $result['message'] = $exception->getMessage();
+            $result['response'] = ['message' => $exception->getMessage()];
+        }
+
+        $this->recordMarketplaceSkuChange(
+            $stockMasterId ? (int) $stockMasterId : null,
+            'tiktok',
+            $productId,
+            $skuId,
+            $oldSellerSku,
+            null,
+            'variant_delete',
+            $result['status'],
+            $result['request'],
+            $result['response'],
+            $result['message']
+        );
+
+        return response()->json($result, $result['status'] === 'error' ? 422 : 200);
+    }
+
+    private function deleteTiktokVariantFromLocalCache(string $productId, string $skuId): array
+    {
+        $now = now();
+        $stockMasterIds = DB::table('stock_master')
+            ->where('tiktok_product_id', $productId)
+            ->where('tiktok_sku', $skuId)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $updatedProducts = DB::table('tiktok_products')
+            ->where('product_id', $productId)
+            ->where('sku_id', $skuId)
+            ->update([
+                'stock_qty' => 0,
+                'subtotal' => 0,
+                'is_active' => DB::raw('false'),
+                'updated_at' => $now,
+            ]);
+
+        $updatedStockMasters = 0;
+        if ($stockMasterIds !== []) {
+            $updatedStockMasters = DB::table('stock_master')
+                ->whereIn('id', $stockMasterIds)
+                ->update([
+                    'tiktok_product_id' => null,
+                    'tiktok_sku' => null,
+                    'tiktok_seller_sku' => null,
+                    'is_hidden_from_mapping' => DB::raw('true'),
+                    'hidden_from_mapping_reason' => 'Varian TikTok dihapus dari marketplace.',
+                    'hidden_from_mapping_at' => $now,
+                    'hidden_from_mapping_by' => 'system',
+                    'updated_at' => $now,
+                ]);
+        }
+
+        $updatedSkuMappings = DB::table('sku_mappings')
+            ->where('tiktok_product_id', $productId)
+            ->where('tiktok_sku_id', $skuId)
+            ->update([
+                'tiktok_product_id' => null,
+                'tiktok_sku_id' => null,
+                'tiktok_sku_name' => null,
+                'tiktok_image_url' => null,
+                'updated_at' => $now,
+            ]);
+
+        return [
+            'updated_products' => $updatedProducts,
+            'updated_stock_masters' => $updatedStockMasters,
+            'updated_sku_mappings' => $updatedSkuMappings,
+        ];
     }
 
     private function submitTiktokPartialEditPayload(string $path, array $payload, array $context): array
@@ -5619,12 +6400,13 @@ class OmnichannelController extends Controller
         $query['sign'] = $this->generateTiktokSign($path, $query, $config['app_secret'], $payloadBody);
 
         $response = Http::timeout(45)
-            ->asJson()
             ->withHeaders([
                 'x-tts-access-token' => $accessToken,
-                'content-type' => 'application/json',
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
             ])
-            ->post($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), $payload);
+            ->withBody($payloadBody, 'application/json')
+            ->post($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
 
         $decoded = $response->json();
 

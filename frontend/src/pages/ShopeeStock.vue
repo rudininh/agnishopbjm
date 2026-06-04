@@ -205,6 +205,15 @@
                         >
                           {{ updatingSkuKey === shopeeSkuKey(item, model) ? 'Updating...' : 'Update SKU' }}
                         </button>
+                        <button
+                          type="button"
+                          class="delete-variant-btn"
+                          title="Hapus varian ini dari Shopee"
+                          @click="openDeleteVariantModal(item, model)"
+                          :disabled="!canDeleteShopeeVariant(item, model) || deletingVariantKey === shopeeSkuKey(item, model)"
+                        >
+                          {{ deletingVariantKey === shopeeSkuKey(item, model) ? 'Deleting...' : 'Hapus' }}
+                        </button>
                       </span>
                     </div>
                     <div v-if="!item.models?.length" class="variant-empty">Tidak ada varian tersimpan.</div>
@@ -224,6 +233,47 @@
         <button type="button" :disabled="currentPage === totalPages" @click="setPage(currentPage + 1)">Next</button>
       </div>
     </div>
+
+    <div v-if="deleteModal.open" class="modal-backdrop" @click.self="closeDeleteVariantModal">
+      <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-variant-title">
+        <h2 id="delete-variant-title">Hapus Varian Shopee</h2>
+        <p class="danger-copy">Aksi ini akan menghapus varian langsung dari marketplace Shopee.</p>
+        <div class="delete-details">
+          <div>
+            <span>Produk</span>
+            <strong>{{ deleteModal.productName }}</strong>
+          </div>
+          <div>
+            <span>Varian</span>
+            <strong>{{ deleteModal.modelName }}</strong>
+          </div>
+          <div>
+            <span>Item ID</span>
+            <strong>{{ deleteModal.itemId }}</strong>
+          </div>
+          <div>
+            <span>Model ID</span>
+            <strong>{{ deleteModal.modelId }}</strong>
+          </div>
+        </div>
+        <label class="confirm-field">
+          <span>Ketik Model ID untuk konfirmasi</span>
+          <input v-model.trim="deleteModal.confirmModelId" type="text" :placeholder="deleteModal.modelId" />
+        </label>
+        <p v-if="deleteModal.error" class="modal-error">{{ deleteModal.error }}</p>
+        <div class="modal-actions">
+          <button type="button" class="ghost" @click="closeDeleteVariantModal" :disabled="Boolean(deletingVariantKey)">Batal</button>
+          <button
+            type="button"
+            class="danger-action"
+            @click="confirmDeleteVariant"
+            :disabled="deleteModal.confirmModelId !== deleteModal.modelId || Boolean(deletingVariantKey)"
+          >
+            {{ deletingVariantKey ? 'Menghapus...' : 'Hapus dari Shopee' }}
+          </button>
+        </div>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -236,6 +286,7 @@ const expanded = ref({})
 const loading = ref(false)
 const syncingItemId = ref('')
 const updatingSkuKey = ref('')
+const deletingVariantKey = ref('')
 const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
@@ -243,6 +294,15 @@ const brokenImages = ref({})
 const syncMessage = ref('')
 const syncTone = ref('info')
 const copyTimer = ref(null)
+const deleteModal = reactive({
+  open: false,
+  itemId: '',
+  modelId: '',
+  productName: '',
+  modelName: '',
+  confirmModelId: '',
+  error: ''
+})
 const filters = reactive({
   store: 'all',
   status: 'all',
@@ -373,7 +433,12 @@ const templateSku = (item, model) => {
 }
 const variationCode = templateSku
 const shopeeSkuKey = (item, model) => `${item?.item_id || ''}:${model?.model_id || ''}`
-const canUpdateMissingSku = (item, model) => Boolean(missingShopeeSku(model) && item?.item_id && model?.model_id && templateSku(item, model))
+const canUpdateMissingSku = (item, model) => Boolean(item?.item_id && model?.model_id && templateSku(item, model))
+const canDeleteShopeeVariant = (item, model) => {
+  const modelId = String(model?.model_id || '').trim()
+
+  return Boolean(item?.item_id && modelId && modelId !== '0' && (item?.models?.length || 0) > 1)
+}
 const copyText = async (value) => {
   const text = String(value || '').trim()
   if (!text) return
@@ -429,6 +494,69 @@ const updateMissingSku = async (item, model) => {
     syncTone.value = 'error'
   } finally {
     updatingSkuKey.value = ''
+  }
+}
+const openDeleteVariantModal = (item, model) => {
+  if (!canDeleteShopeeVariant(item, model)) {
+    syncMessage.value = 'Varian ini tidak bisa dihapus dari tool karena model default atau varian terakhir.'
+    syncTone.value = 'warning'
+    return
+  }
+
+  deleteModal.open = true
+  deleteModal.itemId = String(item?.item_id || '')
+  deleteModal.modelId = String(model?.model_id || '')
+  deleteModal.productName = String(item?.nama || '-')
+  deleteModal.modelName = String(model?.name || 'Tanpa Varian')
+  deleteModal.confirmModelId = ''
+  deleteModal.error = ''
+}
+const closeDeleteVariantModal = () => {
+  if (deletingVariantKey.value) return
+
+  deleteModal.open = false
+  deleteModal.itemId = ''
+  deleteModal.modelId = ''
+  deleteModal.productName = ''
+  deleteModal.modelName = ''
+  deleteModal.confirmModelId = ''
+  deleteModal.error = ''
+}
+const removeDeletedVariantFromState = (itemId, modelId) => {
+  const item = items.value.find((row) => String(row.item_id) === String(itemId))
+  if (!item) return
+
+  item.models = (item.models || []).filter((model) => String(model.model_id) !== String(modelId))
+  item.stok = totalStock(item.models)
+}
+const confirmDeleteVariant = async () => {
+  if (deleteModal.confirmModelId !== deleteModal.modelId || deletingVariantKey.value) return
+
+  const key = `${deleteModal.itemId}:${deleteModal.modelId}`
+  deletingVariantKey.value = key
+  deleteModal.error = ''
+  syncMessage.value = ''
+  let shouldCloseDeleteModal = false
+
+  try {
+    const response = await omnichannelService.shopeeDeleteVariant({
+      item_id: deleteModal.itemId,
+      model_id: deleteModal.modelId,
+      confirm_model_id: deleteModal.confirmModelId
+    })
+
+    removeDeletedVariantFromState(deleteModal.itemId, deleteModal.modelId)
+    syncMessage.value = response.data?.message || 'Varian Shopee berhasil dihapus.'
+    syncTone.value = response.data?.status === 'error' ? 'error' : 'success'
+    shouldCloseDeleteModal = true
+  } catch (error) {
+    const message = error.response?.data?.message || error.response?.data?.response?.message || 'Hapus varian Shopee gagal.'
+    deleteModal.error = message
+    syncMessage.value = message
+    syncTone.value = 'error'
+  } finally {
+    deletingVariantKey.value = ''
+    if (shouldCloseDeleteModal) closeDeleteVariantModal()
   }
 }
 const modelSummary = (item) => `${item.models?.length || 0} varian`
@@ -628,7 +756,7 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .actions button { color: #4f2ec7; background: #f1efff; padding: 7px 9px; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
-.variant-item { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, .65fr) minmax(0, .35fr) minmax(112px, .45fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
+.variant-item { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, .65fr) minmax(0, .35fr) minmax(132px, .48fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
 .variant-item.missing-sku-row { background: #fffbeb; border-color: #facc15; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
@@ -640,14 +768,30 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .copy-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
 .variant-code button:disabled { cursor: not-allowed; opacity: .45; }
-.variant-actions { display: flex; align-items: start; justify-content: flex-end; }
+.variant-actions { display: grid; gap: 6px; align-content: start; justify-items: end; }
 .update-sku-btn { border: 1px solid #f59e0b; background: #fef3c7; color: #92400e; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
 .update-sku-btn:disabled { cursor: not-allowed; opacity: .55; }
+.delete-variant-btn { border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
+.delete-variant-btn:disabled { cursor: not-allowed; opacity: .5; }
 .variant-empty, .empty { color: #64748b; text-align: center; padding: 24px; }
 .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fff; }
 .pagination button { color: #334155; background: #fff; border: 1px solid #cbd5e1; font-weight: 700; }
 .pagination button:disabled { cursor: not-allowed; opacity: .45; }
 .pagination span { color: #64748b; font-size: 13px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(15, 23, 42, .42); padding: 16px; }
+.confirm-modal { width: min(520px, 100%); background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 24px 70px rgba(15, 23, 42, .22); padding: 18px; }
+.confirm-modal h2 { color: #0f172a; font-size: 20px; letter-spacing: 0; margin: 0 0 8px; }
+.danger-copy { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 13px; line-height: 1.45; margin: 0 0 12px; padding: 10px; }
+.delete-details { display: grid; gap: 8px; margin-bottom: 12px; }
+.delete-details div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: start; }
+.delete-details span { color: #64748b; font-size: 12px; }
+.delete-details strong { font-size: 13px; overflow-wrap: anywhere; }
+.confirm-field { display: block; margin-bottom: 12px; }
+.confirm-field input { margin-top: 6px; }
+.modal-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 13px; line-height: 1.45; margin: 0 0 12px; padding: 10px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.danger-action { color: #fff; background: #dc2626; font-weight: 800; }
+.danger-action:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 1100px) {
   .summary-grid, .filter-row, .filter-row + .filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

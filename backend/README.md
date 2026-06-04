@@ -40,6 +40,24 @@ DB_USERNAME=agnishop
 DB_PASSWORD=your_password
 ```
 
+Opsional: aktifkan notifikasi Auto Sync jika order sync berstatus `error` atau `skipped`:
+```
+MARKETPLACE_FAILURE_NOTIFY_ENABLED=true
+MARKETPLACE_FAILURE_NOTIFY_STATUSES=error,skipped
+MARKETPLACE_FAILURE_NOTIFY_DEDUP_MINUTES=10
+
+MARKETPLACE_TELEGRAM_ENABLED=true
+MARKETPLACE_TELEGRAM_BOT_TOKEN=123456:telegram_bot_token
+MARKETPLACE_TELEGRAM_CHAT_ID=123456789
+
+MARKETPLACE_WHATSAPP_ENABLED=true
+MARKETPLACE_WHATSAPP_WEBHOOK_URL=https://your-whatsapp-provider.example/send
+MARKETPLACE_WHATSAPP_TOKEN=optional_bearer_token
+MARKETPLACE_WHATSAPP_PHONE=628xxxxxxxxxx
+```
+
+Telegram memakai Bot API `sendMessage`. WhatsApp memakai webhook generik dengan payload `phone`, `message`, `text`, `source_marketplace`, `target_marketplace`, `sku`, dan `status`.
+
 ### 3. Database Setup
 ```bash
 php artisan migrate --seed

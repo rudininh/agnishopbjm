@@ -11,6 +11,7 @@ Artisan::command('about:agnishop', function (): void {
 });
 
 Artisan::command('sku-mapping:sync-marketplaces', function (): int {
+    app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
     $result = app(OmnichannelController::class)->syncMarketplaceCachesForSkuMapping();
 
     $this->info($result['message'] ?? 'Sync marketplace selesai.');
@@ -25,7 +26,28 @@ Schedule::command('sku-mapping:sync-marketplaces')
     ->everyFifteenMinutes()
     ->withoutOverlapping();
 
+Artisan::command('marketplace:refresh-tokens {--force}', function (): int {
+    $result = app(OmnichannelController::class)->autoRefreshMarketplaceTokens((bool) $this->option('force'));
+
+    $this->info($result['message'] ?? 'Auto refresh token selesai.');
+    foreach ($result['items'] ?? [] as $item) {
+        $this->line(sprintf(
+            '%s | %s | %s',
+            $item['account_name'] ?? $item['account_key'] ?? '-',
+            $item['status'] ?? '-',
+            $item['message'] ?? $item['error'] ?? '-'
+        ));
+    }
+
+    return ($result['status'] ?? 'ok') === 'warning' ? 1 : 0;
+});
+
+Schedule::command('marketplace:refresh-tokens')
+    ->everyTenMinutes()
+    ->withoutOverlapping();
+
 Artisan::command('sync:safety-check', function (): int {
+    app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
     $result = app(StockConsistencyService::class)->run();
 
     $this->info($result['message'] ?? 'Safety check selesai.');
@@ -40,6 +62,7 @@ Schedule::command('sync:safety-check')
     ->withoutOverlapping();
 
 Artisan::command('sync:shopee-orders {--hours=24}', function (): int {
+    app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
     $result = app(MarketplaceOrderSyncService::class)->pollShopeeReadyOrders((int) $this->option('hours'));
 
     $this->info($result['message'] ?? 'Polling order Shopee selesai.');
@@ -55,6 +78,7 @@ Schedule::command('sync:shopee-orders --hours=24')
     ->withoutOverlapping();
 
 Artisan::command('sync:tiktok-orders {--hours=24}', function (): int {
+    app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
     $result = app(MarketplaceOrderSyncService::class)->pollTiktokUpdatedOrders((int) $this->option('hours'));
 
     $this->info($result['message'] ?? 'Polling order TikTok selesai.');

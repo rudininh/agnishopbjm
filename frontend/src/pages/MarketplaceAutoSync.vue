@@ -7,6 +7,12 @@
       </div>
       <div class="header-actions">
         <button class="ghost" type="button" @click="loadAll" :disabled="loading">{{ loading ? 'Memuat...' : 'Refresh' }}</button>
+        <button class="primary" type="button" @click="instantCheckOrders" :disabled="runningInstantCheck">
+          {{ runningInstantCheck ? 'Instant check...' : 'Instant Check 1 Jam' }}
+        </button>
+        <button class="primary" type="button" @click="retryOpenIssues" :disabled="runningRetryOpenIssues">
+          {{ runningRetryOpenIssues ? 'Retry issue...' : 'Retry Open Issues' }}
+        </button>
         <button class="primary" type="button" @click="pollShopeeOrders" :disabled="runningOrderPoll">
           {{ runningOrderPoll ? 'Cek pesanan...' : 'Cek Pesanan Shopee Sekarang' }}
         </button>
@@ -22,10 +28,26 @@
         <button class="primary" type="button" @click="runSafetyCheck" :disabled="runningSafety">
           {{ runningSafety ? 'Menjalankan...' : 'Run Safety Check Now' }}
         </button>
+        <button class="ghost" type="button" @click="previewBulkUpdateEmptySkus" :disabled="runningBulkSkuPreview">
+          {{ runningBulkSkuPreview ? 'Preview SKU...' : 'Preview Bulk SKU' }}
+        </button>
+        <button class="ghost" type="button" @click="bulkUpdateEmptySkus" :disabled="runningBulkSkuUpdate">
+          {{ runningBulkSkuUpdate ? 'Update SKU...' : 'Bulk Update SKU Kosong' }}
+        </button>
       </div>
     </header>
 
     <p v-if="notice" :class="['notice', noticeType]">{{ notice }}</p>
+
+    <section v-if="dashboard.alerts?.length" class="alert-stack">
+      <article v-for="alert in dashboard.alerts" :key="`${alert.type}-${alert.created_at || alert.title}`" :class="['alert-card', alert.severity === 'error' ? 'error' : 'warning']">
+        <div>
+          <strong>{{ alert.title }}</strong>
+          <span>{{ formatDate(alert.created_at) }}</span>
+        </div>
+        <p>{{ alert.message }}</p>
+      </article>
+    </section>
 
     <section class="browser-auto-strip">
       <div>
@@ -72,6 +94,7 @@
           <div><dt>Realtime Sync</dt><dd>{{ dashboard.engine?.realtime_sync ? 'Active' : 'Inactive' }}</dd></div>
           <div><dt>Live Push</dt><dd>{{ dashboard.engine?.live_push ? 'Active' : 'Dry Run' }}</dd></div>
           <div><dt>Safety Check</dt><dd>{{ dashboard.engine?.safety_check ? dashboard.engine?.cron_interval : 'Inactive' }}</dd></div>
+          <div><dt>Failure Notify</dt><dd>{{ failureNotificationLabel }}</dd></div>
           <div><dt>Interval cron</dt><dd>{{ dashboard.engine?.cron_interval || '-' }}</dd></div>
         </dl>
       </article>
@@ -107,6 +130,11 @@
       <button :class="{ active: activeTab === 'webhook' }" @click="activeTab = 'webhook'">Webhook Monitor</button>
       <button :class="{ active: activeTab === 'order' }" @click="activeTab = 'order'">Order Sync</button>
       <button :class="{ active: activeTab === 'sync' }" @click="activeTab = 'sync'">Sync Log</button>
+      <button :class="{ active: activeTab === 'anomaly' }" @click="activeTab = 'anomaly'">Anomali Stok</button>
+      <button :class="{ active: activeTab === 'skuHistory' }" @click="activeTab = 'skuHistory'">History SKU</button>
+      <button :class="{ active: activeTab === 'watchdog' }" @click="activeTab = 'watchdog'">Watchdog</button>
+      <button :class="{ active: activeTab === 'report' }" @click="activeTab = 'report'">Report</button>
+      <button :class="{ active: activeTab === 'queue' }" @click="activeTab = 'queue'">Queue</button>
       <button :class="{ active: activeTab === 'safety' }" @click="activeTab = 'safety'">Cron Safety Check</button>
     </div>
 
@@ -173,6 +201,7 @@
           <option value="error">Error</option>
         </select>
         <input v-model="orderFilters.date" type="date" @change="loadOrderSync(1)" />
+        <input v-model.trim="orderFilters.search" type="search" placeholder="Cari order / SKU / message" @keyup.enter="loadOrderSync(1)" />
       </div>
       <div class="table-actions">
         <button class="ghost" type="button" @click="exportOrderSync" :disabled="exportingOrderSync">
@@ -239,6 +268,184 @@
         </table>
       </div>
       <Pagination :pagination="syncPagination" @change="loadSyncLogs" />
+    </section>
+
+    <section v-if="activeTab === 'anomaly'" class="panel">
+      <div class="safety-summary">
+        <div><span>Total anomali</span><strong>{{ stockAnomalies.summary?.total_anomalies || 0 }}</strong></div>
+        <div><span>Stok beda</span><strong>{{ stockAnomalies.summary?.stock_mismatch || 0 }}</strong></div>
+        <div><span>Cache Shopee kosong</span><strong>{{ stockAnomalies.summary?.missing_shopee_stock || 0 }}</strong></div>
+        <div><span>Cache TikTok kosong</span><strong>{{ stockAnomalies.summary?.missing_tiktok_stock || 0 }}</strong></div>
+        <div><span>Mapping belum lengkap</span><strong>{{ stockAnomalies.summary?.incomplete_mapping || 0 }}</strong></div>
+      </div>
+      <div class="filter-row anomaly-filter-row">
+        <select v-model="stockAnomalyFilters.type" @change="loadStockAnomalies(1)">
+          <option value="">Semua anomali</option>
+          <option value="stock_mismatch">Stok beda</option>
+          <option value="missing_shopee_stock">Cache Shopee kosong</option>
+          <option value="missing_tiktok_stock">Cache TikTok kosong</option>
+          <option value="incomplete_mapping">Mapping belum lengkap</option>
+        </select>
+        <input v-model.trim="stockAnomalyFilters.search" type="search" placeholder="Cari SKU / produk / varian" @keyup.enter="loadStockAnomalies(1)" />
+        <button class="ghost" type="button" @click="loadStockAnomalies(1)" :disabled="loadingStockAnomalies">
+          {{ loadingStockAnomalies ? 'Memuat...' : 'Cari Anomali' }}
+        </button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>SKU</th><th>Produk</th><th>Varian</th><th>Shopee</th><th>TikTok</th><th>Selisih</th><th>Issue</th><th>Aksi</th></tr></thead>
+          <tbody>
+            <tr v-for="row in stockAnomalies.items" :key="`${row.sku}-${row.issue_type}`">
+              <td>{{ row.sku || '-' }}</td>
+              <td>{{ row.product_name || '-' }}</td>
+              <td>{{ row.variant_name || '-' }}</td>
+              <td>{{ row.shopee_stock ?? '-' }}</td>
+              <td>{{ row.tiktok_stock ?? '-' }}</td>
+              <td>{{ row.difference ?? '-' }}</td>
+              <td>
+                <span :class="['badge', row.severity === 'error' ? 'error' : 'neutral']">{{ row.issue_type }}</span>
+                <p class="cell-note">{{ row.message }}</p>
+              </td>
+              <td class="row-actions">
+                <button class="ghost" type="button" @click="syncStockAnomaly(row, 'shopee')" :disabled="runningAnomalyKey === anomalyActionKey(row, 'shopee') || row.shopee_stock === null">
+                  Shopee -> TikTok
+                </button>
+                <button class="ghost" type="button" @click="syncStockAnomaly(row, 'tiktok')" :disabled="runningAnomalyKey === anomalyActionKey(row, 'tiktok') || row.tiktok_stock === null">
+                  TikTok -> Shopee
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!stockAnomalies.items.length"><td colspan="8" class="empty">Tidak ada anomali stok untuk filter ini.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <Pagination :pagination="stockAnomalies.pagination" @change="loadStockAnomalies" />
+    </section>
+
+    <section v-if="activeTab === 'skuHistory'" class="panel">
+      <div class="filter-row">
+        <select v-model="skuHistoryFilters.channel" @change="loadSkuChangeHistory(1)">
+          <option value="">Semua channel</option>
+          <option value="shopee">Shopee</option>
+          <option value="tiktok">TikTok</option>
+        </select>
+        <select v-model="skuHistoryFilters.status" @change="loadSkuChangeHistory(1)">
+          <option value="">Semua status</option>
+          <option value="ok">OK</option>
+          <option value="success">Success</option>
+          <option value="dry_run">Dry Run</option>
+          <option value="error">Error</option>
+          <option value="skipped">Skipped</option>
+        </select>
+        <input v-model="skuHistoryFilters.date" type="date" @change="loadSkuChangeHistory(1)" />
+        <input v-model.trim="skuHistoryFilters.search" type="search" placeholder="Cari SKU / produk / variant ID" @keyup.enter="loadSkuChangeHistory(1)" />
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Channel</th><th>Produk</th><th>Variant</th><th>SKU Lama</th><th>SKU Baru</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr v-for="row in skuHistory.items" :key="row.id">
+              <td>{{ formatDate(row.created_at) }}</td>
+              <td>{{ labelMarketplace(row.channel) }}</td>
+              <td>{{ row.product_name || row.internal_sku || row.product_id || '-' }}</td>
+              <td>{{ row.variant_name || row.variant_id || '-' }}</td>
+              <td>{{ row.old_seller_sku || 'Tidak ada SKU' }}</td>
+              <td>{{ row.new_seller_sku || '-' }}</td>
+              <td><span :class="['badge', row.status === 'error' ? 'error' : row.status === 'ok' || row.status === 'success' ? 'success' : 'neutral']">{{ row.status }}</span></td>
+              <td>{{ row.action || '-' }}</td>
+            </tr>
+            <tr v-if="!skuHistory.items.length"><td colspan="8" class="empty">Belum ada history perubahan SKU.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <Pagination :pagination="skuHistory.pagination" @change="loadSkuChangeHistory" />
+    </section>
+
+    <section v-if="activeTab === 'watchdog'" class="panel">
+      <div class="safety-summary">
+        <div><span>Order perlu cek</span><strong>{{ orderWatchdog.summary?.watch_count || 0 }}</strong></div>
+        <div><span>Order dicek</span><strong>{{ orderWatchdog.summary?.checked_orders || 0 }}</strong></div>
+        <div><span>Ambang menit</span><strong>{{ orderWatchdog.summary?.threshold_minutes || 5 }}</strong></div>
+        <div><span>Window jam</span><strong>{{ orderWatchdog.summary?.window_hours || 24 }}</strong></div>
+      </div>
+      <div class="filter-row compact-filter-row">
+        <input v-model.number="watchdogFilters.minutes" type="number" min="1" max="180" />
+        <input v-model.number="watchdogFilters.hours" type="number" min="1" max="168" />
+        <button class="ghost" type="button" @click="loadOrderWatchdog" :disabled="loadingWatchdog">
+          {{ loadingWatchdog ? 'Memuat...' : 'Refresh Watchdog' }}
+        </button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Order</th><th>Source</th><th>Target</th><th>Umur</th><th>Status</th><th>Message</th></tr></thead>
+          <tbody>
+            <tr v-for="row in orderWatchdog.items" :key="row.id">
+              <td>{{ formatDate(row.created_at) }}</td>
+              <td>{{ row.order_ref || '-' }}</td>
+              <td>{{ labelMarketplace(row.source_marketplace) }}</td>
+              <td>{{ labelMarketplace(row.target_marketplace) }}</td>
+              <td>{{ row.age_minutes }} menit</td>
+              <td><span class="badge error">{{ row.status }}</span></td>
+              <td>{{ row.message }}</td>
+            </tr>
+            <tr v-if="!orderWatchdog.items.length"><td colspan="7" class="empty">Tidak ada order yang tertahan menurut watchdog.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="activeTab === 'report'" class="panel">
+      <div class="safety-summary">
+        <div><span>Total mapping aktif</span><strong>{{ reconciliationReport.summary?.total_active_mappings || 0 }}</strong></div>
+        <div><span>Sinkron</span><strong>{{ reconciliationReport.summary?.aligned || 0 }}</strong></div>
+        <div><span>Total anomali</span><strong>{{ reconciliationReport.summary?.total_anomalies || 0 }}</strong></div>
+        <div><span>Generated</span><strong>{{ formatDate(reconciliationReport.generated_at) }}</strong></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>SKU</th><th>Produk</th><th>Varian</th><th>Shopee</th><th>TikTok</th><th>Issue</th><th>Message</th></tr></thead>
+          <tbody>
+            <tr v-for="row in reconciliationReport.items" :key="`${row.sku}-${row.issue_type}`">
+              <td>{{ row.sku || '-' }}</td>
+              <td>{{ row.product_name || '-' }}</td>
+              <td>{{ row.variant_name || '-' }}</td>
+              <td>{{ row.shopee_stock ?? '-' }}</td>
+              <td>{{ row.tiktok_stock ?? '-' }}</td>
+              <td><span :class="['badge', row.severity === 'error' ? 'error' : 'neutral']">{{ row.issue_type }}</span></td>
+              <td>{{ row.message || '-' }}</td>
+            </tr>
+            <tr v-if="!reconciliationReport.items.length"><td colspan="7" class="empty">Report bersih, tidak ada anomali.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-if="activeTab === 'queue'" class="panel">
+      <div class="safety-summary">
+        <div><span>Pending</span><strong>{{ queueDashboard.summary?.pending || 0 }}</strong></div>
+        <div><span>Processing</span><strong>{{ queueDashboard.summary?.processing || 0 }}</strong></div>
+        <div><span>Success</span><strong>{{ queueDashboard.summary?.success || 0 }}</strong></div>
+        <div><span>Failed</span><strong>{{ queueDashboard.summary?.failed || 0 }}</strong></div>
+        <div><span>Total</span><strong>{{ queueDashboard.summary?.total || 0 }}</strong></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Source</th><th>Target</th><th>SKU/Order</th><th>Status</th><th>Old</th><th>New</th><th>Message</th></tr></thead>
+          <tbody>
+            <tr v-for="row in queueDashboard.items" :key="row.id">
+              <td>{{ formatDate(row.created_at) }}</td>
+              <td>{{ labelMarketplace(row.source_marketplace) }}</td>
+              <td>{{ labelMarketplace(row.target_marketplace) }}</td>
+              <td>{{ row.sku || '-' }}</td>
+              <td><span :class="['badge', row.status === 'success' ? 'success' : row.status === 'error' || row.status === 'skipped' ? 'error' : 'neutral']">{{ row.status }}</span></td>
+              <td>{{ row.old_stock ?? '-' }}</td>
+              <td>{{ row.new_stock ?? '-' }}</td>
+              <td>{{ row.message || '-' }}</td>
+            </tr>
+            <tr v-if="!queueDashboard.items.length"><td colspan="8" class="empty">Belum ada item queue/sync pada window ini.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section v-if="activeTab === 'safety'" class="panel">
@@ -326,6 +533,47 @@
         </template>
       </section>
     </div>
+
+    <div v-if="bulkSkuPreview.open" class="modal-backdrop" @click.self="closeBulkSkuPreview">
+      <section class="detail-modal">
+        <header class="modal-head">
+          <div>
+            <p>Preview Bulk Update SKU</p>
+            <h2>{{ bulkSkuPreview.data?.total_candidates || 0 }} kandidat SKU kosong</h2>
+          </div>
+          <div class="modal-actions">
+            <button class="primary" type="button" @click="bulkUpdateEmptySkusFromPreview" :disabled="runningBulkSkuUpdate || bulkSkuPreview.loading || !(bulkSkuPreview.data?.processed || 0)">
+              {{ runningBulkSkuUpdate ? 'Update SKU...' : 'Update Semua di Preview' }}
+            </button>
+            <button class="ghost" type="button" @click="closeBulkSkuPreview">Tutup</button>
+          </div>
+        </header>
+        <p v-if="bulkSkuPreview.loading" class="empty">Memuat preview SKU...</p>
+        <template v-else>
+          <div class="safety-summary">
+            <div><span>Kandidat</span><strong>{{ bulkSkuPreview.data?.total_candidates || 0 }}</strong></div>
+            <div><span>Ditampilkan</span><strong>{{ bulkSkuPreview.data?.processed || 0 }}</strong></div>
+            <div><span>Limit per klik</span><strong>20</strong></div>
+          </div>
+          <div class="table-wrap detail-table">
+            <table>
+              <thead><tr><th>Produk</th><th>Varian</th><th>SKU Template</th><th>Shopee</th><th>TikTok</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr v-for="row in bulkSkuPreview.data?.items || []" :key="`${row.stock_master_id}-${row.seller_sku}`">
+                  <td>{{ row.product_name || '-' }}</td>
+                  <td>{{ row.variant_name || '-' }}</td>
+                  <td>{{ row.seller_sku || '-' }}</td>
+                  <td>{{ row.apply_shopee ? 'Update' : '-' }}</td>
+                  <td>{{ row.apply_tiktok ? 'Update' : '-' }}</td>
+                  <td><span :class="['badge', row.status === 'error' ? 'error' : 'neutral']">{{ row.status }}</span></td>
+                </tr>
+                <tr v-if="!(bulkSkuPreview.data?.items || []).length"><td colspan="6" class="empty">Tidak ada SKU kosong untuk diupdate.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -342,6 +590,10 @@ const runningSafety = ref(false)
 const runningShopeeToTiktok = ref(false)
 const runningOrderPoll = ref(false)
 const runningTiktokOrderPoll = ref(false)
+const runningInstantCheck = ref(false)
+const runningRetryOpenIssues = ref(false)
+const runningBulkSkuUpdate = ref(false)
+const runningBulkSkuPreview = ref(false)
 const browserAutoSyncEnabled = ref(false)
 const browserAutoSyncRunning = ref(false)
 const browserAutoSyncLastRun = ref(null)
@@ -358,10 +610,22 @@ const webhookPagination = ref({ page: 1, last_page: 1, total: 0 })
 const syncPagination = ref({ page: 1, last_page: 1, total: 0 })
 const safety = ref({ summary: {}, items: [], pagination: { page: 1, last_page: 1, total: 0 } })
 const orderSync = ref({ summary: {}, items: [], pagination: { page: 1, last_page: 1, total: 0 } })
+const stockAnomalies = ref({ summary: {}, items: [], pagination: { page: 1, last_page: 1, total: 0 } })
+const skuHistory = ref({ items: [], pagination: { page: 1, last_page: 1, total: 0 } })
+const orderWatchdog = ref({ summary: {}, items: [] })
+const reconciliationReport = ref({ summary: {}, items: [], generated_at: null })
+const queueDashboard = ref({ summary: {}, items: [] })
+const loadingStockAnomalies = ref(false)
+const loadingWatchdog = ref(false)
+const runningAnomalyKey = ref('')
 const detailModal = reactive({ open: false, loading: false, retrying: false, data: null })
+const bulkSkuPreview = reactive({ open: false, loading: false, data: null })
 const webhookFilters = reactive({ marketplace: '', status: '', date: '' })
 const syncFilters = reactive({ marketplace: '', status: '', date: '' })
-const orderFilters = reactive({ type: '', status: '', date: '' })
+const orderFilters = reactive({ type: '', status: '', date: '', search: '' })
+const stockAnomalyFilters = reactive({ type: '', search: '' })
+const skuHistoryFilters = reactive({ channel: '', status: '', date: '', search: '' })
+const watchdogFilters = reactive({ minutes: 5, hours: 24 })
 let browserAutoSyncTimer = null
 let browserAutoSyncCountdownTimer = null
 let browserAutoSyncRunCount = 0
@@ -385,6 +649,7 @@ const labelMarketplace = (value) => {
   if (text === 'tiktok') return 'TikTok'
   if (text === 'safety_check') return 'Safety Check'
   if (text === 'manual_shopee_master') return 'Manual Shopee Master'
+  if (text === 'manual_anomaly_tiktok_master') return 'Manual TikTok Master'
   if (text === 'shopee_order') return 'Shopee Order'
   if (text === 'shopee_stock_refresh') return 'Shopee Stock Refresh'
   if (text === 'tiktok_order') return 'TikTok Order'
@@ -404,6 +669,16 @@ const browserAutoSyncCountdownLabel = computed(() => {
   return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
 })
 const browserAutoSyncNextRunLabel = computed(() => browserAutoSyncNextRun.value ? `${formatTime(browserAutoSyncNextRun.value)} WITA` : '-')
+const failureNotificationLabel = computed(() => {
+  const config = dashboard.value.engine?.failure_notifications
+  if (!config?.enabled) return 'Off'
+
+  const channels = []
+  if (config.telegram) channels.push('Telegram')
+  if (config.whatsapp) channels.push('WhatsApp')
+
+  return channels.length ? channels.join(' + ') : 'Active, channel belum lengkap'
+})
 
 const loadDashboard = async () => {
   const { data } = await omnichannelService.autoSyncDashboard()
@@ -440,16 +715,202 @@ const loadOrderSync = async (page = orderSync.value.pagination?.page || 1) => {
   }
 }
 
+const loadStockAnomalies = async (page = stockAnomalies.value.pagination?.page || 1) => {
+  loadingStockAnomalies.value = true
+  try {
+    const { data } = await omnichannelService.autoSyncStockAnomalies({ ...stockAnomalyFilters, page, per_page: 20 })
+    stockAnomalies.value = {
+      summary: data.summary || {},
+      items: data.items || [],
+      pagination: data.pagination || stockAnomalies.value.pagination
+    }
+  } finally {
+    loadingStockAnomalies.value = false
+  }
+}
+
+const loadSkuChangeHistory = async (page = skuHistory.value.pagination?.page || 1) => {
+  const { data } = await omnichannelService.autoSyncSkuChangeHistory({ ...skuHistoryFilters, page, per_page: 20 })
+  skuHistory.value = {
+    items: data.items || [],
+    pagination: data.pagination || skuHistory.value.pagination
+  }
+}
+
+const loadOrderWatchdog = async () => {
+  loadingWatchdog.value = true
+  try {
+    const { data } = await omnichannelService.autoSyncOrderWatchdog({ ...watchdogFilters })
+    orderWatchdog.value = {
+      summary: data.summary || {},
+      items: data.items || []
+    }
+  } finally {
+    loadingWatchdog.value = false
+  }
+}
+
+const loadReconciliationReport = async () => {
+  const { data } = await omnichannelService.autoSyncReconciliationReport()
+  reconciliationReport.value = {
+    summary: data.summary || {},
+    items: data.items || [],
+    generated_at: data.generated_at || null
+  }
+}
+
+const loadQueueDashboard = async () => {
+  const { data } = await omnichannelService.autoSyncQueueDashboard({ hours: 24, limit: 50 })
+  queueDashboard.value = {
+    summary: data.summary || {},
+    items: data.items || []
+  }
+}
+
 const loadAll = async () => {
   loading.value = true
   notice.value = ''
   try {
-    await Promise.all([loadDashboard(), loadWebhookLogs(1), loadOrderSync(1), loadSyncLogs(1), loadSafety(1)])
+    await Promise.all([
+      loadDashboard(),
+      loadWebhookLogs(1),
+      loadOrderSync(1),
+      loadSyncLogs(1),
+      loadSafety(1),
+      loadStockAnomalies(1),
+      loadSkuChangeHistory(1),
+      loadOrderWatchdog(),
+      loadReconciliationReport(),
+      loadQueueDashboard()
+    ])
   } catch (error) {
     notice.value = error?.response?.data?.message || error?.message || 'Data sinkronisasi gagal dimuat.'
     noticeType.value = 'error'
   } finally {
     loading.value = false
+  }
+}
+
+const instantCheckOrders = async () => {
+  runningInstantCheck.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.instantAutoSyncCheck('all')
+    const shopee = data.shopee || {}
+    const tiktok = data.tiktok || {}
+    notice.value = [
+      data.message || 'Instant check selesai.',
+      `Shopee baru: ${shopee.processed || 0}`,
+      `TikTok baru: ${tiktok.processed || 0}`,
+      `Gagal: ${(shopee.failed || 0) + (tiktok.failed || 0)}`
+    ].join(' | ')
+    noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
+    activeTab.value = 'order'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Instant check order gagal dijalankan.'
+    noticeType.value = 'error'
+  } finally {
+    runningInstantCheck.value = false
+  }
+}
+
+const retryOpenIssues = async () => {
+  runningRetryOpenIssues.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.retryAutoSyncOpenIssues(10)
+    notice.value = [
+      data.message || 'Retry open issues selesai.',
+      `Dicek: ${data.checked || 0}`,
+      `Berhasil: ${data.success || 0}`,
+      `Gagal: ${data.failed || 0}`
+    ].join(' | ')
+    noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
+    activeTab.value = 'order'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Retry open issues gagal.'
+    noticeType.value = 'error'
+  } finally {
+    runningRetryOpenIssues.value = false
+  }
+}
+
+const bulkUpdateEmptySkus = async () => {
+  const confirmed = window.confirm('Update SKU kosong ke marketplace memakai SKU template mapping? Default maksimal 20 varian per klik.')
+  if (!confirmed) return
+
+  runningBulkSkuUpdate.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.bulkUpdateAutoSyncEmptySkus(20)
+    notice.value = [
+      data.message || 'Bulk update SKU kosong selesai.',
+      `Kandidat: ${data.total_candidates || 0}`,
+      `Diproses: ${data.processed || 0}`,
+      `Berhasil: ${data.success || 0}`,
+      `Gagal: ${data.failed || 0}`
+    ].join(' | ')
+    noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadStockAnomalies(1), loadSkuChangeHistory(1), loadReconciliationReport(), loadQueueDashboard()])
+    activeTab.value = 'skuHistory'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Bulk update SKU kosong gagal.'
+    noticeType.value = 'error'
+  } finally {
+    runningBulkSkuUpdate.value = false
+  }
+}
+
+const previewBulkUpdateEmptySkus = async () => {
+  runningBulkSkuPreview.value = true
+  bulkSkuPreview.open = true
+  bulkSkuPreview.loading = true
+  bulkSkuPreview.data = null
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.bulkUpdateAutoSyncEmptySkus(20, true)
+    bulkSkuPreview.data = data
+    notice.value = data.message || 'Preview bulk update SKU kosong selesai.'
+    noticeType.value = 'success'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Preview bulk update SKU kosong gagal.'
+    noticeType.value = 'error'
+    bulkSkuPreview.open = false
+  } finally {
+    bulkSkuPreview.loading = false
+    runningBulkSkuPreview.value = false
+  }
+}
+
+const closeBulkSkuPreview = () => {
+  bulkSkuPreview.open = false
+  bulkSkuPreview.loading = false
+  bulkSkuPreview.data = null
+}
+
+const bulkUpdateEmptySkusFromPreview = async () => {
+  runningBulkSkuUpdate.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.bulkUpdateAutoSyncEmptySkus(20, false)
+    notice.value = [
+      data.message || 'Bulk update SKU kosong selesai.',
+      `Kandidat: ${data.total_candidates || 0}`,
+      `Diproses: ${data.processed || 0}`,
+      `Berhasil: ${data.success || 0}`,
+      `Gagal: ${data.failed || 0}`
+    ].join(' | ')
+    noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    closeBulkSkuPreview()
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadStockAnomalies(1), loadSkuChangeHistory(1), loadReconciliationReport(), loadQueueDashboard()])
+    activeTab.value = 'skuHistory'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Bulk update SKU kosong gagal.'
+    noticeType.value = 'error'
+  } finally {
+    runningBulkSkuUpdate.value = false
   }
 }
 
@@ -460,7 +921,7 @@ const runSafetyCheck = async () => {
     const { data } = await omnichannelService.runAutoSyncSafetyCheck()
     notice.value = data.message || 'Safety check selesai.'
     noticeType.value = 'success'
-    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1)])
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadReconciliationReport(), loadQueueDashboard()])
     activeTab.value = 'safety'
   } catch (error) {
     notice.value = error?.response?.data?.message || error?.message || 'Safety check gagal dijalankan.'
@@ -490,7 +951,7 @@ const syncShopeeToTiktok = async () => {
     ]
     notice.value = parts.join(' | ')
     noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
-    await Promise.all([loadDashboard(), loadSyncLogs(1), loadSafety(1)])
+    await Promise.all([loadDashboard(), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadReconciliationReport(), loadQueueDashboard()])
     activeTab.value = 'sync'
   } catch (error) {
     notice.value = error?.response?.data?.message || error?.message || 'Sinkron Shopee ke TikTok gagal dijalankan.'
@@ -517,7 +978,7 @@ const pollShopeeOrders = async () => {
     noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
     syncFilters.marketplace = 'shopee_order'
     orderFilters.type = 'shopee_order'
-    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1)])
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
     activeTab.value = 'order'
   } catch (error) {
     notice.value = error?.response?.data?.message || error?.message || 'Polling order Shopee gagal dijalankan.'
@@ -544,13 +1005,36 @@ const pollTiktokOrders = async () => {
     noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
     syncFilters.marketplace = 'tiktok_order'
     orderFilters.type = 'tiktok_order'
-    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1)])
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
     activeTab.value = 'order'
   } catch (error) {
     notice.value = error?.response?.data?.message || error?.message || 'Polling order TikTok gagal dijalankan.'
     noticeType.value = 'error'
   } finally {
     runningTiktokOrderPoll.value = false
+  }
+}
+
+const anomalyActionKey = (row, sourceMarketplace) => `${row.sku || '-'}:${sourceMarketplace}`
+
+const syncStockAnomaly = async (row, sourceMarketplace) => {
+  const key = anomalyActionKey(row, sourceMarketplace)
+  runningAnomalyKey.value = key
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.syncAutoSyncStockAnomaly({
+      sku: row.sku,
+      source_marketplace: sourceMarketplace
+    })
+    notice.value = data.message || 'Anomali stok selesai disinkronkan.'
+    noticeType.value = data.status === 'error' ? 'error' : 'success'
+    await Promise.all([loadDashboard(), loadStockAnomalies(1), loadSyncLogs(1), loadSafety(1), loadReconciliationReport(), loadQueueDashboard()])
+    activeTab.value = 'anomaly'
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Anomali stok gagal disinkronkan.'
+    noticeType.value = 'error'
+  } finally {
+    runningAnomalyKey.value = ''
   }
 }
 
@@ -594,6 +1078,40 @@ const scheduleBrowserAutoSync = (delay = BROWSER_AUTO_SYNC_INTERVAL_MS) => {
   }, delay)
 }
 
+const tokenErrorText = (result) => {
+  if (!result) return ''
+  if (result.status === 'rejected') {
+    const data = result.reason?.response?.data
+    return JSON.stringify(data || result.reason?.message || '').toLowerCase()
+  }
+
+  return JSON.stringify(result.value?.data || {}).toLowerCase()
+}
+
+const hasTokenError = (result) => {
+  const text = tokenErrorText(result)
+  return text.includes('token') || text.includes('access_expired') || text.includes('expired') || text.includes('invalid access')
+}
+
+const refreshMarketplaceTokensFromBrowser = async (shopeeResult, tiktokResult) => {
+  const actions = []
+  if (hasTokenError(shopeeResult)) {
+    actions.push(omnichannelService.runTokenAction('refresh-token-shopee-agnishopbjm'))
+  }
+  if (hasTokenError(tiktokResult)) {
+    actions.push(omnichannelService.runTokenAction('refresh-token-tiktok-agnishopbjm'))
+  }
+
+  if (!actions.length) return null
+
+  const results = await Promise.allSettled(actions)
+  return {
+    requested: actions.length,
+    success: results.filter((item) => item.status === 'fulfilled' && (item.value?.data?.status === 'ok' || item.value?.data?.status === 'success')).length,
+    failed: results.filter((item) => item.status === 'rejected' || item.value?.data?.status === 'error').length
+  }
+}
+
 const runBrowserAutoSync = async () => {
   if (!browserAutoSyncEnabled.value || browserAutoSyncRunning.value) return
 
@@ -601,10 +1119,18 @@ const runBrowserAutoSync = async () => {
   browserAutoSyncNextRun.value = null
   browserAutoSyncCountdownSeconds.value = 0
   try {
-    const [shopeeResult, tiktokResult] = await Promise.allSettled([
+    let [shopeeResult, tiktokResult] = await Promise.allSettled([
       omnichannelService.pollAutoSyncShopeeOrders(24),
       omnichannelService.pollAutoSyncTiktokOrders(24)
     ])
+
+    const tokenRefreshData = await refreshMarketplaceTokensFromBrowser(shopeeResult, tiktokResult)
+    if (tokenRefreshData?.success) {
+      ;[shopeeResult, tiktokResult] = await Promise.allSettled([
+        omnichannelService.pollAutoSyncShopeeOrders(24),
+        omnichannelService.pollAutoSyncTiktokOrders(24)
+      ])
+    }
 
     browserAutoSyncRunCount += 1
     if (browserAutoSyncRunCount % BROWSER_AUTO_SYNC_SAFETY_EVERY_RUNS === 0) {
@@ -614,17 +1140,20 @@ const runBrowserAutoSync = async () => {
     const shopeeData = shopeeResult.status === 'fulfilled' ? shopeeResult.value.data : null
     const tiktokData = tiktokResult.status === 'fulfilled' ? tiktokResult.value.data : null
     const failed = shopeeResult.status === 'rejected' || tiktokResult.status === 'rejected' || (shopeeData?.failed || 0) > 0 || (tiktokData?.failed || 0) > 0
+    const retryData = failed ? (await omnichannelService.retryAutoSyncOpenIssues(5)).data : null
 
     browserAutoSyncLastRun.value = new Date().toISOString()
     notice.value = [
       'Auto Browser sync selesai.',
       `Shopee baru: ${shopeeData?.processed || 0}`,
       `TikTok baru: ${tiktokData?.processed || 0}`,
-      `Gagal: ${(shopeeData?.failed || 0) + (tiktokData?.failed || 0)}`
-    ].join(' | ')
+      `Gagal: ${(shopeeData?.failed || 0) + (tiktokData?.failed || 0)}`,
+      tokenRefreshData ? `Token refresh: ${tokenRefreshData.success}/${tokenRefreshData.requested}` : null,
+      retryData ? `Auto retry: ${retryData.success || 0}/${retryData.checked || 0}` : null
+    ].filter(Boolean).join(' | ')
     noticeType.value = failed ? 'error' : 'success'
 
-    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1)])
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadReconciliationReport(), loadQueueDashboard()])
   } catch (error) {
     notice.value = error?.response?.data?.message || error?.message || 'Auto Browser sync gagal dijalankan.'
     noticeType.value = 'error'
@@ -717,7 +1246,7 @@ const retryOrderSyncDetail = async () => {
     const { data } = await omnichannelService.retryAutoSyncOrderSync(id)
     notice.value = data.message || 'Retry order sync selesai.'
     noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
-    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1)])
+    await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadOrderWatchdog(), loadQueueDashboard()])
     const refreshed = await omnichannelService.autoSyncOrderSyncDetail(id)
     detailModal.data = refreshed.data
   } catch (error) {
@@ -754,13 +1283,20 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .ghost { background:#fff; color:#0f172a; border:1px solid #dbe3ef; }
 .notice { border-radius:6px; padding:10px 12px; margin-bottom:14px; border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; }
 .notice.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
-.browser-auto-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.browser-auto-strip { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
 .browser-auto-strip div { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; min-width:0; }
 .browser-auto-strip span { color:#64748b; font-size:12px; font-weight:800; }
 .browser-auto-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .status-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:14px; }
 .status-card,.panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .status-card { padding:16px; }
+.alert-stack { display:grid; gap:10px; margin-bottom:14px; }
+.alert-card { display:grid; grid-template-columns:260px 1fr; gap:12px; align-items:start; border-radius:8px; padding:12px; border:1px solid #fde68a; background:#fffbeb; color:#78350f; }
+.alert-card.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+.alert-card div { display:grid; gap:3px; }
+.alert-card strong { font-size:13px; }
+.alert-card span { font-size:12px; color:inherit; opacity:.78; }
+.alert-card p { margin:0; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
 .card-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; }
 .card-head span { color:#475569; font-weight:800; }
 .badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:800; text-transform:capitalize; }
@@ -778,11 +1314,13 @@ dd { color:#0f172a; font-size:14px; font-weight:800; margin-top:2px; }
 .issue-banner span { display:block; font-size:12px; font-weight:800; color:#9a3412; margin-bottom:4px; }
 .issue-banner strong { font-size:13px; }
 .issue-banner p { margin:0; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
-.tabs { display:flex; gap:8px; margin:14px 0; border-bottom:1px solid #e2e8f0; }
+.tabs { display:flex; gap:8px; margin:14px 0; border-bottom:1px solid #e2e8f0; flex-wrap:wrap; }
 .tabs button { background:transparent; color:#475569; border-radius:6px 6px 0 0; border:1px solid transparent; }
 .tabs button.active { background:#fff; color:#0f172a; border-color:#e2e8f0; border-bottom-color:#fff; margin-bottom:-1px; }
 .panel { padding:14px; }
-.filter-row { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; margin-bottom:12px; }
+.filter-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-bottom:12px; }
+.anomaly-filter-row { grid-template-columns:minmax(190px,260px) minmax(240px,1fr) auto; align-items:stretch; }
+.compact-filter-row { grid-template-columns:160px 160px auto; align-items:stretch; }
 .table-actions { display:flex; justify-content:flex-end; margin-bottom:12px; }
 select,input { width:100%; border:1px solid #cbd5e1; border-radius:6px; padding:9px 10px; background:#fff; }
 .table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:6px; }
@@ -792,6 +1330,9 @@ table { width:100%; border-collapse:collapse; font-size:13px; min-width:900px; }
 th,td { padding:10px 12px; border-bottom:1px solid #edf2f7; text-align:left; vertical-align:top; }
 th { background:#f8fafc; color:#475569; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
 td { color:#0f172a; }
+.cell-note { margin:6px 0 0; color:#64748b; font-size:12px; line-height:1.35; }
+.row-actions { display:flex; gap:8px; flex-wrap:wrap; min-width:220px; }
+.row-actions button { padding:7px 9px; font-size:12px; }
 .empty { text-align:center; color:#64748b; padding:22px; }
 .pagination { display:flex; justify-content:flex-end; align-items:center; gap:10px; margin-top:12px; color:#475569; font-size:13px; }
 .safety-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px; }
@@ -818,5 +1359,5 @@ td { color:#0f172a; }
 .detail-table table { min-width:980px; }
 @media (max-width:1360px) { .status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip { grid-template-columns:1fr; } }
-@media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.detail-grid,.detail-items article { grid-template-columns:1fr; } }
+@media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.alert-card,.detail-grid,.detail-items article,.anomaly-filter-row,.compact-filter-row { grid-template-columns:1fr; } }
 </style>

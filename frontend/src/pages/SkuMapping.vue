@@ -134,7 +134,7 @@
                   <span :class="['badge', skuStatus(item)]">{{ skuStatusLabel(skuStatus(item)) }}</span>
                   <small class="status-note">{{ itemStatusLabel(item.status) }}</small>
                   <button
-                    v-if="hasMissingRealSku(item)"
+                    v-if="canUpdateMissingSku(item)"
                     type="button"
                     class="row-update-sku"
                     @click.stop="updateMissingSku(item)"
@@ -296,7 +296,7 @@ const displayInternalSku = (item) => normalizeSku(item?.internal_sku) || '-'
 const missingShopeeSku = (item) => hasShopeeIdentity(item) && !channelSku(item, 'shopee')
 const missingTiktokSku = (item) => hasTiktokIdentity(item) && !channelSku(item, 'tiktok')
 const hasMissingRealSku = (item) => missingShopeeSku(item) || missingTiktokSku(item)
-const canUpdateMissingSku = (item) => Boolean(item?.stock_master_id && templateSku(item) && hasMissingRealSku(item))
+const canUpdateMissingSku = (item) => Boolean(item?.stock_master_id && templateSku(item) && (hasShopeeIdentity(item) || hasTiktokIdentity(item)))
 
 const skuStatus = (item) => {
   const internalSku = normalizeSku(item?.internal_sku)
@@ -615,8 +615,8 @@ const updateMissingSku = async (item) => {
 
   try {
     const sellerSku = templateSku(item)
-    const applyShopee = missingShopeeSku(item)
-    const applyTiktok = missingTiktokSku(item)
+    const applyShopee = hasShopeeIdentity(item)
+    const applyTiktok = hasTiktokIdentity(item)
     const response = await omnichannelService.updateSkuMappingMarketplaceSku({
       stock_master_id: item.stock_master_id,
       seller_sku: sellerSku,
