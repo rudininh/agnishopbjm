@@ -128,7 +128,8 @@
 
     <div class="tabs">
       <button :class="{ active: activeTab === 'webhook' }" @click="activeTab = 'webhook'">Webhook Monitor</button>
-      <button :class="{ active: activeTab === 'order' }" @click="activeTab = 'order'">Order Sync</button>
+      <button :class="{ active: activeTab === 'order' }" @click="setOrderTab('')">Order Sync</button>
+      <button :class="{ active: activeTab === 'orderCancel' }" @click="setOrderTab('cancel')">Order Cancel</button>
       <button :class="{ active: activeTab === 'sync' }" @click="activeTab = 'sync'">Sync Log</button>
       <button :class="{ active: activeTab === 'anomaly' }" @click="activeTab = 'anomaly'">Anomali Stok</button>
       <button :class="{ active: activeTab === 'skuHistory' }" @click="activeTab = 'skuHistory'">History SKU</button>
@@ -172,7 +173,7 @@
       <Pagination :pagination="webhookPagination" @change="loadWebhookLogs" />
     </section>
 
-    <section v-if="activeTab === 'order'" class="panel">
+    <section v-if="activeTab === 'order' || activeTab === 'orderCancel'" class="panel">
       <div class="safety-summary order-summary">
         <div><span>Last order sync</span><strong>{{ formatDate(orderSync.summary?.last_order_sync_at) }}</strong></div>
         <div><span>Shopee orders today</span><strong>{{ orderSync.summary?.shopee_orders_processed_today || 0 }}</strong></div>
@@ -188,6 +189,11 @@
         <p>{{ orderSync.summary.latest_open_issue_message }}</p>
       </div>
       <div class="filter-row">
+        <div class="segmented">
+          <button type="button" :class="{ active: orderFilters.order_class === '' }" @click="setOrderClass('')">Semua</button>
+          <button type="button" :class="{ active: orderFilters.order_class === 'instant' }" @click="setOrderClass('instant')">Order Instant</button>
+          <button type="button" :class="{ active: orderFilters.order_class === 'cancel' }" @click="setOrderClass('cancel')">Order Cancel</button>
+        </div>
         <select v-model="orderFilters.type" @change="loadOrderSync(1)">
           <option value="">Semua jenis</option>
           <option value="shopee_order">Shopee Order</option>
@@ -584,6 +590,7 @@ import { omnichannelService } from '@/services'
 const BROWSER_AUTO_SYNC_KEY = 'marketplace_auto_sync_browser_enabled'
 const BROWSER_AUTO_SYNC_INTERVAL_MS = 60 * 1000
 const BROWSER_AUTO_SYNC_SAFETY_EVERY_RUNS = 15
+const STOCK_ANOMALY_AUTO_REFRESH_MS = 15000
 
 const loading = ref(false)
 const runningSafety = ref(false)
@@ -622,12 +629,13 @@ const detailModal = reactive({ open: false, loading: false, retrying: false, dat
 const bulkSkuPreview = reactive({ open: false, loading: false, data: null })
 const webhookFilters = reactive({ marketplace: '', status: '', date: '' })
 const syncFilters = reactive({ marketplace: '', status: '', date: '' })
-const orderFilters = reactive({ type: '', status: '', date: '', search: '' })
+const orderFilters = reactive({ type: '', status: '', date: '', search: '', order_class: '' })
 const stockAnomalyFilters = reactive({ type: '', search: '' })
 const skuHistoryFilters = reactive({ channel: '', status: '', date: '', search: '' })
 const watchdogFilters = reactive({ minutes: 5, hours: 24 })
 let browserAutoSyncTimer = null
 let browserAutoSyncCountdownTimer = null
+let stockAnomalyAutoRefreshTimer = null
 let browserAutoSyncRunCount = 0
 
 const Pagination = defineComponent({
@@ -715,7 +723,21 @@ const loadOrderSync = async (page = orderSync.value.pagination?.page || 1) => {
   }
 }
 
+const setOrderClass = (orderClass) => {
+  orderFilters.order_class = orderClass
+  if (orderClass === 'cancel') activeTab.value = 'orderCancel'
+  if (orderClass !== 'cancel' && activeTab.value === 'orderCancel') activeTab.value = 'order'
+  loadOrderSync(1)
+}
+
+const setOrderTab = (orderClass = '') => {
+  activeTab.value = orderClass === 'cancel' ? 'orderCancel' : 'order'
+  orderFilters.order_class = orderClass
+  loadOrderSync(1)
+}
+
 const loadStockAnomalies = async (page = stockAnomalies.value.pagination?.page || 1) => {
+  if (loadingStockAnomalies.value) return
   loadingStockAnomalies.value = true
   try {
     const { data } = await omnichannelService.autoSyncStockAnomalies({ ...stockAnomalyFilters, page, per_page: 20 })
@@ -727,6 +749,11 @@ const loadStockAnomalies = async (page = stockAnomalies.value.pagination?.page |
   } finally {
     loadingStockAnomalies.value = false
   }
+}
+
+const refreshStockAnomaliesIfVisible = () => {
+  if (document.hidden || activeTab.value !== 'anomaly' || runningAnomalyKey.value) return
+  loadStockAnomalies(stockAnomalies.value.pagination?.page || 1)
 }
 
 const loadSkuChangeHistory = async (page = skuHistory.value.pagination?.page || 1) => {
@@ -805,6 +832,7 @@ const instantCheckOrders = async () => {
       `Gagal: ${(shopee.failed || 0) + (tiktok.failed || 0)}`
     ].join(' | ')
     noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    orderFilters.order_class = 'instant'
     await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
     activeTab.value = 'order'
   } catch (error) {
@@ -978,6 +1006,7 @@ const pollShopeeOrders = async () => {
     noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
     syncFilters.marketplace = 'shopee_order'
     orderFilters.type = 'shopee_order'
+    orderFilters.order_class = ''
     await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
     activeTab.value = 'order'
   } catch (error) {
@@ -1005,6 +1034,7 @@ const pollTiktokOrders = async () => {
     noticeType.value = data.status === 'warning' || (data.failed || 0) > 0 ? 'error' : 'success'
     syncFilters.marketplace = 'tiktok_order'
     orderFilters.type = 'tiktok_order'
+    orderFilters.order_class = ''
     await Promise.all([loadDashboard(), loadOrderSync(1), loadSyncLogs(1), loadSafety(1), loadStockAnomalies(1), loadOrderWatchdog(), loadQueueDashboard()])
     activeTab.value = 'order'
   } catch (error) {
@@ -1259,12 +1289,16 @@ const retryOrderSyncDetail = async () => {
 
 onMounted(async () => {
   await loadAll()
+  stockAnomalyAutoRefreshTimer = setInterval(refreshStockAnomaliesIfVisible, STOCK_ANOMALY_AUTO_REFRESH_MS)
+  document.addEventListener('visibilitychange', refreshStockAnomaliesIfVisible)
   if (window.localStorage.getItem(BROWSER_AUTO_SYNC_KEY) === '1') {
     startBrowserAutoSync()
   }
 })
 
 onBeforeUnmount(() => {
+  clearInterval(stockAnomalyAutoRefreshTimer)
+  document.removeEventListener('visibilitychange', refreshStockAnomaliesIfVisible)
   clearBrowserAutoSyncTimer()
   clearBrowserAutoSyncCountdown()
 })
@@ -1319,6 +1353,9 @@ dd { color:#0f172a; font-size:14px; font-weight:800; margin-top:2px; }
 .tabs button.active { background:#fff; color:#0f172a; border-color:#e2e8f0; border-bottom-color:#fff; margin-bottom:-1px; }
 .panel { padding:14px; }
 .filter-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-bottom:12px; }
+.segmented { display:flex; gap:6px; border:1px solid #cbd5e1; border-radius:6px; padding:3px; background:#f8fafc; min-width:0; }
+.segmented button { flex:1; padding:7px 9px; border-radius:4px; background:transparent; color:#475569; font-size:12px; white-space:nowrap; }
+.segmented button.active { background:#0f5fc7; color:#fff; }
 .anomaly-filter-row { grid-template-columns:minmax(190px,260px) minmax(240px,1fr) auto; align-items:stretch; }
 .compact-filter-row { grid-template-columns:160px 160px auto; align-items:stretch; }
 .table-actions { display:flex; justify-content:flex-end; margin-bottom:12px; }

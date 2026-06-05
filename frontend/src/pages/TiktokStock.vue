@@ -192,10 +192,18 @@
                       </span>
                       <strong>Stock {{ sku.stock_qty || 0 }}</strong>
                       <span class="variant-actions">
+                        <input
+                          v-model.trim="manualSkuDrafts[tiktokSkuKey(item, sku)]"
+                          class="manual-sku-input"
+                          type="text"
+                          :placeholder="templateSku(item, sku) || 'Ketik SKU manual'"
+                          title="Isi SKU manual jika SKU template tidak sesuai"
+                          @keyup.enter="updateMissingSku(item, sku)"
+                        />
                         <button
                           type="button"
                           class="update-sku-btn"
-                          title="Update SKU real TikTok dari SKU template"
+                          title="Update SKU real TikTok dari input manual atau SKU template"
                           @click="updateMissingSku(item, sku)"
                           :disabled="!canUpdateMissingSku(item, sku) || updatingSkuKey === tiktokSkuKey(item, sku)"
                         >
@@ -283,6 +291,7 @@ const loading = ref(false)
 const syncingProductId = ref('')
 const updatingSkuKey = ref('')
 const deletingVariantKey = ref('')
+const manualSkuDrafts = reactive({})
 const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
@@ -394,7 +403,9 @@ const templateSku = (item, sku) => {
 }
 const variationCode = templateSku
 const tiktokSkuKey = (item, sku) => `${item?.product_id || ''}:${sku?.sku_id || sku?.tiktok_sku || ''}`
-const canUpdateMissingSku = (item, sku) => Boolean(item?.product_id && (sku?.sku_id || sku?.tiktok_sku) && templateSku(item, sku))
+const manualSkuValue = (key) => String(manualSkuDrafts[key] || '').trim()
+const targetSku = (item, sku) => manualSkuValue(tiktokSkuKey(item, sku)) || templateSku(item, sku)
+const canUpdateMissingSku = (item, sku) => Boolean(item?.product_id && (sku?.sku_id || sku?.tiktok_sku) && targetSku(item, sku))
 const canDeleteTiktokVariant = (item, sku) => Boolean(item?.product_id && (sku?.sku_id || sku?.tiktok_sku) && templateSku(item, sku) && (item?.skus?.length || 0) > 1)
 const copyText = async (value) => {
   const text = String(value || '').trim()
@@ -435,7 +446,7 @@ const updateMissingSku = async (item, sku) => {
   syncMessage.value = ''
 
   try {
-    const sellerSku = templateSku(item, sku)
+    const sellerSku = targetSku(item, sku)
     const response = await omnichannelService.updateMarketplaceVariantSku({
       channel: 'tiktok',
       product_id: item.product_id,
@@ -444,6 +455,7 @@ const updateMissingSku = async (item, sku) => {
     })
 
     sku.seller_sku = sellerSku
+    delete manualSkuDrafts[key]
     syncMessage.value = response.data?.message || `SKU TikTok diupdate: ${sellerSku}`
     syncTone.value = response.data?.status === 'error' ? 'error' : 'success'
   } catch (error) {
@@ -689,7 +701,8 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .copy-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
 .variant-code button:disabled { cursor: not-allowed; opacity: .45; }
-.variant-actions { display: grid; gap: 6px; align-content: start; justify-items: end; }
+.variant-actions { display: grid; gap: 6px; align-content: start; justify-items: stretch; }
+.manual-sku-input { width: 100%; min-width: 0; height: 30px; font-size: 12px; padding: 0 8px; }
 .update-sku-btn { border: 1px solid #f59e0b; background: #fef3c7; color: #92400e; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
 .update-sku-btn:disabled { cursor: not-allowed; opacity: .55; }
 .delete-variant-btn { border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }

@@ -602,6 +602,7 @@ class MarketplaceSyncService
     private function applyOrderSyncFilters($query, array $filters): void
     {
         $search = trim((string) ($filters['search'] ?? ''));
+        $orderClass = trim((string) ($filters['order_class'] ?? ''));
         if (($filters['status'] ?? '') !== '') {
             $query->where('status', $filters['status']);
         }
@@ -610,6 +611,20 @@ class MarketplaceSyncService
         }
         if (($filters['type'] ?? '') !== '') {
             $query->where('source_marketplace', $filters['type']);
+        }
+        if ($orderClass === 'instant') {
+            $query->whereIn('source_marketplace', ['shopee_order', 'tiktok_order'])
+                ->where('created_at', '>=', now()->subHour());
+        }
+        if ($orderClass === 'cancel') {
+            $query->whereIn('source_marketplace', ['shopee_order', 'tiktok_order'])
+                ->where(function ($inner): void {
+                    $inner->where('message', 'ilike', '%cancel%')
+                        ->orWhere('message', 'ilike', '%return%')
+                        ->orWhere('message', 'ilike', '%refund%')
+                        ->orWhere('message', 'ilike', '%restore%')
+                        ->orWhereRaw('(old_stock IS NOT NULL AND new_stock IS NOT NULL AND new_stock > old_stock)');
+                });
         }
         if ($search !== '') {
             $query->where(function ($inner) use ($search): void {

@@ -67,6 +67,9 @@ Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController:
 Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
 Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);
 Route::get('marketplace/auto-sync/order-sync', [MarketplaceAutoSyncController::class, 'orderSync']);
+Route::get('marketplace/shipping-labels/orders', [MarketplaceAutoSyncController::class, 'shippingLabelOrders']);
+Route::get('marketplace/shipping-labels/order-detail', [MarketplaceAutoSyncController::class, 'shippingLabelOrderDetail']);
+Route::post('marketplace/shipping-labels/official-document', [MarketplaceAutoSyncController::class, 'shippingLabelOfficialDocument']);
 Route::get('marketplace/auto-sync/stock-anomalies', [MarketplaceAutoSyncController::class, 'stockAnomalies']);
 Route::get('marketplace/auto-sync/sku-change-history', [MarketplaceAutoSyncController::class, 'skuChangeHistory']);
 Route::get('marketplace/auto-sync/order-watchdog', [MarketplaceAutoSyncController::class, 'orderWatchdog']);

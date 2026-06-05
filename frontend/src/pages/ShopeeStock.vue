@@ -196,10 +196,18 @@
                       </span>
                       <strong>Stock {{ model.stock || 0 }}</strong>
                       <span class="variant-actions">
+                        <input
+                          v-model.trim="manualSkuDrafts[shopeeSkuKey(item, model)]"
+                          class="manual-sku-input"
+                          type="text"
+                          :placeholder="templateSku(item, model) || 'Ketik SKU manual'"
+                          title="Isi SKU manual jika SKU template tidak sesuai"
+                          @keyup.enter="updateMissingSku(item, model)"
+                        />
                         <button
                           type="button"
                           class="update-sku-btn"
-                          title="Update SKU real Shopee dari SKU template"
+                          title="Update SKU real Shopee dari input manual atau SKU template"
                           @click="updateMissingSku(item, model)"
                           :disabled="!canUpdateMissingSku(item, model) || updatingSkuKey === shopeeSkuKey(item, model)"
                         >
@@ -287,6 +295,7 @@ const loading = ref(false)
 const syncingItemId = ref('')
 const updatingSkuKey = ref('')
 const deletingVariantKey = ref('')
+const manualSkuDrafts = reactive({})
 const activeTab = ref('live')
 const page = ref(1)
 const PAGE_SIZE = 20
@@ -433,7 +442,9 @@ const templateSku = (item, model) => {
 }
 const variationCode = templateSku
 const shopeeSkuKey = (item, model) => `${item?.item_id || ''}:${model?.model_id || ''}`
-const canUpdateMissingSku = (item, model) => Boolean(item?.item_id && model?.model_id && templateSku(item, model))
+const manualSkuValue = (key) => String(manualSkuDrafts[key] || '').trim()
+const targetSku = (item, model) => manualSkuValue(shopeeSkuKey(item, model)) || templateSku(item, model)
+const canUpdateMissingSku = (item, model) => Boolean(item?.item_id && model?.model_id && targetSku(item, model))
 const canDeleteShopeeVariant = (item, model) => {
   const modelId = String(model?.model_id || '').trim()
 
@@ -478,7 +489,7 @@ const updateMissingSku = async (item, model) => {
   syncMessage.value = ''
 
   try {
-    const sellerSku = templateSku(item, model)
+    const sellerSku = targetSku(item, model)
     const response = await omnichannelService.updateMarketplaceVariantSku({
       channel: 'shopee',
       item_id: item.item_id,
@@ -487,6 +498,7 @@ const updateMissingSku = async (item, model) => {
     })
 
     model.model_sku = sellerSku
+    delete manualSkuDrafts[key]
     syncMessage.value = response.data?.message || `SKU Shopee diupdate: ${sellerSku}`
     syncTone.value = response.data?.status === 'error' ? 'error' : 'success'
   } catch (error) {
@@ -768,7 +780,8 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .copy-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .variant-code button { flex: 0 0 auto; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; border-radius: 4px; padding: 4px 7px; font-size: 11px; font-weight: 700; }
 .variant-code button:disabled { cursor: not-allowed; opacity: .45; }
-.variant-actions { display: grid; gap: 6px; align-content: start; justify-items: end; }
+.variant-actions { display: grid; gap: 6px; align-content: start; justify-items: stretch; }
+.manual-sku-input { width: 100%; min-width: 0; height: 30px; font-size: 12px; padding: 0 8px; }
 .update-sku-btn { border: 1px solid #f59e0b; background: #fef3c7; color: #92400e; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
 .update-sku-btn:disabled { cursor: not-allowed; opacity: .55; }
 .delete-variant-btn { border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }

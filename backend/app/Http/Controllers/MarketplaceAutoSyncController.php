@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Services\MarketplaceSyncService;
 use App\Services\MarketplaceOrderSyncService;
+use App\Services\MarketplaceApiService;
 use App\Services\StockConsistencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,6 +15,7 @@ class MarketplaceAutoSyncController extends Controller
     public function __construct(
         private readonly MarketplaceSyncService $syncService,
         private readonly MarketplaceOrderSyncService $orderSyncService,
+        private readonly MarketplaceApiService $marketplaceApiService,
         private readonly StockConsistencyService $stockConsistencyService,
     ) {
     }
@@ -70,11 +72,138 @@ class MarketplaceAutoSyncController extends Controller
         return response()->json([
             'status' => 'ok',
             ...$this->syncService->orderSyncHistory(
-                $request->only(['type', 'status', 'date', 'search']),
+                $request->only(['type', 'status', 'date', 'search', 'order_class']),
                 (int) $request->integer('page', 1),
                 (int) $request->integer('per_page', 20)
             ),
         ]);
+    }
+
+    public function shippingLabelOrders(Request $request): JsonResponse
+    {
+        $marketplace = strtolower(trim((string) $request->query('marketplace', 'all')));
+        $status = strtolower(trim((string) $request->query('status', 'all')));
+        $search = mb_strtolower(trim((string) $request->query('search', '')));
+        $page = max(1, (int) $request->integer('page', 1));
+        $perPage = min(100, max(1, (int) $request->integer('per_page', 20)));
+
+        abort_if(! in_array($marketplace, ['all', 'shopee', 'tiktok'], true), 422, 'Filter marketplace tidak valid.');
+        abort_if(! in_array($status, ['all', 'success', 'skipped', 'error'], true), 422, 'Filter status tidak valid.');
+
+        $query = DB::table('marketplace_sync_logs')
+            ->whereIn('source_marketplace', ['shopee_order', 'tiktok_order'])
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit(1000);
+
+        if ($marketplace !== 'all') {
+            $query->where('source_marketplace', $marketplace.'_order');
+        }
+
+        if ($status !== 'all') {
+            $query->where('status', $status);
+        }
+
+        $items = collect($query->get())
+            ->map(function ($row): ?array {
+                $orderRef = $this->shippingLabelOrderRef($row);
+                if ($orderRef === '') {
+                    return null;
+                }
+
+                return [
+                    'id' => (int) $row->id,
+                    'marketplace' => $row->source_marketplace === 'tiktok_order' ? 'tiktok' : 'shopee',
+                    'order_ref' => $orderRef,
+                    'status' => (string) $row->status,
+                    'message' => (string) ($row->message ?? ''),
+                    'created_at' => (string) $row->created_at,
+                    'target_marketplace' => (string) ($row->target_marketplace ?? ''),
+                ];
+            })
+            ->filter()
+            ->unique(fn (array $row): string => $row['marketplace'].':'.$row['order_ref'])
+            ->when($search !== '', function ($rows) use ($search) {
+                return $rows->filter(fn (array $row): bool => str_contains(mb_strtolower($row['order_ref'].' '.$row['message']), $search));
+            })
+            ->values();
+
+        $total = $items->count();
+
+        return response()->json([
+            'status' => 'ok',
+            'summary' => [
+                'total' => $total,
+                'shopee' => $items->where('marketplace', 'shopee')->count(),
+                'tiktok' => $items->where('marketplace', 'tiktok')->count(),
+                'success' => $items->where('status', 'success')->count(),
+            ],
+            'items' => $items->forPage($page, $perPage)->values(),
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'last_page' => max(1, (int) ceil($total / $perPage)),
+            ],
+        ]);
+    }
+
+    public function shippingLabelOrderDetail(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'marketplace' => ['required', 'string', 'in:shopee,tiktok'],
+            'order_ref' => ['required', 'string'],
+        ]);
+
+        $marketplace = strtolower(trim((string) $data['marketplace']));
+        $orderRef = trim((string) $data['order_ref']);
+        $detail = $marketplace === 'shopee'
+            ? $this->marketplaceApiService->fetchShopeeOrderDetail($orderRef)
+            : $this->marketplaceApiService->fetchTiktokOrderDetail($orderRef);
+
+        if (($detail['status'] ?? '') !== 'success') {
+            return response()->json($detail, 422);
+        }
+
+        $order = $detail['order'] ?? [];
+
+        return response()->json([
+            'status' => 'ok',
+            'label' => $marketplace === 'shopee'
+                ? $this->normalizeShopeeShippingLabel($orderRef, is_array($order) ? $order : [])
+                : $this->normalizeTiktokShippingLabel($orderRef, is_array($order) ? $order : []),
+            'raw' => $order,
+        ]);
+    }
+
+    public function shippingLabelOfficialDocument(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'marketplace' => ['required', 'string', 'in:shopee,tiktok'],
+            'order_ref' => ['required', 'string'],
+            'document_type' => ['nullable', 'string'],
+            'document_size' => ['nullable', 'string', 'in:A6,A5,A4'],
+            'document_format' => ['nullable', 'string', 'in:PDF,ZPL'],
+        ]);
+
+        $marketplace = strtolower(trim((string) $data['marketplace']));
+        $orderRef = trim((string) $data['order_ref']);
+        $documentSize = strtoupper(trim((string) ($data['document_size'] ?? 'A6'))) ?: 'A6';
+
+        $result = $marketplace === 'shopee'
+            ? $this->marketplaceApiService->fetchShopeeOfficialShippingDocument(
+                $orderRef,
+                strtoupper(trim((string) ($data['document_type'] ?? ''))),
+                $documentSize
+            )
+            : $this->marketplaceApiService->fetchTiktokOfficialShippingDocument(
+                $orderRef,
+                strtoupper(trim((string) ($data['document_type'] ?? 'SHIPPING_LABEL'))) ?: 'SHIPPING_LABEL',
+                $documentSize,
+                strtoupper(trim((string) ($data['document_format'] ?? 'PDF'))) ?: 'PDF'
+            );
+
+        return response()->json($result, in_array(($result['status'] ?? ''), ['success', 'pending'], true) ? 200 : 422);
     }
 
     public function stockAnomalies(Request $request): JsonResponse
@@ -103,9 +232,83 @@ class MarketplaceAutoSyncController extends Controller
         return response()->json($result, ($result['status'] ?? 'success') === 'error' ? 422 : 200);
     }
 
+    private function shippingLabelOrderRef(object $row): string
+    {
+        if (preg_match('/(?:Shopee|TikTok) order ([A-Z0-9_-]+)/i', (string) ($row->message ?? ''), $matches)) {
+            return trim((string) $matches[1]);
+        }
+
+        $sku = trim((string) ($row->sku ?? ''));
+        if (preg_match('/^[A-Z0-9_-]{8,}$/i', $sku)) {
+            return $sku;
+        }
+
+        return '';
+    }
+
+    private function normalizeShopeeShippingLabel(string $orderRef, array $order): array
+    {
+        $address = data_get($order, 'recipient_address', []);
+        $package = data_get($order, 'package_list.0', []);
+        $items = collect(data_get($order, 'item_list', []))
+            ->map(fn ($item): array => [
+                'name' => (string) ($item['item_name'] ?? '-'),
+                'sku' => (string) ($item['model_sku'] ?? $item['item_sku'] ?? '-'),
+                'variant' => (string) ($item['model_name'] ?? '-'),
+                'qty' => (int) ($item['model_quantity_purchased'] ?? $item['active_qty'] ?? 1),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'marketplace' => 'shopee',
+            'order_ref' => $orderRef,
+            'order_status' => (string) ($order['order_status'] ?? '-'),
+            'shipping_carrier' => (string) ($order['shipping_carrier'] ?? data_get($package, 'shipping_carrier', '-')),
+            'tracking_number' => (string) (data_get($package, 'tracking_number') ?: data_get($package, 'package_number') ?: ''),
+            'buyer_name' => (string) data_get($address, 'name', '-'),
+            'buyer_phone' => (string) data_get($address, 'phone', ''),
+            'buyer_address' => (string) (data_get($address, 'full_address') ?: collect([
+                data_get($address, 'town'),
+                data_get($address, 'district'),
+                data_get($address, 'city'),
+                data_get($address, 'state'),
+            ])->filter()->implode(', ')),
+            'sender_name' => 'Agni Shop Banjarmasin',
+            'items' => $items,
+        ];
+    }
+
+    private function normalizeTiktokShippingLabel(string $orderRef, array $order): array
+    {
+        $address = data_get($order, 'recipient_address', data_get($order, 'shipping_address', []));
+        $items = collect(data_get($order, 'line_items', data_get($order, 'items', [])))
+            ->map(fn ($item): array => [
+                'name' => (string) ($item['product_name'] ?? data_get($item, 'product.name', '-')),
+                'sku' => (string) ($item['seller_sku'] ?? data_get($item, 'sku.seller_sku', '-')),
+                'variant' => (string) ($item['sku_name'] ?? data_get($item, 'sku.name', '-')),
+                'qty' => (int) ($item['quantity'] ?? data_get($item, 'sku.quantity', 1)),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'marketplace' => 'tiktok',
+            'order_ref' => $orderRef,
+            'order_status' => (string) ($order['status'] ?? $order['order_status'] ?? '-'),
+            'shipping_carrier' => (string) ($order['delivery_option_name'] ?? data_get($order, 'delivery_option.name', '-')),
+            'tracking_number' => (string) ($order['tracking_number'] ?? data_get($order, 'packages.0.tracking_number', '')),
+            'buyer_name' => (string) (data_get($address, 'name') ?: data_get($address, 'recipient_name', '-')),
+            'buyer_phone' => (string) (data_get($address, 'phone_number') ?: data_get($address, 'phone', '')),
+            'buyer_address' => (string) (data_get($address, 'full_address') ?: data_get($address, 'address_detail') ?: data_get($address, 'address_line1', '')),
+            'sender_name' => 'Agni Shop Banjarmasin',
+            'items' => $items,
+        ];
+    }
+
     public function exportOrderSync(Request $request)
     {
-        $rows = $this->syncService->orderSyncExportRows($request->only(['type', 'status', 'date', 'search']));
+        $rows = $this->syncService->orderSyncExportRows($request->only(['type', 'status', 'date', 'search', 'order_class']));
         $filename = 'order-sync-'.now()->format('Ymd-His').'.csv';
 
         return response()->streamDownload(function () use ($rows): void {

@@ -5556,7 +5556,7 @@ class OmnichannelController extends Controller
 
         $channel = strtolower(trim((string) $data['channel']));
         $sellerSku = trim((string) $data['seller_sku']);
-        abort_if($sellerSku === '', 422, 'SKU template wajib diisi.');
+        abort_if($sellerSku === '', 422, 'SKU wajib diisi.');
         $this->autoRefreshMarketplaceTokens();
 
         $now = now();

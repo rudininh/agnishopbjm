@@ -14,6 +14,7 @@ import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
 import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
 import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
 import StockAnomalies from '@/pages/StockAnomalies.vue'
+import ShippingLabels from '@/pages/ShippingLabels.vue'
 
 const routes = [
   {
@@ -85,6 +86,11 @@ const routes = [
     path: '/marketplace/auto-sync',
     name: 'marketplace-auto-sync',
     component: MarketplaceAutoSync
+  },
+  {
+    path: '/marketplace/cetak-resi',
+    name: 'marketplace-shipping-labels',
+    component: ShippingLabels
   },
   {
     path: '/marketplace/stock-anomalies',

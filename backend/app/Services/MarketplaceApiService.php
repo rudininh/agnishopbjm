@@ -9,6 +9,94 @@ class MarketplaceApiService
 {
     private array $shopeeModelStockCache = [];
 
+    public function fetchShopeeOfficialShippingDocument(string $orderSn, string $documentType = '', string $documentSize = 'A6'): array
+    {
+        $token = $this->activeShopeeToken();
+        if (! $token) {
+            return ['status' => 'error', 'message' => 'Token Shopee aktif belum tersedia.'];
+        }
+
+        $detail = $this->fetchShopeeOrderDetail($orderSn);
+        if (($detail['status'] ?? '') !== 'success') {
+            return $detail;
+        }
+
+        $order = is_array($detail['order'] ?? null) ? $detail['order'] : [];
+        $package = data_get($order, 'package_list.0', []);
+        $packageNumber = (string) (data_get($package, 'package_number') ?: '');
+        $trackingNumber = (string) (data_get($package, 'tracking_number') ?: '');
+
+        $parameter = $this->shopeeSignedPost('/api/v2/logistics/get_shipping_document_parameter', (int) $token->shop_id, (string) $token->access_token, [
+            'order_list' => [[
+                'order_sn' => $orderSn,
+                ...array_filter(['package_number' => $packageNumber], fn ($value) => $value !== ''),
+            ]],
+        ]);
+
+        $parameterRow = $this->firstShopeeShippingDocumentParameter($parameter);
+        $resolvedDocumentType = $documentType !== ''
+            ? $documentType
+            : (string) ($parameterRow['suggest_shipping_document_type'] ?? data_get($parameterRow, 'selectable_shipping_document_type.0', 'THERMAL_AIR_WAYBILL'));
+        $packageNumber = $packageNumber ?: (string) ($parameterRow['package_number'] ?? '');
+        $trackingNumber = $trackingNumber ?: (string) ($parameterRow['tracking_number'] ?? '');
+
+        $orderPayload = array_filter([
+            'order_sn' => $orderSn,
+            'package_number' => $packageNumber,
+            'tracking_number' => $trackingNumber,
+            'shipping_document_type' => $resolvedDocumentType,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $create = $this->shopeeSignedPost('/api/v2/logistics/create_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
+            'order_list' => [$orderPayload],
+        ]);
+
+        if (($create['error'] ?? '') !== '') {
+            return ['status' => 'error', 'message' => $this->shopeeBatchFailMessage($create) ?: ($create['message'] ?? $create['error']), 'response' => $create, 'parameter' => $parameter];
+        }
+
+        $result = [];
+        $ready = false;
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            if ($attempt > 0) {
+                usleep(800000);
+            }
+
+            $result = $this->shopeeSignedPost('/api/v2/logistics/get_shipping_document_result', (int) $token->shop_id, (string) $token->access_token, [
+                'order_list' => [$orderPayload],
+            ]);
+
+            if (($result['error'] ?? '') !== '') {
+                return ['status' => 'error', 'message' => $this->shopeeBatchFailMessage($result) ?: ($result['message'] ?? $result['error']), 'response' => $result, 'create_response' => $create];
+            }
+
+            $ready = $this->shopeeShippingDocumentReady($result);
+            if ($ready) {
+                break;
+            }
+        }
+
+        if (! $ready) {
+            return [
+                'status' => 'pending',
+                'message' => 'Dokumen resmi Shopee masih dibuat oleh marketplace. Coba klik lagi beberapa detik lagi.',
+                'create_response' => $create,
+                'result_response' => $result,
+                'parameter' => $parameter,
+            ];
+        }
+
+        $download = $this->shopeeSignedPostRaw('/api/v2/logistics/download_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
+            'order_list' => [$orderPayload],
+        ]);
+
+        return $this->normalizeOfficialDocumentResponse($download, 'shopee-'.$orderSn.'.pdf', [
+            'create_response' => $create,
+            'result_response' => $result,
+            'parameter' => $parameter,
+        ]);
+    }
+
     public function fetchShopeeOrderDetail(string $orderSn): array
     {
         $token = $this->activeShopeeToken();
@@ -18,7 +106,7 @@ class MarketplaceApiService
 
         $response = $this->shopeeSignedGet('/api/v2/order/get_order_detail', (int) $token->shop_id, (string) $token->access_token, [
             'order_sn_list' => $orderSn,
-            'response_optional_fields' => 'order_status,item_list,update_time',
+            'response_optional_fields' => 'order_status,item_list,recipient_address,package_list,shipping_carrier,update_time',
         ]);
 
         if (($response['error'] ?? '') !== '') {
@@ -160,6 +248,92 @@ class MarketplaceApiService
         return ['status' => 'success', 'order' => $order, 'response' => $payload];
     }
 
+    public function fetchTiktokOfficialShippingDocument(string $orderId, string $documentType = 'SHIPPING_LABEL', string $documentSize = 'A6', string $documentFormat = 'PDF'): array
+    {
+        $detail = $this->fetchTiktokOrderDetail($orderId);
+        if (($detail['status'] ?? '') !== 'success') {
+            return $detail;
+        }
+
+        $order = is_array($detail['order'] ?? null) ? $detail['order'] : [];
+        $packageId = $this->tiktokPackageId($order);
+        if ($packageId === '') {
+            return [
+                'status' => 'error',
+                'message' => 'Package ID TikTok belum tersedia pada detail order. Dokumen resmi TikTok baru bisa diambil setelah paket dibuat/dikirim via TikTok Shipping.',
+                'order' => $order,
+            ];
+        }
+
+        $context = $this->activeTiktokContext();
+        if (($context['status'] ?? '') !== 'success') {
+            return $context;
+        }
+
+        $path = '/fulfillment/202309/packages/'.$packageId.'/shipping_documents';
+        $query = [
+            'app_key' => $context['config']['app_key'],
+            'shop_cipher' => $context['shop_cipher'],
+            'timestamp' => time(),
+            'document_type' => $documentType,
+            'document_size' => $documentSize,
+            'document_format' => $documentFormat,
+        ];
+        $query['sign'] = $this->generateTiktokSign($path, $query, (string) $context['config']['app_secret']);
+
+        $response = Http::timeout(45)
+            ->withHeaders([
+                'x-tts-access-token' => $context['access_token'],
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])
+            ->get($context['config']['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+        $payload = $response->json();
+
+        if (! is_array($payload) || (int) ($payload['code'] ?? -1) !== 0) {
+            return [
+                'status' => 'error',
+                'message' => is_array($payload) ? ($payload['message'] ?? 'Dokumen resmi TikTok gagal diambil.') : 'TikTok tidak mengembalikan JSON valid.',
+                'http_status' => $response->status(),
+                'response' => $payload,
+            ];
+        }
+
+        $url = $this->firstDocumentUrl($payload);
+        if ($url !== '') {
+            return [
+                'status' => 'success',
+                'document' => [
+                    'source' => 'url',
+                    'url' => $url,
+                    'mime_type' => $documentFormat === 'PDF' ? 'application/pdf' : 'application/octet-stream',
+                    'filename' => 'tiktok-'.$orderId.'.'.strtolower($documentFormat),
+                ],
+                'response' => $payload,
+            ];
+        }
+
+        $base64 = $this->firstBase64Document($payload);
+        if ($base64 !== '') {
+            return [
+                'status' => 'success',
+                'document' => [
+                    'source' => 'base64',
+                    'content_base64' => $base64,
+                    'mime_type' => $documentFormat === 'PDF' ? 'application/pdf' : 'application/octet-stream',
+                    'filename' => 'tiktok-'.$orderId.'.'.strtolower($documentFormat),
+                ],
+                'response' => $payload,
+            ];
+        }
+
+        return [
+            'status' => 'error',
+            'message' => 'Response TikTok berhasil, tetapi URL/base64 dokumen tidak ditemukan.',
+            'response' => $payload,
+        ];
+    }
+
     public function fetchTiktokOrderList(int $timeFrom, int $timeTo, ?string $orderStatus = null): array
     {
         $context = $this->activeTiktokContext();
@@ -260,6 +434,62 @@ class MarketplaceApiService
         return [...$data, '_http_status' => $response->status()];
     }
 
+    private function shopeeSignedPost(string $path, int $shopId, string $accessToken, array $body = []): array
+    {
+        $config = config('shopee');
+        $timestamp = time();
+        $query = [
+            'partner_id' => (int) $config['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+            'sign' => $this->generateShopeeApiSign((int) $config['partner_id'], (string) $config['partner_key'], $path, $timestamp, $accessToken, $shopId),
+        ];
+
+        $response = Http::timeout(60)
+            ->acceptJson()
+            ->post($config['host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), $body);
+        $data = $response->json();
+
+        if (is_array($data)) {
+            return [...$data, '_http_status' => $response->status()];
+        }
+
+        return [
+            'error' => 'invalid_json',
+            'message' => 'Shopee tidak mengembalikan JSON valid.',
+            '_http_status' => $response->status(),
+            '_path' => $path,
+            '_body' => $response->body(),
+        ];
+    }
+
+    private function shopeeSignedPostRaw(string $path, int $shopId, string $accessToken, array $body = []): array
+    {
+        $config = config('shopee');
+        $timestamp = time();
+        $query = [
+            'partner_id' => (int) $config['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+            'sign' => $this->generateShopeeApiSign((int) $config['partner_id'], (string) $config['partner_key'], $path, $timestamp, $accessToken, $shopId),
+        ];
+
+        $response = Http::timeout(60)
+            ->accept('*/*')
+            ->withHeaders(['Content-Type' => 'application/json'])
+            ->withBody(json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'application/json')
+            ->post($config['host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+
+        return [
+            'http_status' => $response->status(),
+            'headers' => $response->headers(),
+            'body' => $response->body(),
+            'json' => $response->json(),
+        ];
+    }
+
     private function activeTiktokContext(): array
     {
         $token = DB::table('tiktok_tokens')
@@ -302,6 +532,151 @@ class MarketplaceApiService
         $base .= $secret;
 
         return hash_hmac('sha256', $base, $secret);
+    }
+
+    private function firstShopeeShippingDocumentParameter(array $response): ?array
+    {
+        $candidates = [
+            data_get($response, 'response.result_list.0'),
+            data_get($response, 'response.result.0'),
+            data_get($response, 'response.0'),
+            data_get($response, 'result_list.0'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_array($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function shopeeShippingDocumentReady(array $response): bool
+    {
+        $rows = data_get($response, 'response.result_list', data_get($response, 'response.result', []));
+        if (! is_array($rows)) {
+            return false;
+        }
+
+        foreach ($rows as $row) {
+            $status = strtoupper((string) ($row['status'] ?? $row['document_status'] ?? $row['shipping_document_status'] ?? ''));
+            if (in_array($status, ['READY', 'SUCCESS', 'DONE', 'COMPLETED'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function shopeeBatchFailMessage(array $response): string
+    {
+        $rows = data_get($response, 'response.result_list', []);
+        if (! is_array($rows)) {
+            return '';
+        }
+
+        foreach ($rows as $row) {
+            $message = trim((string) ($row['fail_message'] ?? ''));
+            $error = trim((string) ($row['fail_error'] ?? ''));
+            if ($message !== '') {
+                return $error !== '' ? $error.': '.$message : $message;
+            }
+        }
+
+        return '';
+    }
+
+    private function normalizeOfficialDocumentResponse(array $download, string $filename, array $meta = []): array
+    {
+        $json = $download['json'] ?? null;
+        if (is_array($json) && (($json['error'] ?? '') !== '')) {
+            return ['status' => 'error', 'message' => $json['message'] ?? $json['error'], 'response' => $json, ...$meta];
+        }
+
+        if (is_array($json)) {
+            $url = $this->firstDocumentUrl($json);
+            if ($url !== '') {
+                return ['status' => 'success', 'document' => ['source' => 'url', 'url' => $url, 'mime_type' => 'application/pdf', 'filename' => $filename], 'response' => $json, ...$meta];
+            }
+
+            $base64 = $this->firstBase64Document($json);
+            if ($base64 !== '') {
+                return ['status' => 'success', 'document' => ['source' => 'base64', 'content_base64' => $base64, 'mime_type' => 'application/pdf', 'filename' => $filename], 'response' => $json, ...$meta];
+            }
+        }
+
+        $body = (string) ($download['body'] ?? '');
+        if ($body !== '') {
+            return [
+                'status' => 'success',
+                'document' => [
+                    'source' => 'base64',
+                    'content_base64' => base64_encode($body),
+                    'mime_type' => $this->responseMimeType($download['headers'] ?? []),
+                    'filename' => $filename,
+                ],
+                ...$meta,
+            ];
+        }
+
+        return ['status' => 'error', 'message' => 'Dokumen resmi berhasil diproses, tetapi file dokumen kosong.', ...$meta];
+    }
+
+    private function responseMimeType(array $headers): string
+    {
+        $contentType = $headers['Content-Type'][0] ?? $headers['content-type'][0] ?? '';
+        return trim(explode(';', (string) $contentType)[0]) ?: 'application/pdf';
+    }
+
+    private function firstDocumentUrl(array $payload): string
+    {
+        foreach (['document_url', 'shipping_document_url', 'url', 'file_url', 'download_url'] as $key) {
+            $value = data_get($payload, 'data.'.$key, data_get($payload, 'response.'.$key, data_get($payload, $key)));
+            if (is_string($value) && str_starts_with($value, 'http')) {
+                return $value;
+            }
+        }
+
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveArrayIterator($payload));
+        foreach ($iterator as $value) {
+            if (is_string($value) && str_starts_with($value, 'http') && preg_match('/(pdf|document|label|shipping)/i', $value)) {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function firstBase64Document(array $payload): string
+    {
+        foreach (['document', 'file', 'content', 'pdf', 'shipping_document'] as $key) {
+            $value = data_get($payload, 'data.'.$key, data_get($payload, 'response.'.$key, data_get($payload, $key)));
+            if (is_string($value) && strlen($value) > 100) {
+                return preg_replace('/^data:[^;]+;base64,/', '', $value);
+            }
+        }
+
+        return '';
+    }
+
+    private function tiktokPackageId(array $order): string
+    {
+        foreach ([
+            'packages.0.id',
+            'packages.0.package_id',
+            'package_list.0.id',
+            'package_list.0.package_id',
+            'package_id',
+            'fulfillment_packages.0.id',
+        ] as $path) {
+            $value = trim((string) data_get($order, $path, ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     private function shopeeModelStock(array $model): int

@@ -101,9 +101,10 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { omnichannelService } from '@/services'
 
+const AUTO_REFRESH_MS = 15000
 const loading = ref(false)
 const notice = ref({ type: '', message: '' })
 const syncingKey = ref('')
@@ -111,6 +112,7 @@ const rows = ref([])
 const summary = ref({})
 const pagination = ref({ page: 1, last_page: 1, total: 0 })
 const filters = reactive({ type: '', search: '' })
+let autoRefreshTimer = null
 
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'
 const stockLabel = (value) => value === null || value === undefined ? '-' : value
@@ -128,6 +130,7 @@ const setNotice = (type, message) => {
 }
 
 const loadAnomalies = async (page = pagination.value.page || 1) => {
+  if (loading.value) return
   loading.value = true
   setNotice('', '')
   try {
@@ -140,6 +143,11 @@ const loadAnomalies = async (page = pagination.value.page || 1) => {
   } finally {
     loading.value = false
   }
+}
+
+const refreshCurrentPage = () => {
+  if (document.hidden || syncingKey.value) return
+  loadAnomalies(pagination.value.page || 1)
 }
 
 const syncRow = async (row, sourceMarketplace) => {
@@ -159,7 +167,16 @@ const syncRow = async (row, sourceMarketplace) => {
   }
 }
 
-onMounted(() => loadAnomalies(1))
+onMounted(() => {
+  loadAnomalies(1)
+  autoRefreshTimer = setInterval(refreshCurrentPage, AUTO_REFRESH_MS)
+  document.addEventListener('visibilitychange', refreshCurrentPage)
+})
+
+onBeforeUnmount(() => {
+  clearInterval(autoRefreshTimer)
+  document.removeEventListener('visibilitychange', refreshCurrentPage)
+})
 </script>
 
 <style scoped>

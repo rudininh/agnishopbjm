@@ -80,7 +80,7 @@ class MarketplaceOrderSyncService
     {
         $timeTo = time();
         $timeFrom = $timeTo - (max(1, $hours) * 3600);
-        $statuses = ['PROCESSED', 'READY_TO_SHIP'];
+        $statuses = ['PROCESSED', 'READY_TO_SHIP', 'CANCELLED'];
         $seen = [];
         $processed = 0;
         $success = 0;
@@ -103,16 +103,17 @@ class MarketplaceOrderSyncService
                     continue;
                 }
                 $seen[$orderSn] = true;
-                if ($this->alreadyProcessed('shopee_order', $orderSn, 'POLL_READY_ORDER', $orderSn)) {
+                $stockEvent = $status === 'CANCELLED' ? 'POLL_CANCEL_ORDER' : 'POLL_READY_ORDER';
+                if ($this->alreadyProcessed('shopee_order', $orderSn, $stockEvent, $orderSn)) {
                     $alreadyProcessed++;
                     continue;
                 }
 
-                $result = $this->processShopeeOrder($orderSn, 'POLL_READY_ORDER', ['order_status' => $status]);
+                $result = $this->processShopeeOrder($orderSn, $stockEvent, ['order_status' => $status]);
                 $processed++;
                 if (($result['status'] ?? '') === 'success') {
                     $success++;
-                    $this->syncService->logSync('shopee_order', 'tiktok', $orderSn, null, null, 'success', sprintf('Shopee order %s POLL_READY_ORDER selesai.', $orderSn));
+                    $this->syncService->logSync('shopee_order', 'tiktok', $orderSn, null, null, 'success', sprintf('Shopee order %s %s selesai.', $orderSn, $stockEvent));
                 } else {
                     $failed++;
                     $messages[] = $orderSn.': '.($result['message'] ?? 'gagal');

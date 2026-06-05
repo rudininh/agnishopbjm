@@ -207,6 +207,18 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync/order-sync', { params })
   },
 
+  shippingLabelOrders(params = {}) {
+    return api.get('/marketplace/shipping-labels/orders', { params })
+  },
+
+  shippingLabelOrderDetail(params = {}) {
+    return api.get('/marketplace/shipping-labels/order-detail', { params })
+  },
+
+  shippingLabelOfficialDocument(payload = {}) {
+    return api.post('/marketplace/shipping-labels/official-document', payload)
+  },
+
   autoSyncStockAnomalies(params = {}) {
     return api.get('/marketplace/auto-sync/stock-anomalies', { params })
   },
