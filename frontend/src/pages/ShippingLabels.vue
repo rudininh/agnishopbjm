@@ -16,7 +16,7 @@
       <article><span>Total Order</span><strong>{{ summary.total || 0 }}</strong></article>
       <article><span>Shopee</span><strong>{{ summary.shopee || 0 }}</strong></article>
       <article><span>TikTok</span><strong>{{ summary.tiktok || 0 }}</strong></article>
-      <article><span>Siap dari Log</span><strong>{{ summary.success || 0 }}</strong></article>
+      <article><span>Belum Shipped</span><strong>{{ summary.total || 0 }}</strong></article>
     </section>
 
     <div class="workspace">
@@ -54,10 +54,12 @@
             <div class="order-main">
               <span :class="['market-badge', order.marketplace]">{{ marketplaceLabel(order.marketplace) }}</span>
               <strong>{{ order.order_ref }}</strong>
-              <small>{{ formatDate(order.created_at) }} | {{ order.message || '-' }}</small>
+              <small>{{ formatDate(order.created_at) }} | {{ order.order_status || '-' }} | {{ order.shipping_carrier || '-' }} {{ order.tracking_number || '' }}</small>
+              <small>{{ order.message || '-' }}</small>
             </div>
             <div class="order-actions">
               <span :class="['status-badge', order.status]">{{ order.status }}</span>
+              <span class="order-status">{{ order.order_status || '-' }}</span>
               <button class="mini" type="button" @click="previewOrder(order)" :disabled="previewingKey === orderKey(order)">
                 {{ previewingKey === orderKey(order) ? 'Preview...' : 'Preview' }}
               </button>
@@ -124,7 +126,7 @@
         <button class="ghost full" type="button" @click="printOfficialSelected" :disabled="!selectedCount || officialPrinting">
           {{ officialPrinting ? 'Mengambil dokumen...' : 'Cetak Dokumen Resmi' }}
         </button>
-        <p class="hint">Dokumen resmi mengikuti aturan marketplace. Shopee akan membuat task dokumen dulu, TikTok hanya menyediakan label resmi untuk paket TikTok Shipping yang sudah diatur pengirimannya.</p>
+        <p class="hint">Tabel hanya menampilkan order yang belum shipped. Dokumen resmi mengikuti aturan marketplace.</p>
       </aside>
     </div>
   </section>
@@ -333,11 +335,12 @@ const printOfficialSelected = async () => {
       })
       results.push({ order, data })
     } catch (error) {
+      const message = error?.response?.data?.message || error?.message || 'Dokumen resmi gagal diambil.'
       results.push({
         order,
         data: {
           status: 'error',
-          message: error?.response?.data?.message || error?.message || 'Dokumen resmi gagal diambil.'
+          message
         }
       })
     }
@@ -411,6 +414,7 @@ select,input { width:100%; border:1px solid #cbd5e1; border-radius:6px; padding:
 .status-badge.success { background:#dcfce7; color:#166534; }
 .status-badge.error { background:#fee2e2; color:#991b1b; }
 .status-badge.skipped { background:#e2e8f0; color:#475569; }
+.order-status { display:inline-flex; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:800; background:#eef2ff; color:#3730a3; }
 .mini { background:#0f5fc7; color:#fff; padding:7px 9px; font-size:12px; }
 .pagination { display:flex; justify-content:flex-end; align-items:center; gap:10px; margin-top:12px; color:#475569; font-size:13px; }
 .print-panel h2 { font-size:18px; margin-bottom:8px; }

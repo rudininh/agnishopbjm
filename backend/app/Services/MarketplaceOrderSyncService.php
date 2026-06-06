@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Http\Controllers\OmnichannelController;
 use Illuminate\Support\Facades\DB;
 
 class MarketplaceOrderSyncService
@@ -32,6 +33,10 @@ class MarketplaceOrderSyncService
         $success = 0;
         $failed = 0;
         $skipped = 0;
+        $productRefreshRefs = [
+            'shopee_item_ids' => [],
+            'tiktok_product_ids' => [],
+        ];
 
         foreach (is_array($items) ? $items : [] as $item) {
             $itemId = (string) ($item['item_id'] ?? '');
@@ -52,6 +57,8 @@ class MarketplaceOrderSyncService
             $results[] = $result;
             if (($result['status'] ?? '') === 'success') {
                 $success++;
+                $productRefreshRefs['shopee_item_ids'][] = $itemId;
+                $productRefreshRefs['tiktok_product_ids'][] = (string) ($mapping->tiktok_product_id ?? $mapping->mapped_tiktok_product_id ?? '');
             } elseif (($result['status'] ?? '') === 'skipped') {
                 $skipped++;
             } else {
@@ -64,6 +71,8 @@ class MarketplaceOrderSyncService
             $skipped++;
         }
 
+        $productRefresh = $this->refreshProductCachesAfterOrder($orderSn, $productRefreshRefs);
+
         return [
             'status' => $failed > 0 ? 'warning' : 'success',
             'message' => sprintf('Order Shopee %s diproses. Success=%s skipped=%s failed=%s.', $orderSn, $success, $skipped, $failed),
@@ -73,6 +82,7 @@ class MarketplaceOrderSyncService
             'skipped' => $skipped,
             'failed' => $failed,
             'items' => $results,
+            'product_refresh' => $productRefresh,
         ];
     }
 
@@ -261,6 +271,10 @@ class MarketplaceOrderSyncService
         $failed = 0;
         $skipped = 0;
         $results = [];
+        $productRefreshRefs = [
+            'shopee_item_ids' => [],
+            'tiktok_product_ids' => [],
+        ];
 
         foreach (is_array($lineItems) ? $lineItems : [] as $item) {
             $sellerSku = $this->normalizeOrderSku($item['seller_sku'] ?? data_get($item, 'sku.seller_sku', ''));
@@ -296,8 +310,16 @@ class MarketplaceOrderSyncService
             }
             $this->syncService->logSync('tiktok_order', 'shopee', $canonicalSku, $oldStock, $newStock, $status, sprintf('TikTok order %s %s: stok %s -> %s. %s', $orderId, $stockEvent, $oldStock, $newStock, $pushResult['message'] ?? '-'));
             $results[] = ['status' => $status, 'sku' => $canonicalSku];
-            $status === 'success' ? $success++ : $failed++;
+            if ($status === 'success') {
+                $success++;
+                $productRefreshRefs['tiktok_product_ids'][] = $productId ?: (string) ($mapping->tiktok_product_id ?? $mapping->mapped_tiktok_product_id ?? '');
+                $productRefreshRefs['shopee_item_ids'][] = (string) ($mapping->shopee_product_id ?? $mapping->mapped_shopee_item_id ?? '');
+            } else {
+                $failed++;
+            }
         }
+
+        $productRefresh = $this->refreshProductCachesAfterOrder($orderId, $productRefreshRefs);
 
         return [
             'status' => $failed > 0 ? 'warning' : 'success',
@@ -307,7 +329,157 @@ class MarketplaceOrderSyncService
             'skipped' => $skipped,
             'failed' => $failed,
             'items' => $results,
+            'product_refresh' => $productRefresh,
         ];
+    }
+
+    private function refreshProductCachesAfterOrder(string $orderRef, array $refs): array
+    {
+        $hasShopeeRefs = collect($refs['shopee_item_ids'] ?? [])->contains(fn ($value): bool => (int) $value > 0);
+        $hasTiktokRefs = collect($refs['tiktok_product_ids'] ?? [])->contains(fn ($value): bool => trim((string) $value) !== '');
+        if (! $hasShopeeRefs && ! $hasTiktokRefs) {
+            return ['status' => 'skipped', 'message' => 'Tidak ada product id marketplace yang perlu di-refresh.'];
+        }
+
+        $tiktokDelaySeconds = (int) env('AUTO_SYNC_TIKTOK_PRODUCT_REFRESH_DELAY_SECONDS', 60);
+        $result = [
+            'status' => 'success',
+            'message' => 'Refresh cache produk order dijadwalkan.',
+            'shopee' => null,
+            'tiktok' => null,
+        ];
+
+        if ($hasShopeeRefs) {
+            try {
+                $shopeeResult = app(OmnichannelController::class)->syncMarketplaceProductCachesForOrder([
+                    'shopee_item_ids' => $refs['shopee_item_ids'] ?? [],
+                    'tiktok_product_ids' => [],
+                ]);
+                $status = ($shopeeResult['status'] ?? '') === 'success' ? 'success' : 'error';
+                $this->syncService->logSync(
+                    'order_product_refresh',
+                    'shopee_products',
+                    $orderRef,
+                    null,
+                    null,
+                    $status,
+                    $shopeeResult['message'] ?? 'Refresh cache produk Shopee selesai.'
+                );
+                $result['shopee'] = $shopeeResult;
+                if ($status === 'error') {
+                    $result['status'] = 'warning';
+                }
+            } catch (\Throwable $exception) {
+                report($exception);
+                $this->syncService->logSync('order_product_refresh', 'shopee_products', $orderRef, null, null, 'error', 'Refresh cache produk Shopee gagal: '.$exception->getMessage());
+                $result['status'] = 'warning';
+                $result['shopee'] = ['status' => 'error', 'message' => $exception->getMessage()];
+            }
+        }
+
+        if ($hasTiktokRefs) {
+            $dueAt = now()->addSeconds(max(0, min(300, $tiktokDelaySeconds)));
+            $payload = [
+                'order_ref' => $orderRef,
+                'due_at' => $dueAt->toDateTimeString(),
+                'refs' => [
+                    'shopee_item_ids' => [],
+                    'tiktok_product_ids' => array_values(array_unique(array_filter(array_map(
+                        fn ($value): string => trim((string) $value),
+                        $refs['tiktok_product_ids'] ?? []
+                    )))),
+                ],
+            ];
+            $this->syncService->logSync(
+                'order_product_refresh',
+                'tiktok_products',
+                $orderRef,
+                null,
+                null,
+                'pending',
+                json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            );
+            $result['tiktok'] = [
+                'status' => 'pending',
+                'message' => 'Refresh cache produk TikTok dijadwalkan pada '.$dueAt->toDateTimeString().'.',
+                'delay_seconds' => $tiktokDelaySeconds,
+            ];
+        }
+
+        return $result;
+    }
+
+    public function processPendingProductCacheRefreshes(int $limit = 20): array
+    {
+        $limit = max(1, min(100, $limit));
+        $delaySeconds = max(0, min(300, (int) env('AUTO_SYNC_TIKTOK_PRODUCT_REFRESH_DELAY_SECONDS', 60)));
+        $rows = DB::table('marketplace_sync_logs')
+            ->where('source_marketplace', 'order_product_refresh')
+            ->where('target_marketplace', 'tiktok_products')
+            ->where('status', 'pending')
+            ->where('created_at', '<=', now()->subSeconds($delaySeconds))
+            ->orderBy('created_at')
+            ->limit($limit)
+            ->get();
+
+        $processed = 0;
+        $success = 0;
+        $failed = 0;
+        $items = [];
+
+        foreach ($rows as $row) {
+            $payload = $this->pendingProductRefreshPayload((string) ($row->message ?? ''));
+            $refs = $payload['refs'] ?? ['tiktok_product_ids' => []];
+
+            try {
+                $refresh = app(OmnichannelController::class)->syncMarketplaceProductCachesForOrder([
+                    'shopee_item_ids' => [],
+                    'tiktok_product_ids' => $refs['tiktok_product_ids'] ?? [],
+                ]);
+                $status = ($refresh['status'] ?? '') === 'success' ? 'success' : 'error';
+                $message = ($refresh['message'] ?? 'Refresh cache produk TikTok selesai.').' Order='.($payload['order_ref'] ?? $row->sku ?? '-');
+            } catch (\Throwable $exception) {
+                report($exception);
+                $status = 'error';
+                $message = 'Refresh cache produk TikTok gagal: '.$exception->getMessage();
+                $refresh = ['status' => 'error', 'message' => $exception->getMessage()];
+            }
+
+            DB::table('marketplace_sync_logs')->where('id', (int) $row->id)->update([
+                'status' => $status,
+                'message' => $message,
+                'updated_at' => now(),
+            ]);
+
+            $processed++;
+            $status === 'success' ? $success++ : $failed++;
+            $items[] = [
+                'id' => (int) $row->id,
+                'order_ref' => $payload['order_ref'] ?? $row->sku,
+                'status' => $status,
+                'message' => $message,
+                'refresh' => $refresh,
+            ];
+        }
+
+        return [
+            'status' => $failed > 0 ? 'warning' : 'success',
+            'message' => sprintf('Pending refresh produk order selesai. Diproses=%s berhasil=%s gagal=%s.', $processed, $success, $failed),
+            'processed' => $processed,
+            'success' => $success,
+            'failed' => $failed,
+            'items' => $items,
+        ];
+    }
+
+    private function pendingProductRefreshPayload(string $message): array
+    {
+        $payload = json_decode($message, true);
+        if (! is_array($payload)) {
+            return ['refs' => ['tiktok_product_ids' => []]];
+        }
+
+        return $payload;
     }
 
     private function stockAfterOrderEvent(string $eventType, int $oldStock, int $qty): int

@@ -4363,6 +4363,54 @@ class OmnichannelController extends Controller
         ];
     }
 
+    public function syncMarketplaceProductCachesForOrder(array $refs, int $tiktokDelaySeconds = 0): array
+    {
+        $this->autoRefreshMarketplaceTokens();
+
+        $shopeeItemIds = collect($refs['shopee_item_ids'] ?? [])
+            ->map(fn ($value): int => (int) $value)
+            ->filter(fn (int $value): bool => $value > 0)
+            ->unique()
+            ->values();
+        $tiktokProductIds = collect($refs['tiktok_product_ids'] ?? [])
+            ->map(fn ($value): string => trim((string) $value))
+            ->filter(fn (string $value): bool => $value !== '')
+            ->unique()
+            ->values();
+
+        $results = [
+            'shopee' => [],
+            'tiktok' => [],
+        ];
+
+        foreach ($shopeeItemIds as $itemId) {
+            $results['shopee'][] = $this->syncShopeeProductToDatabase((int) $itemId);
+        }
+
+        if ($tiktokProductIds->isNotEmpty() && $tiktokDelaySeconds > 0) {
+            sleep(min(300, max(0, $tiktokDelaySeconds)));
+        }
+
+        foreach ($tiktokProductIds as $productId) {
+            $results['tiktok'][] = $this->syncTiktokProductToDatabase((string) $productId);
+        }
+
+        $flatResults = collect($results['shopee'])->merge($results['tiktok']);
+        $hasError = $flatResults->contains(fn ($result): bool => ($result['status'] ?? '') === 'error');
+
+        return [
+            'status' => $hasError ? 'warning' : 'success',
+            'message' => sprintf(
+                'Refresh cache produk order selesai. Shopee=%s TikTok=%s.',
+                $shopeeItemIds->count(),
+                $tiktokProductIds->count()
+            ),
+            'shopee_item_ids' => $shopeeItemIds->all(),
+            'tiktok_product_ids' => $tiktokProductIds->all(),
+            'results' => $results,
+        ];
+    }
+
     private function autoHideInactiveStockMasterMappings(): int
     {
         if (! Schema::hasTable('stock_master')) {

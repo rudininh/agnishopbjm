@@ -92,3 +92,23 @@ Artisan::command('sync:tiktok-orders {--hours=24}', function (): int {
 Schedule::command('sync:tiktok-orders --hours=24')
     ->everyFiveMinutes()
     ->withoutOverlapping();
+
+Artisan::command('sync:order-product-refresh {--limit=20}', function (): int {
+    $result = app(MarketplaceOrderSyncService::class)->processPendingProductCacheRefreshes((int) $this->option('limit'));
+
+    $this->info($result['message'] ?? 'Pending refresh produk order selesai.');
+    foreach ($result['items'] ?? [] as $item) {
+        $this->line(sprintf(
+            '%s | %s | %s',
+            $item['order_ref'] ?? '-',
+            $item['status'] ?? '-',
+            $item['message'] ?? '-'
+        ));
+    }
+
+    return ($result['status'] ?? 'success') === 'success' ? 0 : 1;
+});
+
+Schedule::command('sync:order-product-refresh --limit=50')
+    ->everyMinute()
+    ->withoutOverlapping();

@@ -123,8 +123,10 @@ class MarketplaceAutoSyncController extends Controller
             })
             ->filter()
             ->unique(fn (array $row): string => $row['marketplace'].':'.$row['order_ref'])
+            ->map(fn (array $row): ?array => $this->printableShippingLabelOrder($row))
+            ->filter()
             ->when($search !== '', function ($rows) use ($search) {
-                return $rows->filter(fn (array $row): bool => str_contains(mb_strtolower($row['order_ref'].' '.$row['message']), $search));
+                return $rows->filter(fn (array $row): bool => str_contains(mb_strtolower($row['order_ref'].' '.$row['message'].' '.$row['order_status']), $search));
             })
             ->values();
 
@@ -146,6 +148,50 @@ class MarketplaceAutoSyncController extends Controller
                 'last_page' => max(1, (int) ceil($total / $perPage)),
             ],
         ]);
+    }
+
+    private function printableShippingLabelOrder(array $row): ?array
+    {
+        $detail = $row['marketplace'] === 'shopee'
+            ? $this->marketplaceApiService->fetchShopeeOrderDetail((string) $row['order_ref'])
+            : $this->marketplaceApiService->fetchTiktokOrderDetail((string) $row['order_ref']);
+
+        if (($detail['status'] ?? '') !== 'success') {
+            return null;
+        }
+
+        $order = is_array($detail['order'] ?? null) ? $detail['order'] : [];
+        $orderStatus = $row['marketplace'] === 'shopee'
+            ? strtoupper((string) ($order['order_status'] ?? ''))
+            : strtoupper((string) ($order['status'] ?? $order['order_status'] ?? data_get($order, 'line_items.0.display_status', '')));
+
+        if (! $this->isUnshippedOrderStatus($row['marketplace'], $orderStatus)) {
+            return null;
+        }
+
+        return [
+            ...$row,
+            'order_status' => $orderStatus,
+            'shipping_carrier' => $row['marketplace'] === 'shopee'
+                ? (string) ($order['shipping_carrier'] ?? data_get($order, 'package_list.0.shipping_carrier', ''))
+                : (string) ($order['delivery_option_name'] ?? data_get($order, 'delivery_option.name', '')),
+            'tracking_number' => $row['marketplace'] === 'shopee'
+                ? (string) (data_get($order, 'package_list.0.tracking_number') ?: data_get($order, 'package_list.0.package_number') ?: '')
+                : (string) ($order['tracking_number'] ?? data_get($order, 'packages.0.tracking_number', '')),
+        ];
+    }
+
+    private function isUnshippedOrderStatus(string $marketplace, string $status): bool
+    {
+        if ($status === '') {
+            return false;
+        }
+
+        $shippedStatuses = $marketplace === 'shopee'
+            ? ['SHIPPED', 'TO_CONFIRM_RECEIVE', 'COMPLETED', 'CANCELLED', 'IN_CANCEL']
+            : ['IN_TRANSIT', 'DELIVERED', 'COMPLETED', 'CANCELLED', 'CANCELED', 'RETURNED', 'REFUNDED', 'RETURN_COMPLETED'];
+
+        return ! in_array($status, $shippedStatuses, true);
     }
 
     public function shippingLabelOrderDetail(Request $request): JsonResponse

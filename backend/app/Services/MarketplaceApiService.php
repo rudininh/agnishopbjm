@@ -43,20 +43,67 @@ class MarketplaceApiService
         $orderPayload = array_filter([
             'order_sn' => $orderSn,
             'package_number' => $packageNumber,
-            'tracking_number' => $trackingNumber,
             'shipping_document_type' => $resolvedDocumentType,
         ], fn ($value) => $value !== null && $value !== '');
 
+        $documentResult = $this->fetchShopeeOfficialShippingDocumentWithPayload(
+            $token,
+            $orderSn,
+            $orderPayload,
+            $parameter
+        );
+
+        if (($documentResult['status'] ?? '') === 'error' && $this->isShopeeTrackingNumberInvalidError($documentResult)) {
+            $minimalPayload = array_filter([
+                'order_sn' => $orderSn,
+                'shipping_document_type' => $resolvedDocumentType,
+            ], fn ($value) => $value !== null && $value !== '');
+
+            $retryResult = $this->fetchShopeeOfficialShippingDocumentWithPayload(
+                $token,
+                $orderSn,
+                $minimalPayload,
+                $parameter,
+                ['retried_without_package_number' => true, 'first_attempt' => $documentResult]
+            );
+
+            if (($retryResult['status'] ?? '') !== 'error' || ! $this->isShopeeTrackingNumberInvalidError($retryResult)) {
+                return $retryResult;
+            }
+
+            $downloadResult = $this->downloadExistingShopeeOfficialShippingDocument(
+                $token,
+                $orderSn,
+                $minimalPayload,
+                [
+                    'parameter' => $parameter,
+                    'retried_without_create' => true,
+                    'retried_without_package_number' => true,
+                    'first_attempt' => $documentResult,
+                    'second_attempt' => $retryResult,
+                ]
+            );
+
+            return ($downloadResult['status'] ?? '') === 'success' ? $downloadResult : $retryResult;
+        }
+
+        return $documentResult;
+    }
+
+    private function fetchShopeeOfficialShippingDocumentWithPayload(object $token, string $orderSn, array $orderPayload, array $parameter, array $meta = []): array
+    {
         $create = $this->shopeeSignedPost('/api/v2/logistics/create_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
             'order_list' => [$orderPayload],
         ]);
 
-        if (($create['error'] ?? '') !== '') {
-            return ['status' => 'error', 'message' => $this->shopeeBatchFailMessage($create) ?: ($create['message'] ?? $create['error']), 'response' => $create, 'parameter' => $parameter];
+        $createError = ($create['error'] ?? '') !== '';
+        $canTryExistingDocument = $createError && $this->isShopeeAlreadyShippedPrintError($create);
+        if ($createError && ! $canTryExistingDocument) {
+            return ['status' => 'error', 'message' => $this->shopeeBatchFailMessage($create) ?: ($create['message'] ?? $create['error']), 'response' => $create, 'parameter' => $parameter, ...$meta];
         }
 
         $result = [];
-        $ready = false;
+        $ready = $canTryExistingDocument;
         for ($attempt = 0; $attempt < 5; $attempt++) {
             if ($attempt > 0) {
                 usleep(800000);
@@ -67,7 +114,11 @@ class MarketplaceApiService
             ]);
 
             if (($result['error'] ?? '') !== '') {
-                return ['status' => 'error', 'message' => $this->shopeeBatchFailMessage($result) ?: ($result['message'] ?? $result['error']), 'response' => $result, 'create_response' => $create];
+                if ($canTryExistingDocument) {
+                    break;
+                }
+
+                return ['status' => 'error', 'message' => $this->shopeeBatchFailMessage($result) ?: ($result['message'] ?? $result['error']), 'response' => $result, 'create_response' => $create, ...$meta];
             }
 
             $ready = $this->shopeeShippingDocumentReady($result);
@@ -76,25 +127,42 @@ class MarketplaceApiService
             }
         }
 
-        if (! $ready) {
+        if (! $ready && ! $canTryExistingDocument) {
             return [
                 'status' => 'pending',
                 'message' => 'Dokumen resmi Shopee masih dibuat oleh marketplace. Coba klik lagi beberapa detik lagi.',
                 'create_response' => $create,
                 'result_response' => $result,
                 'parameter' => $parameter,
+                ...$meta,
             ];
         }
 
         $download = $this->shopeeSignedPostRaw('/api/v2/logistics/download_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
             'order_list' => [$orderPayload],
         ]);
-
-        return $this->normalizeOfficialDocumentResponse($download, 'shopee-'.$orderSn.'.pdf', [
+        $downloadResult = $this->normalizeOfficialDocumentResponse($download, 'shopee-'.$orderSn.'.pdf', [
             'create_response' => $create,
             'result_response' => $result,
             'parameter' => $parameter,
+            'used_existing_document_fallback' => $canTryExistingDocument,
+            ...$meta,
         ]);
+
+        if (($downloadResult['status'] ?? '') === 'error' && $canTryExistingDocument) {
+            $downloadResult['message'] = 'Paket Shopee sudah berstatus dikirim, jadi Shopee menolak membuat dokumen baru. Dokumen lama juga belum bisa diunduh dari API. Coba cetak dari Seller Centre Shopee untuk order ini.';
+        }
+
+        return $downloadResult;
+    }
+
+    private function downloadExistingShopeeOfficialShippingDocument(object $token, string $orderSn, array $orderPayload, array $meta = []): array
+    {
+        $download = $this->shopeeSignedPostRaw('/api/v2/logistics/download_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
+            'order_list' => [$orderPayload],
+        ]);
+
+        return $this->normalizeOfficialDocumentResponse($download, 'shopee-'.$orderSn.'.pdf', $meta);
     }
 
     public function fetchShopeeOrderDetail(string $orderSn): array
@@ -585,6 +653,34 @@ class MarketplaceApiService
         }
 
         return '';
+    }
+
+    private function isShopeeAlreadyShippedPrintError(array $response): bool
+    {
+        $message = strtolower(implode(' ', array_filter([
+            (string) ($response['error'] ?? ''),
+            (string) ($response['message'] ?? ''),
+            $this->shopeeBatchFailMessage($response),
+        ])));
+
+        return str_contains($message, 'package_can_not_print')
+            || str_contains($message, 'parcel has been shipped')
+            || str_contains($message, 'package can not print');
+    }
+
+    private function isShopeeTrackingNumberInvalidError(array $response): bool
+    {
+        $message = strtolower(implode(' ', array_filter([
+            (string) ($response['error'] ?? ''),
+            (string) ($response['message'] ?? ''),
+            $this->shopeeBatchFailMessage($response),
+            is_array($response['response'] ?? null) ? $this->shopeeBatchFailMessage($response['response']) : '',
+            (string) data_get($response, 'response.error', ''),
+            (string) data_get($response, 'response.message', ''),
+        ])));
+
+        return str_contains($message, 'tracking_number_invalid')
+            || str_contains($message, 'tracking number is invalid');
     }
 
     private function normalizeOfficialDocumentResponse(array $download, string $filename, array $meta = []): array
