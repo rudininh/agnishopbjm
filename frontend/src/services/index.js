@@ -209,12 +209,32 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync/runtime-status')
   },
 
+  autoSyncRuntimeEvents(params = {}) {
+    return api.get('/marketplace/auto-sync/runtime-events', { params })
+  },
+
   autoSyncRuntimeHeartbeat(data = {}) {
     return api.post('/marketplace/auto-sync/runtime-heartbeat', data)
   },
 
+  updateAutoSyncRuntimeSettings(data = {}) {
+    return api.post('/marketplace/auto-sync/runtime-settings', data)
+  },
+
   autoSyncRuntimeOnlineBackupTick() {
     return api.post('/marketplace/auto-sync/runtime-online-backup-tick')
+  },
+
+  autoSyncBackupRunnerDryRun() {
+    return api.post('/marketplace/auto-sync/backup-runner/dry-run')
+  },
+
+  autoSyncBackupRunnerRun(data = {}) {
+    return api.post('/marketplace/auto-sync/backup-runner/run', data)
+  },
+
+  autoSyncBackupRunnerSchedulerTick(data = {}) {
+    return api.post('/marketplace/auto-sync/backup-runner/scheduler-tick', data)
   },
 
   autoSyncWebhookLogs(params = {}) {

@@ -78,8 +78,32 @@
         <strong :class="['badge', runtimeStatus.online_backup_enabled ? 'success' : 'neutral']">{{ runtimeStatus.online_backup_enabled ? 'Standby' : 'Off' }}</strong>
       </article>
       <article>
+        <span>Real mode</span>
+        <strong :class="['badge', runtimeStatus.online_backup_real_enabled ? 'error' : 'neutral']">{{ runtimeStatus.online_backup_real_enabled ? 'ON' : 'OFF' }}</strong>
+      </article>
+      <article>
         <span>Catatan</span>
         <strong>{{ runtimeStatus.last_decision_reason || '-' }}</strong>
+      </article>
+      <article class="runtime-actions">
+        <span>Pengaturan runtime</span>
+        <div>
+          <button class="ghost" type="button" @click="toggleOnlineBackup" :disabled="updatingRuntime">
+            {{ runtimeStatus.online_backup_enabled ? 'Matikan Backup' : 'Aktifkan Backup' }}
+          </button>
+          <button class="ghost" type="button" @click="checkOnlineBackupDecision" :disabled="updatingRuntime">Cek Owner</button>
+          <button class="ghost" type="button" @click="runBackupDryRun" :disabled="updatingRuntime">Dry Run Backup</button>
+          <button class="ghost" type="button" @click="runSchedulerTick" :disabled="updatingRuntime">Scheduler Tick</button>
+          <button :class="runtimeStatus.online_backup_real_enabled ? 'danger' : 'ghost'" type="button" @click="toggleRealMode" :disabled="updatingRuntime">
+            {{ runtimeStatus.online_backup_real_enabled ? 'Matikan Real' : 'Aktifkan Real' }}
+          </button>
+          <button class="danger" type="button" @click="runRealBackup" :disabled="updatingRuntime || !runtimeStatus.online_backup_real_enabled">
+            Run Real Backup
+          </button>
+          <button :class="runtimeStatus.active_owner === 'paused' ? 'primary' : 'danger'" type="button" @click="toggleRuntimePause" :disabled="updatingRuntime">
+            {{ runtimeStatus.active_owner === 'paused' ? 'Resume Local' : 'Pause Local' }}
+          </button>
+        </div>
       </article>
     </section>
 
@@ -159,6 +183,7 @@
       <button :class="{ active: activeTab === 'watchdog' }" @click="activeTab = 'watchdog'">Watchdog</button>
       <button :class="{ active: activeTab === 'report' }" @click="activeTab = 'report'">Report</button>
       <button :class="{ active: activeTab === 'queue' }" @click="activeTab = 'queue'">Queue</button>
+      <button :class="{ active: activeTab === 'runtime' }" @click="activeTab = 'runtime'">Runtime</button>
       <button :class="{ active: activeTab === 'safety' }" @click="activeTab = 'safety'">Cron Safety Check</button>
     </div>
 
@@ -297,6 +322,40 @@
         </table>
       </div>
       <Pagination :pagination="syncPagination" @change="loadSyncLogs" />
+    </section>
+
+    <section v-if="activeTab === 'runtime'" class="panel">
+      <div class="safety-summary">
+        <div><span>Owner aktif</span><strong>{{ runtimeOwnerLabel }}</strong></div>
+        <div><span>Local heartbeat</span><strong>{{ runtimeStatus.local_is_active ? 'Aktif' : 'Timeout' }}</strong></div>
+        <div><span>Timeout</span><strong>{{ runtimeStatus.heartbeat_timeout_minutes || 10 }} menit</strong></div>
+        <div><span>Online backup</span><strong>{{ runtimeStatus.online_backup_enabled ? 'Standby' : 'Off' }}</strong></div>
+        <div><span>Last dry-run</span><strong>{{ formatDate(runtimeStatus.runner_last_dry_run_at) }}</strong></div>
+        <div><span>Real mode</span><strong>{{ runtimeStatus.online_backup_real_enabled ? 'ON' : 'OFF' }}</strong></div>
+        <div><span>Last real-run</span><strong>{{ formatDate(runtimeStatus.runner_last_real_run_at) }}</strong></div>
+        <div><span>Last scheduler</span><strong>{{ formatDate(runtimeStatus.runner_last_scheduler_tick_at) }}</strong></div>
+        <div><span>Scheduler mode</span><strong>{{ runtimeStatus.runner_last_scheduler_status || '-' }}</strong></div>
+      </div>
+      <div class="table-actions">
+        <button class="ghost" type="button" @click="loadRuntimeEvents(1)">Refresh Riwayat Runtime</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Event</th><th>Owner</th><th>Local</th><th>Online Backup</th><th>Message</th></tr></thead>
+          <tbody>
+            <tr v-for="row in runtimeEvents.items" :key="row.id">
+              <td>{{ formatDate(row.created_at) }}</td>
+              <td><span class="badge neutral">{{ row.event_type }}</span></td>
+              <td>{{ row.active_owner || '-' }}</td>
+              <td>{{ row.local_is_active ? 'Aktif' : 'Timeout' }}</td>
+              <td>{{ row.online_backup_enabled ? 'Standby' : 'Off' }}</td>
+              <td>{{ row.message || '-' }}</td>
+            </tr>
+            <tr v-if="!runtimeEvents.items.length"><td colspan="6" class="empty">Belum ada riwayat runtime.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <Pagination :pagination="runtimeEvents.pagination" @change="loadRuntimeEvents" />
     </section>
 
     <section v-if="activeTab === 'anomaly'" class="panel">
@@ -625,6 +684,7 @@ const runningInstantCheck = ref(false)
 const runningRetryOpenIssues = ref(false)
 const runningBulkSkuUpdate = ref(false)
 const runningBulkSkuPreview = ref(false)
+const updatingRuntime = ref(false)
 const browserAutoSyncEnabled = ref(false)
 const browserAutoSyncRunning = ref(false)
 const browserAutoSyncLastRun = ref(null)
@@ -636,6 +696,7 @@ const notice = ref('')
 const noticeType = ref('success')
 const dashboard = ref({ statuses: {}, engine: {}, safety: {}, order_sync: {}, webhook_urls: {} })
 const runtimeStatus = ref({})
+const runtimeEvents = ref({ items: [], pagination: { page: 1, last_page: 1, total: 0 } })
 const webhookLogs = ref([])
 const syncLogs = ref([])
 const webhookPagination = ref({ page: 1, last_page: 1, total: 0 })
@@ -734,6 +795,14 @@ const loadRuntimeStatus = async () => {
   runtimeStatus.value = data.data || {}
 }
 
+const loadRuntimeEvents = async (page = runtimeEvents.value.pagination?.page || 1) => {
+  const { data } = await omnichannelService.autoSyncRuntimeEvents({ page, per_page: 20 })
+  runtimeEvents.value = {
+    items: data.items || [],
+    pagination: data.pagination || runtimeEvents.value.pagination
+  }
+}
+
 const sendRuntimeHeartbeat = async () => {
   const { data } = await omnichannelService.autoSyncRuntimeHeartbeat({
     machine_name: 'Localhost Dashboard',
@@ -750,6 +819,132 @@ const startRuntimeHeartbeat = async () => {
       sendRuntimeHeartbeat().catch(() => {})
     }
   }, RUNTIME_HEARTBEAT_MS)
+}
+
+const updateRuntimeSettings = async (payload) => {
+  updatingRuntime.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.updateAutoSyncRuntimeSettings(payload)
+    runtimeStatus.value = data.data || {}
+    notice.value = runtimeStatus.value.last_decision_reason || 'Pengaturan runtime tersimpan.'
+    noticeType.value = 'success'
+    await loadRuntimeEvents(1)
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Pengaturan runtime gagal disimpan.'
+    noticeType.value = 'error'
+  } finally {
+    updatingRuntime.value = false
+  }
+}
+
+const toggleOnlineBackup = () => {
+  updateRuntimeSettings({ online_backup_enabled: !runtimeStatus.value.online_backup_enabled })
+}
+
+const toggleRuntimePause = () => {
+  updateRuntimeSettings({ active_owner: runtimeStatus.value.active_owner === 'paused' ? 'local' : 'paused' })
+}
+
+const toggleRealMode = () => {
+  if (runtimeStatus.value.online_backup_real_enabled) {
+    updateRuntimeSettings({ online_backup_real_enabled: false })
+    return
+  }
+
+  const confirmText = window.prompt('Untuk mengaktifkan real mode, ketik: AKTIFKAN REAL BACKUP')
+  if (confirmText !== 'AKTIFKAN REAL BACKUP') {
+    notice.value = 'Real mode batal diaktifkan. Teks konfirmasi tidak sesuai.'
+    noticeType.value = 'error'
+    return
+  }
+
+  updateRuntimeSettings({
+    online_backup_enabled: true,
+    online_backup_real_enabled: true,
+    confirm_text: confirmText
+  })
+}
+
+const checkOnlineBackupDecision = async () => {
+  updatingRuntime.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.autoSyncRuntimeOnlineBackupTick()
+    runtimeStatus.value = data.data || {}
+    notice.value = runtimeStatus.value.last_decision_reason || 'Status owner runtime dicek.'
+    noticeType.value = 'success'
+    await loadRuntimeEvents(1)
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Cek owner runtime gagal.'
+    noticeType.value = 'error'
+  } finally {
+    updatingRuntime.value = false
+  }
+}
+
+const runBackupDryRun = async () => {
+  updatingRuntime.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.autoSyncBackupRunnerDryRun()
+    runtimeStatus.value = data.data || {}
+    notice.value = data.message || 'Dry-run backup selesai.'
+    noticeType.value = data.allowed ? 'success' : 'error'
+    await loadRuntimeEvents(1)
+  } catch (error) {
+    if (error?.response?.status === 409) {
+      runtimeStatus.value = error.response.data?.data || runtimeStatus.value
+      notice.value = error.response.data?.message || 'Dry-run backup sedang dikunci proses lain.'
+    } else {
+      notice.value = error?.response?.data?.message || error?.message || 'Dry-run backup gagal.'
+    }
+    noticeType.value = 'error'
+    await loadRuntimeEvents(1)
+  } finally {
+    updatingRuntime.value = false
+  }
+}
+
+const runRealBackup = async () => {
+  const confirmed = window.confirm('Jalankan real backup order sync sekarang? Ini hanya aktif jika real mode sudah ON dan local timeout.')
+  if (!confirmed) return
+
+  updatingRuntime.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.autoSyncBackupRunnerRun({ hours: 1 })
+    runtimeStatus.value = data.data || {}
+    notice.value = data.message || 'Real backup selesai.'
+    noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    await Promise.all([loadRuntimeEvents(1), loadOrderSync(1), loadSyncLogs(1), loadDashboard()])
+  } catch (error) {
+    runtimeStatus.value = error?.response?.data?.data || runtimeStatus.value
+    notice.value = error?.response?.data?.message || error?.message || 'Real backup gagal atau diblokir.'
+    noticeType.value = 'error'
+    await loadRuntimeEvents(1)
+  } finally {
+    updatingRuntime.value = false
+  }
+}
+
+const runSchedulerTick = async () => {
+  updatingRuntime.value = true
+  notice.value = ''
+  try {
+    const { data } = await omnichannelService.autoSyncBackupRunnerSchedulerTick({ hours: 1 })
+    runtimeStatus.value = data.data || {}
+    notice.value = data.message || 'Scheduler tick selesai.'
+    noticeType.value = data.status === 'warning' ? 'error' : 'success'
+    await Promise.all([loadRuntimeEvents(1), loadOrderSync(1), loadSyncLogs(1), loadDashboard()])
+  } catch (error) {
+    runtimeStatus.value = error?.response?.data?.data || runtimeStatus.value
+    notice.value = error?.response?.data?.message || error?.message || 'Scheduler tick gagal atau diblokir.'
+    noticeType.value = 'error'
+    await loadRuntimeEvents(1)
+  } finally {
+    updatingRuntime.value = false
+  }
 }
 
 const loadWebhookLogs = async (page = webhookPagination.value.page || 1) => {
@@ -860,6 +1055,7 @@ const loadAll = async () => {
     await Promise.all([
       loadDashboard(),
       loadRuntimeStatus(),
+      loadRuntimeEvents(1),
       loadWebhookLogs(1),
       loadOrderSync(1),
       loadSyncLogs(1),
@@ -1383,10 +1579,12 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .browser-auto-strip div { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; min-width:0; }
 .browser-auto-strip span { color:#64748b; font-size:12px; font-weight:800; }
 .browser-auto-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.runtime-strip { display:grid; grid-template-columns:1fr 1fr 1.3fr 1fr 2fr; gap:10px; margin-bottom:14px; }
+.runtime-strip { display:grid; grid-template-columns:1fr 1fr 1.2fr 1fr .8fr 1.8fr 2fr; gap:10px; margin-bottom:14px; }
 .runtime-strip article { display:grid; gap:6px; background:#fff; border:1px solid #dbeafe; border-radius:8px; padding:12px; min-width:0; }
 .runtime-strip span { color:#1d4ed8; font-size:12px; font-weight:800; }
 .runtime-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.runtime-actions div { display:flex; gap:8px; flex-wrap:wrap; }
+.runtime-actions button { padding:7px 9px; font-size:12px; }
 .status-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:14px; }
 .status-card,.panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .status-card { padding:16px; }

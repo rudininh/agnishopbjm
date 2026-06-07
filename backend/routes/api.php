@@ -43,8 +43,13 @@ Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVaria
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
 Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
 Route::get('marketplace/auto-sync/runtime-status', [SyncRuntimeController::class, 'status']);
+Route::get('marketplace/auto-sync/runtime-events', [SyncRuntimeController::class, 'events']);
 Route::post('marketplace/auto-sync/runtime-heartbeat', [SyncRuntimeController::class, 'heartbeat']);
+Route::post('marketplace/auto-sync/runtime-settings', [SyncRuntimeController::class, 'updateSettings']);
 Route::post('marketplace/auto-sync/runtime-online-backup-tick', [SyncRuntimeController::class, 'onlineBackupTick']);
+Route::post('marketplace/auto-sync/backup-runner/dry-run', [SyncRuntimeController::class, 'backupRunnerDryRun']);
+Route::post('marketplace/auto-sync/backup-runner/run', [SyncRuntimeController::class, 'backupRunnerRun']);
+Route::post('marketplace/auto-sync/backup-runner/scheduler-tick', [SyncRuntimeController::class, 'schedulerTick']);
 Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController::class, 'webhookLogs']);
 Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
 Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);

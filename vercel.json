@@ -9,5 +9,11 @@
       "src": "/(.*)",
       "dest": "/public/$1"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/auto-sync-scheduler",
+      "schedule": "*/15 * * * *"
+    }
   ]
 }
