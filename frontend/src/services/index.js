@@ -205,6 +205,18 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync')
   },
 
+  autoSyncRuntimeStatus() {
+    return api.get('/marketplace/auto-sync/runtime-status')
+  },
+
+  autoSyncRuntimeHeartbeat(data = {}) {
+    return api.post('/marketplace/auto-sync/runtime-heartbeat', data)
+  },
+
+  autoSyncRuntimeOnlineBackupTick() {
+    return api.post('/marketplace/auto-sync/runtime-online-backup-tick')
+  },
+
   autoSyncWebhookLogs(params = {}) {
     return api.get('/marketplace/auto-sync/webhook-logs', { params })
   },

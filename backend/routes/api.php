@@ -9,6 +9,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OmnichannelController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\SyncRuntimeController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('health', fn () => response()->json(['status' => 'ok', 'service' => 'agnishop-api']));
@@ -41,6 +42,9 @@ Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiT
 Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
 Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
+Route::get('marketplace/auto-sync/runtime-status', [SyncRuntimeController::class, 'status']);
+Route::post('marketplace/auto-sync/runtime-heartbeat', [SyncRuntimeController::class, 'heartbeat']);
+Route::post('marketplace/auto-sync/runtime-online-backup-tick', [SyncRuntimeController::class, 'onlineBackupTick']);
 Route::get('marketplace/auto-sync/webhook-logs', [MarketplaceAutoSyncController::class, 'webhookLogs']);
 Route::get('marketplace/auto-sync/sync-logs', [MarketplaceAutoSyncController::class, 'syncLogs']);
 Route::get('marketplace/auto-sync/safety-check', [MarketplaceAutoSyncController::class, 'safety']);

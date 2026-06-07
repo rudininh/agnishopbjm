@@ -60,6 +60,29 @@
       <div><span>Next run</span><strong>{{ browserAutoSyncNextRunLabel }}</strong></div>
     </section>
 
+    <section class="runtime-strip">
+      <article>
+        <span>Owner aktif</span>
+        <strong :class="['badge', runtimeOwnerClass]">{{ runtimeOwnerLabel }}</strong>
+      </article>
+      <article>
+        <span>Local heartbeat</span>
+        <strong :class="['badge', runtimeStatus.local_is_active ? 'success' : 'error']">{{ runtimeStatus.local_is_active ? 'Aktif' : 'Timeout' }}</strong>
+      </article>
+      <article>
+        <span>Last seen local</span>
+        <strong>{{ formatDate(runtimeStatus.local_last_seen_at) }}</strong>
+      </article>
+      <article>
+        <span>Online backup</span>
+        <strong :class="['badge', runtimeStatus.online_backup_enabled ? 'success' : 'neutral']">{{ runtimeStatus.online_backup_enabled ? 'Standby' : 'Off' }}</strong>
+      </article>
+      <article>
+        <span>Catatan</span>
+        <strong>{{ runtimeStatus.last_decision_reason || '-' }}</strong>
+      </article>
+    </section>
+
     <div class="status-grid">
       <article class="status-card">
         <div class="card-head">
@@ -591,6 +614,7 @@ const BROWSER_AUTO_SYNC_KEY = 'marketplace_auto_sync_browser_enabled'
 const BROWSER_AUTO_SYNC_INTERVAL_MS = 60 * 1000
 const BROWSER_AUTO_SYNC_SAFETY_EVERY_RUNS = 15
 const STOCK_ANOMALY_AUTO_REFRESH_MS = 15000
+const RUNTIME_HEARTBEAT_MS = 60 * 1000
 
 const loading = ref(false)
 const runningSafety = ref(false)
@@ -611,6 +635,7 @@ const activeTab = ref('webhook')
 const notice = ref('')
 const noticeType = ref('success')
 const dashboard = ref({ statuses: {}, engine: {}, safety: {}, order_sync: {}, webhook_urls: {} })
+const runtimeStatus = ref({})
 const webhookLogs = ref([])
 const syncLogs = ref([])
 const webhookPagination = ref({ page: 1, last_page: 1, total: 0 })
@@ -636,6 +661,7 @@ const watchdogFilters = reactive({ minutes: 5, hours: 24 })
 let browserAutoSyncTimer = null
 let browserAutoSyncCountdownTimer = null
 let stockAnomalyAutoRefreshTimer = null
+let runtimeHeartbeatTimer = null
 let browserAutoSyncRunCount = 0
 
 const Pagination = defineComponent({
@@ -677,6 +703,16 @@ const browserAutoSyncCountdownLabel = computed(() => {
   return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
 })
 const browserAutoSyncNextRunLabel = computed(() => browserAutoSyncNextRun.value ? `${formatTime(browserAutoSyncNextRun.value)} WITA` : '-')
+const runtimeOwnerLabel = computed(() => {
+  if (runtimeStatus.value.active_owner === 'online_backup') return 'Online backup'
+  if (runtimeStatus.value.active_owner === 'paused') return 'Pause'
+  return 'Local'
+})
+const runtimeOwnerClass = computed(() => {
+  if (runtimeStatus.value.active_owner === 'online_backup') return 'neutral'
+  if (runtimeStatus.value.active_owner === 'paused') return 'error'
+  return 'success'
+})
 const failureNotificationLabel = computed(() => {
   const config = dashboard.value.engine?.failure_notifications
   if (!config?.enabled) return 'Off'
@@ -691,6 +727,29 @@ const failureNotificationLabel = computed(() => {
 const loadDashboard = async () => {
   const { data } = await omnichannelService.autoSyncDashboard()
   dashboard.value = data.data || {}
+}
+
+const loadRuntimeStatus = async () => {
+  const { data } = await omnichannelService.autoSyncRuntimeStatus()
+  runtimeStatus.value = data.data || {}
+}
+
+const sendRuntimeHeartbeat = async () => {
+  const { data } = await omnichannelService.autoSyncRuntimeHeartbeat({
+    machine_name: 'Localhost Dashboard',
+    source: 'marketplace_auto_sync_page'
+  })
+  runtimeStatus.value = data.data || {}
+}
+
+const startRuntimeHeartbeat = async () => {
+  await sendRuntimeHeartbeat()
+  if (runtimeHeartbeatTimer) window.clearInterval(runtimeHeartbeatTimer)
+  runtimeHeartbeatTimer = window.setInterval(() => {
+    if (!document.hidden) {
+      sendRuntimeHeartbeat().catch(() => {})
+    }
+  }, RUNTIME_HEARTBEAT_MS)
 }
 
 const loadWebhookLogs = async (page = webhookPagination.value.page || 1) => {
@@ -800,6 +859,7 @@ const loadAll = async () => {
   try {
     await Promise.all([
       loadDashboard(),
+      loadRuntimeStatus(),
       loadWebhookLogs(1),
       loadOrderSync(1),
       loadSyncLogs(1),
@@ -1289,6 +1349,7 @@ const retryOrderSyncDetail = async () => {
 
 onMounted(async () => {
   await loadAll()
+  await startRuntimeHeartbeat()
   stockAnomalyAutoRefreshTimer = setInterval(refreshStockAnomaliesIfVisible, STOCK_ANOMALY_AUTO_REFRESH_MS)
   document.addEventListener('visibilitychange', refreshStockAnomaliesIfVisible)
   if (window.localStorage.getItem(BROWSER_AUTO_SYNC_KEY) === '1') {
@@ -1301,6 +1362,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', refreshStockAnomaliesIfVisible)
   clearBrowserAutoSyncTimer()
   clearBrowserAutoSyncCountdown()
+  if (runtimeHeartbeatTimer) window.clearInterval(runtimeHeartbeatTimer)
 })
 </script>
 
@@ -1321,6 +1383,10 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .browser-auto-strip div { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; min-width:0; }
 .browser-auto-strip span { color:#64748b; font-size:12px; font-weight:800; }
 .browser-auto-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.runtime-strip { display:grid; grid-template-columns:1fr 1fr 1.3fr 1fr 2fr; gap:10px; margin-bottom:14px; }
+.runtime-strip article { display:grid; gap:6px; background:#fff; border:1px solid #dbeafe; border-radius:8px; padding:12px; min-width:0; }
+.runtime-strip span { color:#1d4ed8; font-size:12px; font-weight:800; }
+.runtime-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .status-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:14px; }
 .status-card,.panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .status-card { padding:16px; }
@@ -1395,6 +1461,6 @@ td { color:#0f172a; }
 .detail-items span { display:block; color:#475569; font-size:12px; margin-top:2px; }
 .detail-table table { min-width:980px; }
 @media (max-width:1360px) { .status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip { grid-template-columns:1fr; } }
+@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.runtime-strip { grid-template-columns:1fr; } }
 @media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.alert-card,.detail-grid,.detail-items article,.anomaly-filter-row,.compact-filter-row { grid-template-columns:1fr; } }
 </style>
