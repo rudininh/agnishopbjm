@@ -162,7 +162,6 @@
           <button class="pay-button" @click="submitSale" :disabled="!canPay || submitting">
             {{ submitting ? 'Memproses...' : checkoutButtonLabel }}
           </button>
-          <button class="secondary full" @click="printReceipt" :disabled="!lastReceipt">Cetak Ulang Nota</button>
         </div>
       </aside>
     </div>
@@ -296,17 +295,27 @@
         <dd>{{ formatRupiah(lastReceipt.change) }}</dd>
       </dl>
 
+      <div v-if="printingReceipt" class="printing-status">
+        <span></span>
+        <strong>Memproses struk...</strong>
+      </div>
+
       <div class="success-actions">
-        <button type="button" class="secondary" @click="printReceipt">Cetak Struk</button>
+        <button type="button" class="secondary" @click="printReceipt">Cetak Ulang</button>
         <button type="button" class="pay-button" @click="closeSuccessScreen">Selesai</button>
       </div>
     </section>
   </div>
 
+  <div v-if="printToastMessage" class="print-toast">
+    {{ printToastMessage }}
+  </div>
+
   <section v-if="lastReceipt" class="receipt-print" aria-hidden="true">
     <div class="receipt">
       <img class="receipt-logo" src="/agni-logo.png?v=20260505" alt="Agni Shop Banjarmasin" />
-      <h2>AGNI SHOP BJM</h2>
+      <h2>AGNI SHOP BANJARMASIN</h2>
+      <p>JL. DAHLIA KEBUN SAYUR GG. DAHLIA KEBUN SAYUR RT.11 NO.30, BANJARMASIN</p>
       <dl>
         <dt>No</dt>
         <dd>{{ lastReceipt.order_number }}</dd>
@@ -319,7 +328,9 @@
         <tbody>
           <tr v-for="item in lastReceipt.items" :key="item.uuid">
             <td>
-              <strong>{{ item.product.name }}</strong>
+              <strong>{{ receiptItemParts(item).productName }}</strong>
+              <small v-if="receiptItemParts(item).variantName">Varian: {{ receiptItemParts(item).variantName }}</small>
+              <small v-if="receiptItemParts(item).sku">SKU: {{ receiptItemParts(item).sku }}</small>
               <small>{{ item.quantity }} x {{ formatRupiah(item.unit_price) }}</small>
             </td>
             <td>{{ formatRupiah(item.subtotal) }}</td>
@@ -360,6 +371,8 @@ const keypadAmount = ref(0)
 const cartPopupOpen = ref(false)
 const settingsOpen = ref(false)
 const successScreenOpen = ref(false)
+const printingReceipt = ref(false)
+const printToastMessage = ref('')
 const lastReceipt = ref(null)
 const selectedProductKey = ref('')
 const selectedCategory = ref('all')
@@ -664,16 +677,40 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;')
 
+const limitReceiptText = (value, limit = 42) => {
+  const text = String(value || '').trim()
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit).trim()}...`
+}
+
+const receiptItemParts = (item) => {
+  const productName = item.receipt_product_name || item.product_name || item.product?.name || 'Produk'
+  const variantName = item.receipt_variant_name || item.variant_name || ''
+  const sku = item.receipt_sku || item.sku || ''
+
+  return {
+    productName: limitReceiptText(productName, 42),
+    variantName: variantName && variantName.toLowerCase() !== 'default' ? limitReceiptText(variantName, 34) : '',
+    sku: limitReceiptText(sku, 32)
+  }
+}
+
 const receiptPrintHtml = (receipt) => {
-  const rows = (receipt.items || []).map((item) => `
-    <tr>
-      <td>
-        <strong>${escapeHtml(item.product?.name || 'Produk')}</strong>
-        <small>${Number(item.quantity || 0)} x ${escapeHtml(formatRupiah(item.unit_price))}</small>
-      </td>
-      <td>${escapeHtml(formatRupiah(item.subtotal))}</td>
-    </tr>
-  `).join('')
+  const rows = (receipt.items || []).map((item) => {
+    const parts = receiptItemParts(item)
+
+    return `
+      <tr>
+        <td>
+          <strong>${escapeHtml(parts.productName)}</strong>
+          ${parts.variantName ? `<small>Varian: ${escapeHtml(parts.variantName)}</small>` : ''}
+          ${parts.sku ? `<small>SKU: ${escapeHtml(parts.sku)}</small>` : ''}
+          <small>${Number(item.quantity || 0)} x ${escapeHtml(formatRupiah(item.unit_price))}</small>
+        </td>
+        <td>${escapeHtml(formatRupiah(item.subtotal))}</td>
+      </tr>
+    `
+  }).join('')
 
   return `<!doctype html>
 <html>
@@ -687,7 +724,7 @@ const receiptPrintHtml = (receipt) => {
     .receipt { box-sizing: border-box; width: 58mm; min-height: 100mm; padding: 4mm 3mm; }
     .receipt-logo { display: block; height: 15mm; margin: 0 auto 2mm; object-fit: contain; width: 15mm; }
     h2 { font-size: 13px; text-align: center; margin: 0 0 2px; }
-    p { text-align: center; margin: 3px 0 6px; }
+    p { font-size: 8.5px; line-height: 1.25; text-align: center; margin: 3px 0 6px; }
     dl { display: grid; grid-template-columns: 18mm 1fr; gap: 2px 4px; margin: 6px 0; }
     dt { margin: 0; }
     dd { margin: 0; text-align: right; }
@@ -702,7 +739,8 @@ const receiptPrintHtml = (receipt) => {
 <body>
   <div class="receipt">
     <img class="receipt-logo" src="${window.location.origin}/agni-logo.png?v=20260505" alt="Agni Shop Banjarmasin">
-    <h2>AGNI SHOP BJM</h2>
+    <h2>AGNI SHOP BANJARMASIN</h2>
+    <p>JL. DAHLIA KEBUN SAYUR GG. DAHLIA KEBUN SAYUR RT.11 NO.30, BANJARMASIN</p>
     <dl>
       <dt>No</dt><dd>${escapeHtml(receipt.order_number || '-')}</dd>
       <dt>Tanggal</dt><dd>${escapeHtml(formatDate(receipt.created_at))}</dd>
@@ -729,14 +767,25 @@ const receiptPrintHtml = (receipt) => {
 
 const printReceipt = () => {
   if (!lastReceipt.value) return
+  printingReceipt.value = true
+  printToastMessage.value = ''
   const printWindow = window.open('', 'agni-pos-receipt', 'width=320,height=640')
   if (!printWindow) {
+    printingReceipt.value = false
     errorMessage.value = 'Popup print diblokir browser. Izinkan pop-up untuk mencetak struk.'
     return
   }
   printWindow.document.open()
   printWindow.document.write(receiptPrintHtml(lastReceipt.value))
   printWindow.document.close()
+
+  window.setTimeout(() => {
+    printingReceipt.value = false
+    printToastMessage.value = 'Struk Telah Diproses'
+    window.setTimeout(() => {
+      printToastMessage.value = ''
+    }, 2600)
+  }, 1100)
 }
 
 const closeSuccessScreen = () => {
@@ -756,6 +805,9 @@ const buildLocalReceipt = () => {
     total: Number(total.value || 0),
     items: cart.value.map((item) => ({
       uuid: `TEST-${item.stockMasterId}`,
+      receipt_product_name: item.productName,
+      receipt_variant_name: item.variantName,
+      receipt_sku: item.sku,
       product: {
         name: item.variantName && item.variantName !== 'Default'
           ? `${item.productName} - ${item.variantName}`
@@ -777,6 +829,7 @@ const submitSale = async () => {
       lastReceipt.value = buildLocalReceipt()
       clearSale()
       successScreenOpen.value = true
+      printReceipt()
       return
     }
 
@@ -802,6 +855,7 @@ const submitSale = async () => {
     clearSale()
     successScreenOpen.value = true
     await loadProducts()
+    printReceipt()
   } catch (error) {
     const messages = error.response?.data?.errors
     errorMessage.value = messages ? Object.values(messages).flat().join(' ') : (error.response?.data?.message || 'Transaksi gagal diproses.')
@@ -1104,7 +1158,46 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .success-summary dd { color: #0f172a; font-size: 18px; margin: 0; text-align: right; }
 .success-summary dt:last-of-type,
 .success-summary dd:last-of-type { font-size: 22px; padding-top: 8px; }
+.printing-status {
+  align-items: center;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  color: #0f5fc7;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  min-height: 46px;
+  padding: 8px 12px;
+  width: 100%;
+}
+.printing-status span {
+  animation: printSpin .8s linear infinite;
+  border: 4px solid #bfdbfe;
+  border-top-color: #0f5fc7;
+  border-radius: 999px;
+  height: 26px;
+  width: 26px;
+}
+.printing-status strong { font-size: 14px; }
 .success-actions { display: grid; gap: 10px; grid-template-columns: 1fr; width: 100%; }
+.print-toast {
+  background: #15803d;
+  border-radius: 999px;
+  bottom: 22px;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, .22);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 900;
+  left: 50%;
+  padding: 12px 18px;
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 80;
+}
+@keyframes printSpin {
+  to { transform: rotate(360deg); }
+}
 .cart-popup-header {
   align-items: start;
   border-bottom: 1px solid #e2e8f0;
@@ -1231,7 +1324,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   }
   .receipt-logo { display: block; height: 15mm; margin: 0 auto 2mm; object-fit: contain; width: 15mm; }
   .receipt h2 { font-size: 13px; text-align: center; margin: 0 0 2px; }
-  .receipt p { text-align: center; margin: 3px 0 6px; }
+  .receipt p { font-size: 8.5px; line-height: 1.25; text-align: center; margin: 3px 0 6px; }
   .receipt dl { display: grid; grid-template-columns: 18mm 1fr; gap: 2px 4px; margin: 6px 0; }
   .receipt dd { margin: 0; text-align: right; }
   .receipt table { border-collapse: collapse; width: 100%; }

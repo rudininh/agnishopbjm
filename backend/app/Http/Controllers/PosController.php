@@ -235,7 +235,7 @@ class PosController extends Controller
             ['sku' => $sku],
             [
                 'name' => $variant !== '' && strtolower($variant) !== 'default' ? $name.' - '.$variant : $name,
-                'description' => trim('Stock Master ID: '.$stock->id.' | SKU: '.$sourceSku),
+                'description' => trim('Stock Master ID: '.$stock->id.' | Product: '.$name.' | Variant: '.$variant.' | SKU: '.$sourceSku),
                 'price' => $unitPrice,
                 'stock' => $stockQty,
                 'category_id' => $category->uuid,
