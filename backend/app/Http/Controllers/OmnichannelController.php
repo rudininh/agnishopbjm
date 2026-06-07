@@ -181,6 +181,242 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    public function imageVariantAnomalies(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $type = trim((string) $request->query('type', ''));
+        $search = mb_strtolower(trim((string) $request->query('search', '')));
+        $perPage = max(1, min(100, (int) $request->query('per_page', 30)));
+        $page = max(1, (int) $request->query('page', 1));
+
+        $rows = DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->leftJoin('shopee_product as sp', function ($join) {
+                $join->on('sp.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->whereRaw('COALESCE(sp.is_active, true) = true');
+            })
+            ->leftJoin('shopee_product_model as spm', function ($join) {
+                $join->on('spm.item_id', '=', 'sp.item_id')
+                    ->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join) {
+                $join->on('spmi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->on('spmi.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
+                $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
+            ->leftJoin('tiktok_products as tp', function ($join) {
+                $join->on('tp.product_id', '=', DB::raw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, ''))"))
+                    ->on('tp.sku_id', '=', DB::raw("COALESCE(NULLIF(map.tiktok_sku_id, ''), NULLIF(sm.tiktok_sku, ''))"))
+                    ->whereRaw('COALESCE(tp.is_active, true) = true');
+            })
+            ->leftJoin(DB::raw("(
+                SELECT DISTINCT ON (LOWER(TRIM(seller_sku)))
+                    product_id,
+                    product_name,
+                    sku_id,
+                    sku_name,
+                    seller_sku,
+                    image_url,
+                    updated_at
+                FROM tiktok_products
+                WHERE COALESCE(is_active, true) = true
+                  AND seller_sku IS NOT NULL
+                  AND TRIM(seller_sku) <> ''
+                ORDER BY LOWER(TRIM(seller_sku)), updated_at DESC, id DESC
+            ) as tps"), function ($join) {
+                $join->on(
+                    DB::raw('LOWER(TRIM(tps.seller_sku))'),
+                    '=',
+                    DB::raw("LOWER(TRIM(COALESCE(NULLIF(map.seller_sku, ''), NULLIF(sm.internal_sku, ''), NULLIF(sm.tiktok_seller_sku, ''), NULLIF(sm.shopee_seller_sku, ''))))")
+                );
+            })
+            ->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false')
+            ->select(
+                'sm.id',
+                'sm.internal_sku',
+                'sm.product_name',
+                'sm.variant_name',
+                'sm.updated_at',
+                'map.seller_sku as mapped_seller_sku',
+                'map.internal_image_url',
+                'map.shopee_image_url',
+                'map.tiktok_image_url',
+                'map.shopee_item_id',
+                'map.shopee_model_id',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id',
+                'sm.shopee_product_id',
+                'sm.shopee_sku',
+                'sm.shopee_seller_sku',
+                'sm.tiktok_product_id',
+                'sm.tiktok_sku',
+                'sm.tiktok_seller_sku',
+                'sp.name as shopee_product_name',
+                'spm.name as shopee_variant_name',
+                'spm.model_sku as shopee_model_sku',
+                'spmi.image_url as shopee_model_image_url',
+                'spi.image_url as shopee_product_image_url',
+                'tp.product_name as tiktok_product_name',
+                'tp.sku_name as tiktok_variant_name',
+                'tp.seller_sku as tiktok_seller_sku_actual',
+                'tp.image_url as tiktok_actual_image_url',
+                'tps.product_id as tiktok_sku_match_product_id',
+                'tps.product_name as tiktok_sku_match_product_name',
+                'tps.sku_id as tiktok_sku_match_sku_id',
+                'tps.sku_name as tiktok_sku_match_variant_name',
+                'tps.seller_sku as tiktok_sku_match_seller_sku',
+                'tps.image_url as tiktok_sku_match_image_url'
+            )
+            ->orderBy('sm.product_name')
+            ->orderBy('sm.variant_name')
+            ->get();
+
+        $items = $rows
+            ->map(function ($row): array {
+                $shopeeImage = $this->firstFilledImage([
+                    $row->shopee_model_image_url,
+                    $row->shopee_image_url,
+                    $row->shopee_product_image_url,
+                ]);
+                $tiktokImage = $this->firstFilledImage([
+                    $row->tiktok_actual_image_url,
+                    $row->tiktok_sku_match_image_url,
+                    $row->tiktok_image_url,
+                ]);
+                $hasShopeeIdentity = $this->filledString($row->shopee_model_id ?? null)
+                    || $this->filledString($row->shopee_sku ?? null)
+                    || $this->filledString($row->shopee_model_sku ?? null);
+                $hasTiktokIdentity = $this->filledString($row->tiktok_sku_id ?? null)
+                    || $this->filledString($row->tiktok_sku ?? null)
+                    || $this->filledString($row->tiktok_variant_name ?? null)
+                    || $this->filledString($row->tiktok_sku_match_sku_id ?? null)
+                    || $this->filledString($row->tiktok_sku_match_seller_sku ?? null);
+
+                $issueType = $this->imageVariantIssueType($hasShopeeIdentity, $hasTiktokIdentity, $shopeeImage, $tiktokImage);
+                $suggestedSource = $shopeeImage !== '' ? 'shopee' : ($tiktokImage !== '' ? 'tiktok' : ($this->filledString($row->internal_image_url ?? null) ? 'internal' : null));
+
+                return [
+                    'stock_master_id' => (int) $row->id,
+                    'sku' => $this->bestSkuMappingSkuValue([
+                        $row->mapped_seller_sku,
+                        $row->internal_sku,
+                        $row->shopee_seller_sku,
+                        $row->shopee_model_sku,
+                        $row->tiktok_seller_sku_actual,
+                        $row->tiktok_sku_match_seller_sku,
+                        $row->tiktok_seller_sku,
+                    ]),
+                    'product_name' => $row->product_name ?: ($row->shopee_product_name ?: ($row->tiktok_product_name ?: $row->tiktok_sku_match_product_name)),
+                    'variant_name' => $row->variant_name ?: ($row->shopee_variant_name ?: ($row->tiktok_variant_name ?: $row->tiktok_sku_match_variant_name)),
+                    'issue_type' => $issueType,
+                    'severity' => $issueType === 'image_url_mismatch' ? 'warning' : 'error',
+                    'message' => $this->imageVariantIssueMessage($issueType),
+                    'suggested_source' => $suggestedSource,
+                    'internal_image_url' => trim((string) ($row->internal_image_url ?? '')),
+                    'shopee' => [
+                        'product_id' => $row->shopee_item_id ?: $row->shopee_product_id,
+                        'model_id' => $row->shopee_model_id ?: $row->shopee_sku,
+                        'variant_name' => $row->shopee_variant_name ?: $row->variant_name,
+                        'seller_sku' => $row->shopee_model_sku ?: $row->shopee_seller_sku,
+                        'image_url' => $shopeeImage,
+                    ],
+                    'tiktok' => [
+                        'product_id' => $row->mapped_tiktok_product_id ?: ($row->tiktok_product_id ?: $row->tiktok_sku_match_product_id),
+                        'sku_id' => $row->tiktok_sku_id ?: ($row->tiktok_sku ?: $row->tiktok_sku_match_sku_id),
+                        'variant_name' => $row->tiktok_variant_name ?: ($row->tiktok_sku_match_variant_name ?: $row->variant_name),
+                        'seller_sku' => $row->tiktok_seller_sku_actual ?: ($row->tiktok_sku_match_seller_sku ?: $row->tiktok_seller_sku),
+                        'image_url' => $tiktokImage,
+                    ],
+                    'updated_at' => $row->updated_at,
+                ];
+            })
+            ->filter(fn (array $item): bool => $item['issue_type'] !== 'matched')
+            ->values();
+
+        $summary = [
+            'total_anomalies' => $items->count(),
+            'missing_shopee_image' => $items->where('issue_type', 'missing_shopee_image')->count(),
+            'missing_tiktok_image' => $items->where('issue_type', 'missing_tiktok_image')->count(),
+            'image_url_mismatch' => $items->where('issue_type', 'image_url_mismatch')->count(),
+            'incomplete_mapping' => $items->where('issue_type', 'incomplete_mapping')->count(),
+        ];
+
+        if ($type !== '') {
+            $items = $items->where('issue_type', $type)->values();
+        }
+
+        if ($search !== '') {
+            $items = $items->filter(function (array $item) use ($search): bool {
+                $haystack = mb_strtolower(implode(' ', [
+                    $item['sku'] ?? '',
+                    $item['product_name'] ?? '',
+                    $item['variant_name'] ?? '',
+                    $item['shopee']['product_id'] ?? '',
+                    $item['tiktok']['product_id'] ?? '',
+                ]));
+
+                return str_contains($haystack, $search);
+            })->values();
+        }
+
+        $total = $items->count();
+        $pagedItems = $items->forPage($page, $perPage)->values();
+
+        return response()->json([
+            'summary' => $summary,
+            'items' => $pagedItems,
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'last_page' => max(1, (int) ceil($total / $perPage)),
+            ],
+        ]);
+    }
+
+    private function firstFilledImage(array $values): string
+    {
+        foreach ($values as $value) {
+            $text = trim((string) $value);
+            if ($text !== '') {
+                return $text;
+            }
+        }
+
+        return '';
+    }
+
+    private function imageVariantIssueType(bool $hasShopeeIdentity, bool $hasTiktokIdentity, string $shopeeImage, string $tiktokImage): string
+    {
+        if (! $hasShopeeIdentity || ! $hasTiktokIdentity) {
+            return 'incomplete_mapping';
+        }
+
+        if ($shopeeImage === '' && $tiktokImage !== '') {
+            return 'missing_shopee_image';
+        }
+
+        if ($tiktokImage === '' && $shopeeImage !== '') {
+            return 'missing_tiktok_image';
+        }
+
+        return 'matched';
+    }
+
+    private function imageVariantIssueMessage(string $issueType): string
+    {
+        return match ($issueType) {
+            'missing_shopee_image' => 'Gambar varian Shopee kosong, TikTok punya gambar.',
+            'missing_tiktok_image' => 'Gambar varian TikTok kosong, Shopee punya gambar.',
+            'image_url_mismatch' => 'Gambar varian Shopee dan TikTok berbeda.',
+            'incomplete_mapping' => 'Mapping varian Shopee/TikTok belum lengkap.',
+            default => 'Gambar varian sudah sama.',
+        };
+    }
+
     private function ensureProductVariantAnalysisTables(): void
     {
         DB::statement("
@@ -7927,49 +8163,6 @@ class OmnichannelController extends Controller
         return response()->json([
             'summary' => $summary,
             'items' => $items,
-        ]);
-    }
-
-    public function syncShopeeToTiktok(): JsonResponse
-    {
-        $rows = DB::table('stock_master as sm')
-            ->leftJoin('tiktok_products as tp', function ($join) {
-                $join->on('tp.product_id', '=', 'sm.tiktok_product_id')
-                    ->on('tp.sku_name', '=', 'sm.variant_name')
-                    ->whereRaw('COALESCE(tp.is_active, true) = true');
-            })
-            ->whereNotNull('sm.tiktok_product_id')
-            ->where('sm.tiktok_product_id', '<>', '')
-            ->select(
-                'sm.tiktok_product_id as product_id',
-                'sm.tiktok_sku as sku',
-                'sm.variant_name',
-                'sm.stock_qty as shopee_stock',
-                DB::raw('COALESCE(tp.stock_qty, 0) as tiktok_stock')
-            )
-            ->orderBy('sm.product_name')
-            ->get();
-
-        $items = $rows->map(function ($row) {
-            $isMismatch = (int) $row->shopee_stock !== (int) $row->tiktok_stock;
-
-            return [
-                'product_id' => $row->product_id,
-                'sku' => $row->sku ?: $row->variant_name,
-                'shopee_stock' => (int) $row->shopee_stock,
-                'tiktok_stock' => (int) $row->tiktok_stock,
-                'status' => $isMismatch ? 'SUCCESS' : 'SKIP',
-                'error' => null,
-                'is_mismatch' => $isMismatch,
-            ];
-        });
-
-        return response()->json([
-            'success' => $items->where('status', 'SUCCESS')->count(),
-            'failed' => 0,
-            'skipped' => $items->where('status', 'SKIP')->count(),
-            'items' => $items->values(),
-            'mode' => 'preview',
         ]);
     }
 

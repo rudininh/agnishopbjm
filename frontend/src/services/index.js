@@ -87,6 +87,10 @@ export const orderService = {
 }
 
 export const posService = {
+  stockMasterProducts() {
+    return api.get('/pos/stock-master-products')
+  },
+
   checkout(data) {
     return api.post('/pos/offline-orders', data)
   }
@@ -119,6 +123,10 @@ export const omnichannelService = {
 
   confirmProductVariantAnalysisIssue(data) {
     return api.post('/product-variant-analysis/confirm', data)
+  },
+
+  imageVariantAnomalies(params = {}) {
+    return api.get('/product-variant-image-anomalies', { params })
   },
 
   skuMapping(params = {}) {
@@ -296,23 +304,8 @@ export const omnichannelService = {
     return api.post('/marketplace/auto-sync/poll-tiktok-orders', { hours })
   },
 
-  syncShopeeToTiktok() {
-    return api.post('/sync-shopee-to-tiktok')
-  },
-
   runTokenAction(action) {
     return api.post(`/omnichannel/${action}`)
   }
 }
 
-export const shopeeDocsService = {
-  modules() {
-    return api.get('/shopee-docs/modules')
-  },
-
-  apiDetail(apiName) {
-    return api.get('/shopee-docs/api', {
-      params: { api_name: apiName }
-    })
-  }
-}

@@ -8,10 +8,8 @@ import SkuMapping from '@/pages/SkuMapping.vue'
 import TambahVarian from '@/pages/TambahVarian.vue'
 import TambahVarianShopee from '@/pages/TambahVarianShopee.vue'
 import ProductVariantAnalysis from '@/pages/ProductVariantAnalysis.vue'
+import AnomaliGambarVariant from '@/pages/AnomaliGambarVariant.vue'
 import DetailProdukMarketplace from '@/pages/DetailProdukMarketplace.vue'
-import SyncShopeeTiktok from '@/pages/SyncShopeeTiktok.vue'
-import DokumentasiShopee from '@/pages/DokumentasiShopee.vue'
-import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
 import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
 import StockAnomalies from '@/pages/StockAnomalies.vue'
 import ShippingLabels from '@/pages/ShippingLabels.vue'
@@ -74,14 +72,14 @@ const routes = [
     component: ProductVariantAnalysis
   },
   {
+    path: '/anomali-gambar-variant',
+    name: 'anomali-gambar-variant',
+    component: AnomaliGambarVariant
+  },
+  {
     path: '/detail-produk-marketplace',
     name: 'detail-produk-marketplace',
     component: DetailProdukMarketplace
-  },
-  {
-    path: '/sync-shopee-to-tiktok',
-    name: 'sync-shopee-to-tiktok',
-    component: SyncShopeeTiktok
   },
   {
     path: '/marketplace/auto-sync',
@@ -102,16 +100,6 @@ const routes = [
     path: '/pos-offline',
     name: 'pos-offline',
     component: POSOffline
-  },
-  {
-    path: '/dokumentasi-shopee',
-    name: 'dokumentasi-shopee',
-    component: DokumentasiShopee
-  },
-  {
-    path: '/dokumentasi-tiktok',
-    name: 'dokumentasi-tiktok',
-    component: DokumentasiTiktok
   },
   {
     path: '/:pathMatch(.*)*',

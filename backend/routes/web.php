@@ -49,6 +49,20 @@ Route::get('assets/{path}', function (string $path) use ($frontendDist, $mimeTyp
     ]);
 })->where('path', '.*');
 
+Route::get('pos/{path}', function (string $path) use ($frontendDist, $mimeTypes) {
+    $assetPath = realpath($frontendDist.DIRECTORY_SEPARATOR.'pos'.DIRECTORY_SEPARATOR.$path);
+    $assetsRoot = realpath($frontendDist.DIRECTORY_SEPARATOR.'pos');
+
+    abort_if(! $assetPath || ! $assetsRoot || ! str_starts_with($assetPath, $assetsRoot), 404);
+    abort_if(! is_file($assetPath), 404);
+
+    $extension = strtolower(pathinfo($assetPath, PATHINFO_EXTENSION));
+
+    return response()->file($assetPath, [
+        'Content-Type' => $mimeTypes[$extension] ?? 'application/octet-stream',
+    ]);
+})->where('path', '.*');
+
 Route::get('cached-images/{path}', function (string $path) {
     $baseDir = storage_path('app/public');
     $baseRoot = realpath($baseDir);

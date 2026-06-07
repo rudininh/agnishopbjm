@@ -44,7 +44,7 @@
         <RouterLink class="action shopee" to="/stok-shopee">Stok Shopee</RouterLink>
         <RouterLink class="action tiktok" to="/stok-tiktok">Stok TikTok</RouterLink>
         <RouterLink class="action master" to="/stock-master">Stock Master</RouterLink>
-        <RouterLink class="action sync" to="/sync-shopee-to-tiktok">Sync Stok</RouterLink>
+        <RouterLink class="action sync" to="/marketplace/auto-sync">Auto Sync</RouterLink>
       </div>
     </section>
 
