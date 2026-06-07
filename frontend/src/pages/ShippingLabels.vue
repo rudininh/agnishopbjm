@@ -111,6 +111,10 @@
               <option value="SHIPPING_LABEL_AND_PACKING_SLIP">Label + Packing Slip</option>
             </select>
           </label>
+          <label class="watermark-option">
+            <span><input v-model="officialWatermarkEnabled" type="checkbox" /> Watermark</span>
+            <input v-model.trim="officialWatermarkText" :disabled="!officialWatermarkEnabled" maxlength="80" />
+          </label>
         </div>
 
         <div v-if="previewLabel" class="preview-card">
@@ -149,9 +153,12 @@ const previewLabel = ref(null)
 const printMode = ref('thermal')
 const officialDocumentSize = ref('A6')
 const officialDocumentType = ref('SHIPPING_LABEL')
+const officialWatermarkEnabled = ref(true)
+const officialWatermarkText = ref('WAJIB VIDEO UNBOXING')
 const notice = ref({ type: '', message: '' })
 const documents = reactive({ shipping_label: true, picking_list: false })
 const filters = reactive({ marketplace: 'all', status: 'all', search: '' })
+let pdfJsLoader = null
 
 const orderKey = (order) => `${order.marketplace}:${order.order_ref}`
 const selectedKeys = computed(() => Object.keys(selected.value).filter((key) => selected.value[key]))
@@ -300,9 +307,110 @@ const printSelected = async () => {
 
 const documentUrl = (document) => {
   if (!document) return ''
-  if (document.url) return document.url
   if (document.content_base64) return `data:${document.mime_type || 'application/pdf'};base64,${document.content_base64}`
+  if (document.url) return document.url
   return ''
+}
+
+const base64ToBytes = (base64) => {
+  const clean = String(base64 || '').replace(/^data:[^;]+;base64,/, '')
+  const binary = atob(clean)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+const loadPdfJs = async () => {
+  if (!pdfJsLoader) {
+    pdfJsLoader = Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.mjs?url')
+    ]).then(([pdfjs, worker]) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+      return pdfjs
+    })
+  }
+
+  return pdfJsLoader
+}
+
+const drawCanvasStamp = (ctx, width, height, text) => {
+  const stampText = String(text || 'WAJIB VIDEO UNBOXING').toUpperCase()
+  const drawStamp = (centerY, fontSize, lineWidth) => {
+    ctx.save()
+    ctx.globalAlpha = 0.5
+    ctx.font = `700 ${fontSize}px Arial, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.strokeStyle = '#b91c1c'
+    ctx.fillStyle = '#b91c1c'
+    ctx.lineWidth = lineWidth
+    const metrics = ctx.measureText(stampText)
+    const stampWidth = Math.min(width * 0.88, Math.max(width * 0.48, metrics.width + fontSize * 1.2))
+    const stampHeight = fontSize * 1.65
+    const x = (width - stampWidth) / 2
+    const y = centerY - (stampHeight / 2)
+    ctx.strokeRect(x, y, stampWidth, stampHeight)
+    ctx.fillText(stampText, width / 2, centerY)
+    ctx.restore()
+  }
+
+  drawStamp(height * 0.64, Math.max(36, Math.min(62, width * 0.075)), Math.max(3, width * 0.006))
+  drawStamp(height * 0.86, Math.max(26, Math.min(42, width * 0.052)), Math.max(2, width * 0.004))
+}
+
+const renderWatermarkedPdfImages = async (marketplaceDocument, watermarkText) => {
+  if (!marketplaceDocument?.content_base64) return []
+
+  const pdfjs = await loadPdfJs()
+  const pdf = await pdfjs.getDocument({ data: base64ToBytes(marketplaceDocument.content_base64) }).promise
+  const images = []
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber)
+    const viewport = page.getViewport({ scale: 2.25 })
+    const canvas = window.document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    canvas.width = Math.floor(viewport.width)
+    canvas.height = Math.floor(viewport.height)
+    await page.render({ canvasContext: context, viewport }).promise
+    drawCanvasStamp(context, canvas.width, canvas.height, watermarkText)
+    images.push(canvas.toDataURL('image/png'))
+  }
+  return images
+}
+
+const officialDocumentHtml = async ({ order, data }) => {
+  const title = `${marketplaceLabel(order.marketplace)} ${escapeHtml(order.order_ref)}`
+  if (data.status === 'pending') {
+    return `<section class="doc"><h2>${title}</h2><p>${escapeHtml(data.message || 'Dokumen masih diproses marketplace.')}</p></section>`
+  }
+  if (data.status !== 'success') {
+    return `<section class="doc error"><h2>${title}</h2><p>${escapeHtml(data.message || 'Dokumen resmi gagal diambil.')}</p></section>`
+  }
+
+  const url = documentUrl(data.document)
+  if (!url) {
+    return `<section class="doc error"><h2>${title}</h2><p>Dokumen kosong.</p></section>`
+  }
+
+  if (data.document?.watermark_error && data.document?.content_base64) {
+    try {
+      const pages = await renderWatermarkedPdfImages(data.document, officialWatermarkText.value)
+      if (pages.length) {
+        return `<section class="doc rendered-doc"><h2>${title}</h2><p class="watermark-ok">Watermark aktif di hasil render cetak.</p><button class="print-now" type="button" onclick="window.print()">Print Watermark</button><div class="rendered-pages">${pages.map((src) => `<img class="rendered-page" src="${src}" />`).join('')}</div></section>`
+      }
+    } catch (error) {
+      return `<section class="doc error"><h2>${title}</h2><p>Watermark gagal dirender: ${escapeHtml(error?.message || 'PDF tidak bisa dirender.')}</p></section>`
+    }
+  }
+
+  const watermarkInfo = data.document?.watermark
+    ? `<p class="watermark-ok">Watermark aktif: ${escapeHtml(data.document.watermark.text || '')}</p>`
+    : (data.document?.watermark_error ? `<p class="watermark-warning">Watermark belum terpasang: ${escapeHtml(data.document.watermark_error)}</p>` : '')
+
+  return `<section class="doc"><h2>${title}</h2>${watermarkInfo}<p><a href="${escapeHtml(url)}" target="_blank" rel="noopener">Buka / Download Dokumen</a></p><iframe src="${escapeHtml(url)}"></iframe></section>`
 }
 
 const printOfficialSelected = async () => {
@@ -331,7 +439,9 @@ const printOfficialSelected = async () => {
         order_ref: order.order_ref,
         document_size: officialDocumentSize.value,
         document_type: order.marketplace === 'tiktok' ? officialDocumentType.value : undefined,
-        document_format: 'PDF'
+        document_format: 'PDF',
+        watermark_enabled: officialWatermarkEnabled.value,
+        watermark_text: officialWatermarkText.value
       })
       results.push({ order, data })
     } catch (error) {
@@ -346,25 +456,10 @@ const printOfficialSelected = async () => {
     }
   }
 
-  const html = results.map(({ order, data }) => {
-    const title = `${marketplaceLabel(order.marketplace)} ${escapeHtml(order.order_ref)}`
-    if (data.status === 'pending') {
-      return `<section class="doc"><h2>${title}</h2><p>${escapeHtml(data.message || 'Dokumen masih diproses marketplace.')}</p></section>`
-    }
-    if (data.status !== 'success') {
-      return `<section class="doc error"><h2>${title}</h2><p>${escapeHtml(data.message || 'Dokumen resmi gagal diambil.')}</p></section>`
-    }
-
-    const url = documentUrl(data.document)
-    if (!url) {
-      return `<section class="doc error"><h2>${title}</h2><p>Dokumen kosong.</p></section>`
-    }
-
-    return `<section class="doc"><h2>${title}</h2><p><a href="${escapeHtml(url)}" target="_blank" rel="noopener">Buka / Download Dokumen</a></p><iframe src="${escapeHtml(url)}"></iframe></section>`
-  }).join('')
+  const html = (await Promise.all(results.map(officialDocumentHtml))).join('')
 
   popup.document.open()
-  popup.document.write(`<!doctype html><html><head><title>Dokumen Resmi Marketplace</title><style>body{font-family:Arial,sans-serif;margin:18px;background:#f3f4f6;color:#111827}.doc{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-bottom:14px}iframe{width:100%;height:760px;border:1px solid #e5e7eb;background:#fff}a{color:#0f5fc7;font-weight:700}.error{color:#991b1b;background:#fef2f2;border-color:#fecaca}h1{font-size:22px}h2{font-size:16px;margin:0 0 8px}@media print{body{background:#fff}.doc{page-break-after:always;border:0;padding:0}}</style></head><body><h1>Dokumen Resmi Marketplace</h1>${html}</body></html>`)
+  popup.document.write(`<!doctype html><html><head><title>Dokumen Resmi Marketplace</title><style>@page{size:${officialDocumentSize.value};margin:0}body{font-family:Arial,sans-serif;margin:18px;background:#f3f4f6;color:#111827}.doc{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-bottom:14px}iframe{width:100%;height:760px;border:1px solid #e5e7eb;background:#fff}a{color:#0f5fc7;font-weight:700}.error{color:#991b1b;background:#fef2f2;border-color:#fecaca}.watermark-ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px}.watermark-warning{color:#9a3412;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px 10px}.print-now{border:0;border-radius:6px;background:#0f5fc7;color:#fff;font-weight:800;padding:9px 13px;margin:0 0 10px}.rendered-pages{display:grid;gap:12px}.rendered-page{display:block;width:100%;max-width:760px;margin:0 auto;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,.18)}h1{font-size:22px}h2{font-size:16px;margin:0 0 8px}@media print{body{background:#fff;margin:0}.doc{page-break-after:always;border:0;padding:0;margin:0}.doc:not(.rendered-doc) iframe{height:100vh;border:0}.rendered-pages{display:block}.rendered-page{width:100%;max-width:none;margin:0;box-shadow:none;page-break-after:always}.watermark-ok,.watermark-warning,h1,h2,p a,.print-now{display:none}}</style></head><body><h1>Dokumen Resmi Marketplace</h1>${html}</body></html>`)
   popup.document.close()
   setNotice(results.some((result) => result.data.status !== 'success') ? 'error' : 'success', `${results.length} dokumen resmi selesai diproses. Bila PDF tidak langsung tampil, klik Buka / Download Dokumen.`)
   officialPrinting.value = false
@@ -425,6 +520,8 @@ select,input { width:100%; border:1px solid #cbd5e1; border-radius:6px; padding:
 .print-mode label { display:flex; gap:7px; align-items:center; }
 .official-options { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0; }
 .official-options label { display:grid; gap:6px; color:#64748b; font-size:12px; font-weight:800; }
+.official-options .watermark-option { grid-column:1 / -1; }
+.watermark-option span { display:flex; align-items:center; gap:7px; color:#0f172a; }
 .preview-card { border:1px solid #e2e8f0; border-radius:6px; padding:11px; margin:12px 0; display:grid; gap:4px; }
 .preview-card span,.preview-card small { color:#64748b; font-size:12px; }
 .preview-card strong { overflow-wrap:anywhere; }

@@ -249,6 +249,10 @@ export const omnichannelService = {
     return api.post('/marketplace/auto-sync/stock-anomalies/sync', data)
   },
 
+  refreshAutoSyncStockAnomalyProducts(data) {
+    return api.post('/marketplace/auto-sync/stock-anomalies/refresh-products', data)
+  },
+
   exportAutoSyncOrderSync(params = {}) {
     return api.get('/marketplace/auto-sync/order-sync/export', {
       params,

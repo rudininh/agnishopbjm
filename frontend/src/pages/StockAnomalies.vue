@@ -5,12 +5,13 @@
         <p>Marketplace</p>
         <h1>Anomali Stok</h1>
       </div>
-      <button class="primary" type="button" @click="loadAnomalies(1)" :disabled="loading">
-        {{ loading ? 'Memuat...' : 'Refresh' }}
+      <button class="primary" type="button" @click="loadAnomalies(1, { forceProductRefresh: true })" :disabled="loading || productRefreshing">
+        {{ productRefreshing ? 'Sync produk...' : (loading ? 'Memuat...' : 'Refresh') }}
       </button>
     </header>
 
     <p v-if="notice.message" :class="['notice', notice.type]">{{ notice.message }}</p>
+    <p v-if="productRefreshing" class="notice info">Sedang refresh produk marketplace yang terdeteksi anomali.</p>
 
     <section class="summary-grid">
       <article><span>Total anomali</span><strong>{{ summary.total_anomalies || 0 }}</strong></article>
@@ -31,7 +32,7 @@
           <option value="missing_tiktok_stock">Stok TikTok belum ada</option>
           <option value="incomplete_mapping">Mapping marketplace belum lengkap</option>
         </select>
-        <button class="ghost" type="button" @click="loadAnomalies(1)" :disabled="loading">Terapkan</button>
+        <button class="ghost" type="button" @click="loadAnomalies(1)" :disabled="loading || productRefreshing">Terapkan</button>
       </div>
 
       <div class="table-wrap">
@@ -66,7 +67,7 @@
                   <button
                     class="mini"
                     type="button"
-                    :disabled="Boolean(syncingKey)"
+                    :disabled="Boolean(syncingKey) || productRefreshing"
                     @click="syncRow(row, 'shopee')"
                   >
                     {{ isSyncing(row, 'shopee') ? 'Sinkron...' : 'Sinkron dari Shopee' }}
@@ -74,7 +75,7 @@
                   <button
                     class="mini tiktok"
                     type="button"
-                    :disabled="Boolean(syncingKey)"
+                    :disabled="Boolean(syncingKey) || productRefreshing"
                     @click="syncRow(row, 'tiktok')"
                   >
                     {{ isSyncing(row, 'tiktok') ? 'Sinkron...' : 'Sinkron dari TikTok' }}
@@ -105,13 +106,18 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { omnichannelService } from '@/services'
 
 const AUTO_REFRESH_MS = 15000
+const PRODUCT_REFRESH_TTL_MS = 5 * 60 * 1000
+const PRODUCT_REFRESH_MAX_ROWS = 30
+const PRODUCT_REFRESH_ISSUES = ['stock_mismatch', 'missing_shopee_stock', 'missing_tiktok_stock']
 const loading = ref(false)
+const productRefreshing = ref(false)
 const notice = ref({ type: '', message: '' })
 const syncingKey = ref('')
 const rows = ref([])
 const summary = ref({})
 const pagination = ref({ page: 1, last_page: 1, total: 0 })
 const filters = reactive({ type: '', search: '' })
+const productRefreshHistory = new Map()
 let autoRefreshTimer = null
 
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'
@@ -129,13 +135,72 @@ const setNotice = (type, message) => {
   notice.value = { type, message }
 }
 
-const loadAnomalies = async (page = pagination.value.page || 1) => {
+const normalizeId = (value) => String(value ?? '').trim()
+const needsShopeeRefresh = (row) => ['stock_mismatch', 'missing_shopee_stock'].includes(row.issue_type)
+const needsTiktokRefresh = (row) => ['stock_mismatch', 'missing_tiktok_stock'].includes(row.issue_type)
+
+const anomalyProductPayload = (items) => items
+  .filter((row) => PRODUCT_REFRESH_ISSUES.includes(row.issue_type))
+  .filter((row) => {
+    const shopeeProductId = normalizeId(row.shopee_product_id)
+    const tiktokProductId = normalizeId(row.tiktok_product_id)
+    return (needsShopeeRefresh(row) && shopeeProductId) || (needsTiktokRefresh(row) && tiktokProductId)
+  })
+  .slice(0, PRODUCT_REFRESH_MAX_ROWS)
+  .map((row) => ({
+    issue_type: row.issue_type,
+    sku: normalizeId(row.sku),
+    shopee_product_id: normalizeId(row.shopee_product_id),
+    tiktok_product_id: normalizeId(row.tiktok_product_id)
+  }))
+
+const productRefreshSignature = (items) => {
+  const refs = items.flatMap((row) => [
+    needsShopeeRefresh(row) && row.shopee_product_id ? `shopee:${row.shopee_product_id}` : '',
+    needsTiktokRefresh(row) && row.tiktok_product_id ? `tiktok:${row.tiktok_product_id}` : ''
+  ]).filter(Boolean)
+
+  return [...new Set(refs)].sort().join('|')
+}
+
+const refreshProductsForAnomalies = async (items, page, force = false) => {
+  if (productRefreshing.value || syncingKey.value) return
+
+  const payloadItems = anomalyProductPayload(items)
+  const signature = productRefreshSignature(payloadItems)
+  if (!signature) return
+
+  const lastRefreshAt = productRefreshHistory.get(signature) || 0
+  if (!force && Date.now() - lastRefreshAt < PRODUCT_REFRESH_TTL_MS) return
+
+  productRefreshHistory.set(signature, Date.now())
+  productRefreshing.value = true
+  try {
+    const { data } = await omnichannelService.refreshAutoSyncStockAnomalyProducts({ items: payloadItems })
+    await loadAnomalies(page, { skipProductRefresh: true, clearNotice: false })
+
+    if (data?.status !== 'skipped') {
+      setNotice(
+        data?.status === 'warning' ? 'warning' : 'success',
+        data?.message || 'Produk marketplace anomali berhasil di-refresh.'
+      )
+    }
+  } catch (error) {
+    setNotice('error', error?.response?.data?.message || error?.message || 'Refresh produk marketplace anomali gagal dijalankan.')
+  } finally {
+    productRefreshing.value = false
+  }
+}
+
+const loadAnomalies = async (page = pagination.value.page || 1, options = {}) => {
   if (loading.value) return
   loading.value = true
-  setNotice('', '')
+  if (options.clearNotice !== false) setNotice('', '')
+  let loadedRows = []
   try {
     const { data } = await omnichannelService.autoSyncStockAnomalies({ ...filters, page, per_page: 30 })
-    rows.value = data.items || []
+    loadedRows = data.items || []
+    rows.value = loadedRows
     summary.value = data.summary || {}
     pagination.value = data.pagination || pagination.value
   } catch (error) {
@@ -143,14 +208,19 @@ const loadAnomalies = async (page = pagination.value.page || 1) => {
   } finally {
     loading.value = false
   }
+
+  if (!options.skipProductRefresh && loadedRows.length) {
+    await refreshProductsForAnomalies(loadedRows, pagination.value.page || page, Boolean(options.forceProductRefresh))
+  }
 }
 
 const refreshCurrentPage = () => {
-  if (document.hidden || syncingKey.value) return
+  if (document.hidden || loading.value || productRefreshing.value || syncingKey.value) return
   loadAnomalies(pagination.value.page || 1)
 }
 
 const syncRow = async (row, sourceMarketplace) => {
+  if (productRefreshing.value) return
   syncingKey.value = rowKey(row, sourceMarketplace)
   setNotice('', '')
   try {
@@ -191,6 +261,8 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .notice { border-radius:6px; padding:10px 12px; margin-bottom:14px; }
 .notice.error { border:1px solid #fecaca; background:#fef2f2; color:#991b1b; }
 .notice.success { border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; }
+.notice.warning { border:1px solid #fed7aa; background:#fff7ed; color:#9a3412; }
+.notice.info { border:1px solid #bfdbfe; background:#eff6ff; color:#1e40af; }
 .summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:14px; }
 .summary-grid article { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .summary-grid span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }

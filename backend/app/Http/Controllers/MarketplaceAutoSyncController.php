@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Services\MarketplaceSyncService;
 use App\Services\MarketplaceOrderSyncService;
 use App\Services\MarketplaceApiService;
+use App\Services\PdfWatermarkService;
 use App\Services\StockConsistencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,6 +18,7 @@ class MarketplaceAutoSyncController extends Controller
         private readonly MarketplaceOrderSyncService $orderSyncService,
         private readonly MarketplaceApiService $marketplaceApiService,
         private readonly StockConsistencyService $stockConsistencyService,
+        private readonly PdfWatermarkService $pdfWatermarkService,
     ) {
     }
 
@@ -230,6 +232,8 @@ class MarketplaceAutoSyncController extends Controller
             'document_type' => ['nullable', 'string'],
             'document_size' => ['nullable', 'string', 'in:A6,A5,A4'],
             'document_format' => ['nullable', 'string', 'in:PDF,ZPL'],
+            'watermark_enabled' => ['nullable', 'boolean'],
+            'watermark_text' => ['nullable', 'string', 'max:80'],
         ]);
 
         $marketplace = strtolower(trim((string) $data['marketplace']));
@@ -248,6 +252,13 @@ class MarketplaceAutoSyncController extends Controller
                 $documentSize,
                 strtoupper(trim((string) ($data['document_format'] ?? 'PDF'))) ?: 'PDF'
             );
+
+        if (($data['watermark_enabled'] ?? false) && ($result['status'] ?? '') === 'success' && is_array($result['document'] ?? null)) {
+            $result['document'] = $this->pdfWatermarkService->addStampToDocument(
+                $result['document'],
+                trim((string) ($data['watermark_text'] ?? '')) ?: 'WAJIB VIDEO UNBOXING'
+            );
+        }
 
         return response()->json($result, in_array(($result['status'] ?? ''), ['success', 'pending'], true) ? 200 : 422);
     }
@@ -276,6 +287,67 @@ class MarketplaceAutoSyncController extends Controller
         $result = $this->syncService->syncStockAnomaly($data['sku'], $data['source_marketplace']);
 
         return response()->json($result, ($result['status'] ?? 'success') === 'error' ? 422 : 200);
+    }
+
+    public function refreshStockAnomalyProducts(Request $request): JsonResponse
+    {
+        set_time_limit(0);
+        $data = $request->validate([
+            'items' => ['required', 'array', 'min:1', 'max:50'],
+            'items.*.issue_type' => ['nullable', 'string'],
+            'items.*.sku' => ['nullable', 'string'],
+            'items.*.shopee_product_id' => ['nullable'],
+            'items.*.tiktok_product_id' => ['nullable'],
+        ]);
+
+        $refs = collect($data['items'])
+            ->reduce(function (array $carry, array $item): array {
+                $issueType = (string) ($item['issue_type'] ?? '');
+                $shopeeProductId = trim((string) ($item['shopee_product_id'] ?? ''));
+                $tiktokProductId = trim((string) ($item['tiktok_product_id'] ?? ''));
+
+                if (in_array($issueType, ['stock_mismatch', 'missing_shopee_stock'], true) && $shopeeProductId !== '') {
+                    $carry['shopee_item_ids'][] = $shopeeProductId;
+                }
+
+                if (in_array($issueType, ['stock_mismatch', 'missing_tiktok_stock'], true) && $tiktokProductId !== '') {
+                    $carry['tiktok_product_ids'][] = $tiktokProductId;
+                }
+
+                return $carry;
+            }, ['shopee_item_ids' => [], 'tiktok_product_ids' => []]);
+
+        $refs['shopee_item_ids'] = array_values(array_slice(array_unique($refs['shopee_item_ids']), 0, 30));
+        $refs['tiktok_product_ids'] = array_values(array_slice(array_unique($refs['tiktok_product_ids']), 0, 30));
+
+        if ($refs['shopee_item_ids'] === [] && $refs['tiktok_product_ids'] === []) {
+            return response()->json([
+                'status' => 'skipped',
+                'message' => 'Tidak ada produk marketplace spesifik yang bisa di-refresh dari anomali ini.',
+                'refs' => $refs,
+            ]);
+        }
+
+        $result = app(OmnichannelController::class)->syncMarketplaceProductCachesForOrder($refs);
+        $this->syncService->logSync(
+            'stock_anomaly_product_refresh',
+            'marketplace_products',
+            collect($data['items'])->pluck('sku')->filter()->unique()->take(5)->implode(','),
+            null,
+            null,
+            ($result['status'] ?? '') === 'success' ? 'success' : 'warning',
+            sprintf(
+                'Auto refresh produk anomali: Shopee=%s TikTok=%s. %s',
+                count($refs['shopee_item_ids']),
+                count($refs['tiktok_product_ids']),
+                $result['message'] ?? '-'
+            )
+        );
+
+        return response()->json([
+            ...$result,
+            'refs' => $refs,
+        ]);
     }
 
     private function shippingLabelOrderRef(object $row): string

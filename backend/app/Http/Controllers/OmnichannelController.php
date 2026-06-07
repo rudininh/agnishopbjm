@@ -4401,7 +4401,7 @@ class OmnichannelController extends Controller
         return [
             'status' => $hasError ? 'warning' : 'success',
             'message' => sprintf(
-                'Refresh cache produk order selesai. Shopee=%s TikTok=%s.',
+                'Refresh cache produk marketplace selesai. Shopee=%s TikTok=%s.',
                 $shopeeItemIds->count(),
                 $tiktokProductIds->count()
             ),

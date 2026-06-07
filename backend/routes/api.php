@@ -77,6 +77,7 @@ Route::get('marketplace/auto-sync/order-watchdog', [MarketplaceAutoSyncControlle
 Route::get('marketplace/auto-sync/reconciliation-report', [MarketplaceAutoSyncController::class, 'reconciliationReport']);
 Route::get('marketplace/auto-sync/queue-dashboard', [MarketplaceAutoSyncController::class, 'queueDashboard']);
 Route::post('marketplace/auto-sync/stock-anomalies/sync', [MarketplaceAutoSyncController::class, 'syncStockAnomaly']);
+Route::post('marketplace/auto-sync/stock-anomalies/refresh-products', [MarketplaceAutoSyncController::class, 'refreshStockAnomalyProducts']);
 Route::get('marketplace/auto-sync/order-sync/export', [MarketplaceAutoSyncController::class, 'exportOrderSync']);
 Route::get('marketplace/auto-sync/order-sync/{id}', [MarketplaceAutoSyncController::class, 'orderSyncDetail'])->whereNumber('id');
 Route::post('marketplace/auto-sync/order-sync/{id}/retry', [MarketplaceAutoSyncController::class, 'retryOrderSync'])->whereNumber('id');

@@ -24,7 +24,8 @@ class MarketplaceApiService
         $order = is_array($detail['order'] ?? null) ? $detail['order'] : [];
         $package = data_get($order, 'package_list.0', []);
         $packageNumber = (string) (data_get($package, 'package_number') ?: '');
-        $trackingNumber = (string) (data_get($package, 'tracking_number') ?: '');
+        $trackingNumber = $this->normalizeShopeeTrackingNumber(data_get($package, 'tracking_number'));
+        $trackingNumberSource = $trackingNumber !== '' ? 'order_detail' : '';
 
         $parameter = $this->shopeeSignedPost('/api/v2/logistics/get_shipping_document_parameter', (int) $token->shop_id, (string) $token->access_token, [
             'order_list' => [[
@@ -38,11 +39,23 @@ class MarketplaceApiService
             ? $documentType
             : (string) ($parameterRow['suggest_shipping_document_type'] ?? data_get($parameterRow, 'selectable_shipping_document_type.0', 'THERMAL_AIR_WAYBILL'));
         $packageNumber = $packageNumber ?: (string) ($parameterRow['package_number'] ?? '');
-        $trackingNumber = $trackingNumber ?: (string) ($parameterRow['tracking_number'] ?? '');
+        $parameterTrackingNumber = $this->normalizeShopeeTrackingNumber($parameterRow['tracking_number'] ?? '');
+        if ($trackingNumber === '' && $parameterTrackingNumber !== '') {
+            $trackingNumber = $parameterTrackingNumber;
+            $trackingNumberSource = 'shipping_document_parameter';
+        }
+
+        $trackingNumberResponse = $this->fetchShopeeTrackingNumberForDocument($token, $orderSn, $packageNumber);
+        $resolvedTrackingNumber = $this->firstShopeeTrackingNumber($trackingNumberResponse);
+        if ($resolvedTrackingNumber !== '') {
+            $trackingNumber = $resolvedTrackingNumber;
+            $trackingNumberSource = 'get_tracking_number';
+        }
 
         $orderPayload = array_filter([
             'order_sn' => $orderSn,
             'package_number' => $packageNumber,
+            'tracking_number' => $trackingNumber,
             'shipping_document_type' => $resolvedDocumentType,
         ], fn ($value) => $value !== null && $value !== '');
 
@@ -50,10 +63,36 @@ class MarketplaceApiService
             $token,
             $orderSn,
             $orderPayload,
-            $parameter
+            $parameter,
+            [
+                'tracking_number_response' => $trackingNumberResponse,
+                'tracking_number_source' => $trackingNumberSource,
+            ]
         );
 
         if (($documentResult['status'] ?? '') === 'error' && $this->isShopeeTrackingNumberInvalidError($documentResult)) {
+            if (($orderPayload['tracking_number'] ?? '') !== '') {
+                $withoutTrackingPayload = $orderPayload;
+                unset($withoutTrackingPayload['tracking_number']);
+
+                $retryWithoutTrackingResult = $this->fetchShopeeOfficialShippingDocumentWithPayload(
+                    $token,
+                    $orderSn,
+                    $withoutTrackingPayload,
+                    $parameter,
+                    [
+                        'tracking_number_response' => $trackingNumberResponse,
+                        'tracking_number_source' => $trackingNumberSource,
+                        'retried_without_tracking_number' => true,
+                        'first_attempt' => $documentResult,
+                    ]
+                );
+
+                if (($retryWithoutTrackingResult['status'] ?? '') !== 'error' || ! $this->isShopeeTrackingNumberInvalidError($retryWithoutTrackingResult)) {
+                    return $retryWithoutTrackingResult;
+                }
+            }
+
             $minimalPayload = array_filter([
                 'order_sn' => $orderSn,
                 'shipping_document_type' => $resolvedDocumentType,
@@ -64,7 +103,12 @@ class MarketplaceApiService
                 $orderSn,
                 $minimalPayload,
                 $parameter,
-                ['retried_without_package_number' => true, 'first_attempt' => $documentResult]
+                [
+                    'tracking_number_response' => $trackingNumberResponse,
+                    'tracking_number_source' => $trackingNumberSource,
+                    'retried_without_package_number' => true,
+                    'first_attempt' => $documentResult,
+                ]
             );
 
             if (($retryResult['status'] ?? '') !== 'error' || ! $this->isShopeeTrackingNumberInvalidError($retryResult)) {
@@ -92,6 +136,7 @@ class MarketplaceApiService
 
     private function fetchShopeeOfficialShippingDocumentWithPayload(object $token, string $orderSn, array $orderPayload, array $parameter, array $meta = []): array
     {
+        $documentPayload = $this->shopeeShippingDocumentLookupPayload($orderPayload);
         $create = $this->shopeeSignedPost('/api/v2/logistics/create_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
             'order_list' => [$orderPayload],
         ]);
@@ -110,7 +155,7 @@ class MarketplaceApiService
             }
 
             $result = $this->shopeeSignedPost('/api/v2/logistics/get_shipping_document_result', (int) $token->shop_id, (string) $token->access_token, [
-                'order_list' => [$orderPayload],
+                'order_list' => [$documentPayload],
             ]);
 
             if (($result['error'] ?? '') !== '') {
@@ -139,7 +184,7 @@ class MarketplaceApiService
         }
 
         $download = $this->shopeeSignedPostRaw('/api/v2/logistics/download_shipping_document', (int) $token->shop_id, (string) $token->access_token, [
-            'order_list' => [$orderPayload],
+            'order_list' => [$documentPayload],
         ]);
         $downloadResult = $this->normalizeOfficialDocumentResponse($download, 'shopee-'.$orderSn.'.pdf', [
             'create_response' => $create,
@@ -163,6 +208,74 @@ class MarketplaceApiService
         ]);
 
         return $this->normalizeOfficialDocumentResponse($download, 'shopee-'.$orderSn.'.pdf', $meta);
+    }
+
+    private function fetchShopeeTrackingNumberForDocument(object $token, string $orderSn, string $packageNumber = ''): array
+    {
+        $params = array_filter([
+            'order_sn' => $orderSn,
+            'package_number' => $packageNumber,
+            'response_optional_fields' => 'first_mile_tracking_number,last_mile_tracking_number,plp_number',
+        ], fn ($value) => $value !== null && $value !== '');
+
+        return $this->shopeeSignedGet('/api/v2/logistics/get_tracking_number', (int) $token->shop_id, (string) $token->access_token, $params);
+    }
+
+    private function firstShopeeTrackingNumber(array $response): string
+    {
+        foreach ([
+            'response.tracking_number',
+            'response.first_mile_tracking_number',
+            'response.last_mile_tracking_number',
+            'response.shopee_tracking_number',
+            'response.plp_number',
+            'tracking_number',
+            'first_mile_tracking_number',
+            'last_mile_tracking_number',
+            'shopee_tracking_number',
+            'plp_number',
+        ] as $path) {
+            $trackingNumber = $this->normalizeShopeeTrackingNumber(data_get($response, $path));
+            if ($trackingNumber !== '') {
+                return $trackingNumber;
+            }
+        }
+
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveArrayIterator($response));
+        foreach ($iterator as $key => $value) {
+            $key = strtolower((string) $key);
+            if (! str_contains($key, 'tracking') && $key !== 'plp_number') {
+                continue;
+            }
+
+            $trackingNumber = $this->normalizeShopeeTrackingNumber($value);
+            if ($trackingNumber !== '') {
+                return $trackingNumber;
+            }
+        }
+
+        return '';
+    }
+
+    private function normalizeShopeeTrackingNumber(mixed $value): string
+    {
+        if (! is_scalar($value)) {
+            return '';
+        }
+
+        $trackingNumber = preg_replace('/\s+/', '', trim((string) $value)) ?: '';
+        if (in_array(strtolower($trackingNumber), ['-', 'null', 'n/a', 'na'], true)) {
+            return '';
+        }
+
+        return $trackingNumber;
+    }
+
+    private function shopeeShippingDocumentLookupPayload(array $orderPayload): array
+    {
+        unset($orderPayload['tracking_number']);
+
+        return $orderPayload;
     }
 
     public function fetchShopeeOrderDetail(string $orderSn): array
