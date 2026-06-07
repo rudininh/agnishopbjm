@@ -117,6 +117,7 @@ class PosController extends Controller
         ]);
 
         $order = DB::transaction(function () use ($data) {
+            $deductStock = (bool) config('pos.deduct_stock', false);
             $userId = request()->user()?->getAuthIdentifier()
                 ?? User::query()->value('uuid')
                 ?? User::query()->create([
@@ -165,17 +166,24 @@ class PosController extends Controller
                     'unit_price' => $unitPrice,
                 ]);
 
-                DB::table('stock_master')
-                    ->where('id', (int) $stock->id)
-                    ->update([
-                        'stock_qty' => (int) $stock->stock_qty - (int) $item['quantity'],
-                        'updated_at' => now(),
-                    ]);
+                if ($deductStock) {
+                    DB::table('stock_master')
+                        ->where('id', (int) $stock->id)
+                        ->update([
+                            'stock_qty' => (int) $stock->stock_qty - (int) $item['quantity'],
+                            'updated_at' => now(),
+                        ]);
 
-                $product->update([
-                    'stock' => (int) $stock->stock_qty - (int) $item['quantity'],
-                    'price' => $unitPrice,
-                ]);
+                    $product->update([
+                        'stock' => (int) $stock->stock_qty - (int) $item['quantity'],
+                        'price' => $unitPrice,
+                    ]);
+                } else {
+                    $product->update([
+                        'stock' => (int) $stock->stock_qty,
+                        'price' => $unitPrice,
+                    ]);
+                }
             }
 
             $cashReceived = (float) ($data['cash_received'] ?? 0);
