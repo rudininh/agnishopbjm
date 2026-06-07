@@ -86,6 +86,12 @@ export const orderService = {
   }
 }
 
+export const posService = {
+  checkout(data) {
+    return api.post('/pos/offline-orders', data)
+  }
+}
+
 export const omnichannelService = {
   dashboard() {
     return api.get('/omnichannel/dashboard')

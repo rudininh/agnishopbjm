@@ -15,6 +15,7 @@ import DokumentasiTiktok from '@/pages/DokumentasiTiktok.vue'
 import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
 import StockAnomalies from '@/pages/StockAnomalies.vue'
 import ShippingLabels from '@/pages/ShippingLabels.vue'
+import POSOffline from '@/pages/POSOffline.vue'
 
 const routes = [
   {
@@ -96,6 +97,11 @@ const routes = [
     path: '/marketplace/stock-anomalies',
     name: 'marketplace-stock-anomalies',
     component: StockAnomalies
+  },
+  {
+    path: '/pos-offline',
+    name: 'pos-offline',
+    component: POSOffline
   },
   {
     path: '/dokumentasi-shopee',

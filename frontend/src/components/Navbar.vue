@@ -19,6 +19,7 @@
       <RouterLink to="/analisa-product-variant">Analisa Product & Variant</RouterLink>
       <RouterLink to="/detail-produk-marketplace">Detail Produk</RouterLink>
       <RouterLink to="/sync-shopee-to-tiktok">Sync Shopee ke TikTok</RouterLink>
+      <RouterLink to="/pos-offline">POS Offline</RouterLink>
       <div class="menu-group">
         <span>Marketplace</span>
         <RouterLink to="/marketplace/auto-sync">Sinkronisasi Otomatis</RouterLink>
