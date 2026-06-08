@@ -43,10 +43,13 @@ class SyncRuntimeController extends Controller
                 $body = ['raw' => $response->body()];
             }
 
+            $bridgeIsHealthy = $response->successful() || $response->status() === 401;
+
             return response()->json([
-                'status' => $response->successful() ? 'ok' : 'warning',
+                'status' => $bridgeIsHealthy ? 'ok' : 'warning',
                 'url' => $url,
                 'http_status' => $response->status(),
+                'secured' => $response->status() === 401,
                 'bridge' => $body,
                 'checked_at' => now()->toISOString(),
             ]);

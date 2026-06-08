@@ -38,6 +38,8 @@ AUTO_SYNC_SCHEDULER_BRIDGE_TOKEN=token-untuk-mengunci-endpoint-vercel
 
 Jika `AUTO_SYNC_SCHEDULER_BRIDGE_TOKEN` kosong, bridge bisa dipanggil tanpa token. Untuk production, isi token ini.
 
+Jika `CRON_SECRET` atau `AUTO_SYNC_SCHEDULER_BRIDGE_TOKEN` sudah aktif, akses manual tanpa token akan menghasilkan `401 Unauthorized`. Itu berarti bridge hidup dan terkunci.
+
 Cron Vercel diset di `vercel.json`:
 
 ```json

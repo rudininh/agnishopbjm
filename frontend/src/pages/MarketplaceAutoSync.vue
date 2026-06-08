@@ -827,10 +827,12 @@ const bridgeStatusClass = computed(() => {
 })
 const bridgeStatusLabel = computed(() => {
   if (!bridgeStatus.value.status) return 'Belum dicek'
+  if (bridgeStatus.value.secured) return 'Locked'
   if (bridgeStatus.value.bridge?.bridge === 'skipped') return 'Skipped'
   return bridgeStatus.value.status
 })
 const bridgeMessage = computed(() => {
+  if (bridgeStatus.value.secured) return 'Bridge hidup dan terkunci token.'
   if (bridgeStatus.value.message) return bridgeStatus.value.message
   if (bridgeStatus.value.bridge?.reason) return bridgeStatus.value.bridge.reason
   if (bridgeStatus.value.bridge?.data?.message) return bridgeStatus.value.bridge.data.message
