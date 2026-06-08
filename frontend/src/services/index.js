@@ -209,6 +209,14 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync/runtime-status')
   },
 
+  autoSyncBridgeStatus() {
+    return api.get('/marketplace/auto-sync/bridge-status')
+  },
+
+  autoSyncRuntimeReadiness() {
+    return api.get('/marketplace/auto-sync/runtime-readiness')
+  },
+
   autoSyncRuntimeEvents(params = {}) {
     return api.get('/marketplace/auto-sync/runtime-events', { params })
   },

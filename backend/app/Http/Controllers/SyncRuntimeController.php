@@ -7,6 +7,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -27,6 +28,99 @@ class SyncRuntimeController extends Controller
         return response()->json([
             'status' => 'ok',
             'data' => $this->serializeRuntime($runtime),
+        ]);
+    }
+
+    public function bridgeStatus(): JsonResponse
+    {
+        $url = trim((string) env('AUTO_SYNC_SCHEDULER_BRIDGE_URL', 'https://agnishopbjm-laravel.vercel.app/api/auto-sync-scheduler'));
+
+        try {
+            $response = Http::timeout(15)->get($url);
+            $body = $response->json();
+
+            if (! is_array($body)) {
+                $body = ['raw' => $response->body()];
+            }
+
+            return response()->json([
+                'status' => $response->successful() ? 'ok' : 'warning',
+                'url' => $url,
+                'http_status' => $response->status(),
+                'bridge' => $body,
+                'checked_at' => now()->toISOString(),
+            ]);
+        } catch (\Throwable $error) {
+            return response()->json([
+                'status' => 'error',
+                'url' => $url,
+                'message' => $error->getMessage(),
+                'checked_at' => now()->toISOString(),
+            ], 502);
+        }
+    }
+
+    public function readiness(): JsonResponse
+    {
+        $runtime = $this->runtimeRow();
+        $localActive = $this->localIsActive($runtime);
+        $checks = [
+            [
+                'key' => 'local_heartbeat',
+                'label' => 'Local heartbeat',
+                'status' => $localActive ? 'ok' : 'warning',
+                'message' => $localActive
+                    ? 'Local masih aktif, online backup harus tetap standby.'
+                    : 'Local heartbeat timeout, online backup boleh mengambil alih jika setting lengkap.',
+            ],
+            [
+                'key' => 'online_backup_standby',
+                'label' => 'Online backup standby',
+                'status' => $runtime->online_backup_enabled ? 'ok' : 'warning',
+                'message' => $runtime->online_backup_enabled
+                    ? 'Online backup standby aktif.'
+                    : 'Online backup standby masih OFF.',
+            ],
+            [
+                'key' => 'real_mode',
+                'label' => 'Real mode',
+                'status' => ($runtime->online_backup_real_enabled ?? false) ? 'danger' : 'ok',
+                'message' => ($runtime->online_backup_real_enabled ?? false)
+                    ? 'Real mode ON. Pastikan token, lock, dan owner sudah benar sebelum scheduler berjalan.'
+                    : 'Real mode OFF. Scheduler tidak akan menjalankan order sync.',
+            ],
+            [
+                'key' => 'backend_runner_token',
+                'label' => 'Backend runner token',
+                'status' => trim((string) env('AUTO_SYNC_BACKUP_RUNNER_TOKEN', '')) !== '' ? 'ok' : 'warning',
+                'message' => trim((string) env('AUTO_SYNC_BACKUP_RUNNER_TOKEN', '')) !== ''
+                    ? 'Backend token sudah diset.'
+                    : 'Backend token belum diset. Real mode tidak bisa diaktifkan sebelum token ini diisi.',
+            ],
+            [
+                'key' => 'bridge_url',
+                'label' => 'Bridge URL',
+                'status' => trim((string) env('AUTO_SYNC_SCHEDULER_BRIDGE_URL', '')) !== '' ? 'ok' : 'warning',
+                'message' => trim((string) env('AUTO_SYNC_SCHEDULER_BRIDGE_URL', '')) !== ''
+                    ? 'Bridge URL memakai env backend.'
+                    : 'Bridge URL memakai default agnishopbjm-laravel.vercel.app.',
+            ],
+        ];
+
+        $readyForReal = $runtime->online_backup_enabled
+            && ($runtime->online_backup_real_enabled ?? false)
+            && ! $localActive
+            && $runtime->active_owner !== 'paused';
+
+        return response()->json([
+            'status' => 'ok',
+            'ready_for_real_run' => $readyForReal,
+            'summary' => [
+                'ok' => collect($checks)->where('status', 'ok')->count(),
+                'warning' => collect($checks)->where('status', 'warning')->count(),
+                'danger' => collect($checks)->where('status', 'danger')->count(),
+            ],
+            'checks' => $checks,
         ]);
     }
 
@@ -138,6 +232,12 @@ class SyncRuntimeController extends Controller
             if ($realRequested && ! $backupEnabled) {
                 throw ValidationException::withMessages([
                     'online_backup_real_enabled' => 'Aktifkan online backup standby lebih dulu sebelum real mode.',
+                ]);
+            }
+
+            if ($realRequested && trim((string) env('AUTO_SYNC_BACKUP_RUNNER_TOKEN', '')) === '') {
+                throw ValidationException::withMessages([
+                    'online_backup_real_enabled' => 'Set AUTO_SYNC_BACKUP_RUNNER_TOKEN di backend sebelum real mode bisa diaktifkan.',
                 ]);
             }
 

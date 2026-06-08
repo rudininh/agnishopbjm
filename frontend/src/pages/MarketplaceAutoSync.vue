@@ -107,6 +107,30 @@
       </article>
     </section>
 
+    <section class="bridge-strip">
+      <article>
+        <span>Vercel bridge</span>
+        <strong :class="['badge', bridgeStatusClass]">{{ bridgeStatusLabel }}</strong>
+      </article>
+      <article>
+        <span>HTTP status</span>
+        <strong>{{ bridgeStatus.http_status || '-' }}</strong>
+      </article>
+      <article>
+        <span>Bridge URL</span>
+        <strong>{{ bridgeStatus.url || '-' }}</strong>
+      </article>
+      <article>
+        <span>Respons</span>
+        <strong>{{ bridgeMessage }}</strong>
+      </article>
+      <article class="bridge-actions">
+        <button class="ghost" type="button" @click="loadBridgeStatus" :disabled="loadingBridgeStatus">
+          {{ loadingBridgeStatus ? 'Cek...' : 'Cek Bridge' }}
+        </button>
+      </article>
+    </section>
+
     <div class="status-grid">
       <article class="status-card">
         <div class="card-head">
@@ -336,6 +360,24 @@
         <div><span>Last scheduler</span><strong>{{ formatDate(runtimeStatus.runner_last_scheduler_tick_at) }}</strong></div>
         <div><span>Scheduler mode</span><strong>{{ runtimeStatus.runner_last_scheduler_status || '-' }}</strong></div>
       </div>
+      <section class="readiness-panel">
+        <header>
+          <div>
+            <span>Readiness</span>
+            <strong>{{ runtimeReadiness.ready_for_real_run ? 'Siap real-run' : 'Belum siap real-run' }}</strong>
+          </div>
+          <button class="ghost" type="button" @click="loadRuntimeReadiness" :disabled="loadingReadiness">
+            {{ loadingReadiness ? 'Cek...' : 'Cek Readiness' }}
+          </button>
+        </header>
+        <div class="readiness-grid">
+          <article v-for="item in runtimeReadiness.checks || []" :key="item.key">
+            <span :class="['badge', readinessClass(item.status)]">{{ item.status }}</span>
+            <strong>{{ item.label }}</strong>
+            <p>{{ item.message }}</p>
+          </article>
+        </div>
+      </section>
       <div class="table-actions">
         <button class="ghost" type="button" @click="loadRuntimeEvents(1)">Refresh Riwayat Runtime</button>
       </div>
@@ -697,6 +739,8 @@ const noticeType = ref('success')
 const dashboard = ref({ statuses: {}, engine: {}, safety: {}, order_sync: {}, webhook_urls: {} })
 const runtimeStatus = ref({})
 const runtimeEvents = ref({ items: [], pagination: { page: 1, last_page: 1, total: 0 } })
+const bridgeStatus = ref({})
+const runtimeReadiness = ref({ checks: [], summary: {}, ready_for_real_run: false })
 const webhookLogs = ref([])
 const syncLogs = ref([])
 const webhookPagination = ref({ page: 1, last_page: 1, total: 0 })
@@ -710,6 +754,8 @@ const reconciliationReport = ref({ summary: {}, items: [], generated_at: null })
 const queueDashboard = ref({ summary: {}, items: [] })
 const loadingStockAnomalies = ref(false)
 const loadingWatchdog = ref(false)
+const loadingBridgeStatus = ref(false)
+const loadingReadiness = ref(false)
 const runningAnomalyKey = ref('')
 const detailModal = reactive({ open: false, loading: false, retrying: false, data: null })
 const bulkSkuPreview = reactive({ open: false, loading: false, data: null })
@@ -774,6 +820,27 @@ const runtimeOwnerClass = computed(() => {
   if (runtimeStatus.value.active_owner === 'paused') return 'error'
   return 'success'
 })
+const bridgeStatusClass = computed(() => {
+  if (bridgeStatus.value.status === 'ok') return 'success'
+  if (bridgeStatus.value.status === 'warning') return 'neutral'
+  return 'error'
+})
+const bridgeStatusLabel = computed(() => {
+  if (!bridgeStatus.value.status) return 'Belum dicek'
+  if (bridgeStatus.value.bridge?.bridge === 'skipped') return 'Skipped'
+  return bridgeStatus.value.status
+})
+const bridgeMessage = computed(() => {
+  if (bridgeStatus.value.message) return bridgeStatus.value.message
+  if (bridgeStatus.value.bridge?.reason) return bridgeStatus.value.bridge.reason
+  if (bridgeStatus.value.bridge?.data?.message) return bridgeStatus.value.bridge.data.message
+  return '-'
+})
+const readinessClass = (status) => {
+  if (status === 'ok') return 'success'
+  if (status === 'danger') return 'error'
+  return 'neutral'
+}
 const failureNotificationLabel = computed(() => {
   const config = dashboard.value.engine?.failure_notifications
   if (!config?.enabled) return 'Off'
@@ -793,6 +860,31 @@ const loadDashboard = async () => {
 const loadRuntimeStatus = async () => {
   const { data } = await omnichannelService.autoSyncRuntimeStatus()
   runtimeStatus.value = data.data || {}
+}
+
+const loadBridgeStatus = async () => {
+  loadingBridgeStatus.value = true
+  try {
+    const { data } = await omnichannelService.autoSyncBridgeStatus()
+    bridgeStatus.value = data || {}
+  } catch (error) {
+    bridgeStatus.value = {
+      status: 'error',
+      message: error?.response?.data?.message || error?.message || 'Bridge status gagal dicek.'
+    }
+  } finally {
+    loadingBridgeStatus.value = false
+  }
+}
+
+const loadRuntimeReadiness = async () => {
+  loadingReadiness.value = true
+  try {
+    const { data } = await omnichannelService.autoSyncRuntimeReadiness()
+    runtimeReadiness.value = data || runtimeReadiness.value
+  } finally {
+    loadingReadiness.value = false
+  }
 }
 
 const loadRuntimeEvents = async (page = runtimeEvents.value.pagination?.page || 1) => {
@@ -1055,6 +1147,8 @@ const loadAll = async () => {
     await Promise.all([
       loadDashboard(),
       loadRuntimeStatus(),
+      loadBridgeStatus(),
+      loadRuntimeReadiness(),
       loadRuntimeEvents(1),
       loadWebhookLogs(1),
       loadOrderSync(1),
@@ -1585,6 +1679,20 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .runtime-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .runtime-actions div { display:flex; gap:8px; flex-wrap:wrap; }
 .runtime-actions button { padding:7px 9px; font-size:12px; }
+.bridge-strip { display:grid; grid-template-columns:1fr 1fr 2fr 2fr auto; gap:10px; margin-bottom:14px; }
+.bridge-strip article { display:grid; gap:6px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:12px; min-width:0; }
+.bridge-strip span { color:#475569; font-size:12px; font-weight:800; }
+.bridge-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bridge-actions { align-content:center; }
+.bridge-actions button { white-space:nowrap; }
+.readiness-panel { border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:12px; background:#fff; }
+.readiness-panel header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; }
+.readiness-panel header span { display:block; color:#64748b; font-size:12px; font-weight:800; margin-bottom:3px; }
+.readiness-panel header strong { font-size:16px; }
+.readiness-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+.readiness-grid article { border:1px solid #e2e8f0; border-radius:6px; padding:10px; background:#f8fafc; }
+.readiness-grid article strong { display:block; margin-top:8px; font-size:13px; }
+.readiness-grid article p { margin:6px 0 0; color:#475569; font-size:12px; line-height:1.35; }
 .status-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:14px; }
 .status-card,.panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .status-card { padding:16px; }
@@ -1659,6 +1767,6 @@ td { color:#0f172a; }
 .detail-items span { display:block; color:#475569; font-size:12px; margin-top:2px; }
 .detail-table table { min-width:980px; }
 @media (max-width:1360px) { .status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.runtime-strip { grid-template-columns:1fr; } }
+@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.runtime-strip,.bridge-strip { grid-template-columns:1fr; } }
 @media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.alert-card,.detail-grid,.detail-items article,.anomaly-filter-row,.compact-filter-row { grid-template-columns:1fr; } }
 </style>

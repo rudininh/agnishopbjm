@@ -43,6 +43,8 @@ Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVaria
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
 Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
 Route::get('marketplace/auto-sync/runtime-status', [SyncRuntimeController::class, 'status']);
+Route::get('marketplace/auto-sync/bridge-status', [SyncRuntimeController::class, 'bridgeStatus']);
+Route::get('marketplace/auto-sync/runtime-readiness', [SyncRuntimeController::class, 'readiness']);
 Route::get('marketplace/auto-sync/runtime-events', [SyncRuntimeController::class, 'events']);
 Route::post('marketplace/auto-sync/runtime-heartbeat', [SyncRuntimeController::class, 'heartbeat']);
 Route::post('marketplace/auto-sync/runtime-settings', [SyncRuntimeController::class, 'updateSettings']);
