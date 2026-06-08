@@ -43,11 +43,11 @@ Cron Vercel diset di `vercel.json`:
 ```json
 {
   "path": "/api/auto-sync-scheduler",
-  "schedule": "*/15 * * * *"
+  "schedule": "0 15 * * *"
 }
 ```
 
-Artinya bridge mencoba tick setiap 15 menit. Selama real mode OFF, Laravel tetap hanya dry-run.
+Artinya bridge mencoba tick 1x sehari sekitar 23.00 WITA. Jadwal ini mengikuti batas Vercel Hobby/free yang hanya mengizinkan cron harian. Selama real mode OFF, Laravel tetap hanya dry-run.
 
 Contoh panggil manual:
 
