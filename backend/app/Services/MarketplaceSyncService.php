@@ -170,6 +170,8 @@ class MarketplaceSyncService
 
     public function stockAnomalies(array $filters = [], int $page = 1, int $perPage = 30): array
     {
+        $this->autoHideInactiveStockMasterMappings();
+
         $type = trim((string) ($filters['type'] ?? ''));
         $search = mb_strtolower(trim((string) ($filters['search'] ?? '')));
         $rows = $this->activeSkuMappings();
@@ -191,15 +193,15 @@ class MarketplaceSyncService
                 $issueType = 'incomplete_mapping';
                 $severity = 'error';
                 $message = 'Mapping Shopee belum lengkap.';
-            } elseif ($shopeeStock === null) {
+            } elseif ($shopeeStock === null && ($tiktokStock ?? 0) > 0) {
                 $issueType = 'missing_shopee_stock';
                 $severity = 'error';
                 $message = 'Stok Shopee belum tersedia di cache.';
-            } elseif (! $hasTiktokSku || $tiktokStock === null) {
+            } elseif ((! $hasTiktokSku || $tiktokStock === null) && ($shopeeStock ?? 0) > 0) {
                 $issueType = 'missing_tiktok_stock';
                 $severity = 'error';
                 $message = 'Varian TikTok aktif belum ditemukan dari SKU/nama varian.';
-            } elseif ($shopeeStock !== $tiktokStock) {
+            } elseif ($shopeeStock !== null && $tiktokStock !== null && $shopeeStock !== $tiktokStock) {
                 $issueType = 'stock_mismatch';
                 $severity = 'warning';
                 $message = sprintf('Stok tidak sinkron. Shopee=%s TikTok=%s.', $shopeeStock, $tiktokStock);
@@ -1164,6 +1166,87 @@ class MarketplaceSyncService
     private function livePushEnabled(): bool
     {
         return filter_var(env('AUTO_SYNC_PUSH_LIVE', false), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function ensureSkuMappingVisibilityColumns(): void
+    {
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS is_hidden_from_mapping BOOLEAN DEFAULT FALSE");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS hidden_from_mapping_reason TEXT NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS hidden_from_mapping_at TIMESTAMP NULL");
+        DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS hidden_from_mapping_by VARCHAR(255) NULL");
+    }
+
+    private function autoHideInactiveStockMasterMappings(): int
+    {
+        if (! Schema::hasTable('stock_master')) {
+            return 0;
+        }
+
+        $this->ensureSkuMappingVisibilityColumns();
+
+        return DB::table('stock_master as sm')
+            ->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false')
+            ->where(function ($query): void {
+                $query->whereRaw("NULLIF(COALESCE(sm.shopee_product_id, ''), '') IS NOT NULL")
+                    ->orWhereRaw("NULLIF(COALESCE(sm.shopee_sku, ''), '') IS NOT NULL")
+                    ->orWhereRaw("NULLIF(COALESCE(sm.tiktok_product_id, ''), '') IS NOT NULL")
+                    ->orWhereRaw("NULLIF(COALESCE(sm.tiktok_sku, ''), '') IS NOT NULL");
+            })
+            ->whereRaw("
+                NOT EXISTS (
+                    SELECT 1
+                    FROM shopee_product sp
+                    JOIN shopee_product_model spm ON spm.item_id = sp.item_id
+                    WHERE COALESCE(sp.is_active, true) = true
+                      AND (
+                        NULLIF(COALESCE(sm.shopee_product_id, ''), '') IS NULL
+                        OR (
+                            sm.shopee_product_id ~ '^[0-9]+$'
+                            AND sp.item_id = sm.shopee_product_id::BIGINT
+                        )
+                      )
+                      AND (
+                        NULLIF(COALESCE(sm.shopee_sku, ''), '') IS NULL
+                        OR spm.model_id = sm.shopee_sku
+                      )
+                      AND (
+                        NULLIF(COALESCE(sm.variant_name, ''), '') IS NULL
+                        OR LOWER(TRIM(spm.name)) = LOWER(TRIM(sm.variant_name))
+                      )
+                )
+            ")
+            ->whereRaw("
+                NOT EXISTS (
+                    SELECT 1
+                    FROM tiktok_products tp
+                    WHERE COALESCE(tp.is_active, true) = true
+                      AND (
+                        (
+                            NULLIF(COALESCE(sm.tiktok_product_id, ''), '') IS NOT NULL
+                            AND tp.product_id = sm.tiktok_product_id
+                            AND (
+                                NULLIF(COALESCE(sm.tiktok_sku, ''), '') IS NULL
+                                OR tp.sku_id = sm.tiktok_sku
+                            )
+                        )
+                        OR (
+                            NULLIF(COALESCE(sm.tiktok_seller_sku, ''), '') IS NOT NULL
+                            AND tp.seller_sku = sm.tiktok_seller_sku
+                        )
+                        OR (
+                            NULLIF(COALESCE(sm.shopee_seller_sku, ''), '') IS NOT NULL
+                            AND tp.seller_sku = sm.shopee_seller_sku
+                        )
+                    )
+                )
+            ")
+            ->update([
+                'is_hidden_from_mapping' => DB::raw('true'),
+                'hidden_from_mapping_reason' => 'Auto-hide: varian marketplace aktif tidak ditemukan saat anomali stok dibuka.',
+                'hidden_from_mapping_at' => now(),
+                'hidden_from_mapping_by' => 'system',
+                'updated_at' => now(),
+            ]);
     }
 
     private function orderSyncSummary(Carbon $today): array
