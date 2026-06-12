@@ -340,12 +340,12 @@ const drawCanvasStamp = (ctx, width, height, text) => {
   const stampText = String(text || 'WAJIB VIDEO UNBOXING').toUpperCase()
   const drawStamp = (centerY, fontSize, lineWidth) => {
     ctx.save()
-    ctx.globalAlpha = 0.5
+    ctx.globalAlpha = 1
     ctx.font = `700 ${fontSize}px Arial, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.strokeStyle = '#b91c1c'
-    ctx.fillStyle = '#b91c1c'
+    ctx.strokeStyle = '#000'
+    ctx.fillStyle = '#000'
     ctx.lineWidth = lineWidth
     const metrics = ctx.measureText(stampText)
     const stampWidth = Math.min(width * 0.88, Math.max(width * 0.48, metrics.width + fontSize * 1.2))
@@ -357,7 +357,6 @@ const drawCanvasStamp = (ctx, width, height, text) => {
     ctx.restore()
   }
 
-  drawStamp(height * 0.64, Math.max(36, Math.min(62, width * 0.075)), Math.max(3, width * 0.006))
   drawStamp(height * 0.86, Math.max(26, Math.min(42, width * 0.052)), Math.max(2, width * 0.004))
 }
 

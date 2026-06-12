@@ -36,8 +36,8 @@ class PdfWatermarkService
             'filename' => $this->watermarkedFilename((string) ($document['filename'] ?? 'shipping-document.pdf')),
             'watermark' => [
                 'text' => $text,
-                'opacity' => 0.5,
-                'position' => 'main_and_footer',
+                'opacity' => 1,
+                'position' => 'footer',
             ],
         ];
     }
@@ -66,7 +66,6 @@ class PdfWatermarkService
 
                 $pdf->AddPage($orientation, [$width, $height]);
                 $pdf->useTemplate($template, 0, 0, $width, $height);
-                $this->stampMain($pdf, $text, $width, $height);
                 $this->stampFooter($pdf, $text, $width, $height);
             }
 
@@ -74,34 +73,6 @@ class PdfWatermarkService
         } finally {
             @unlink($inputPath);
         }
-    }
-
-    private function stampMain(WatermarkedFpdi $pdf, string $text, float $width, float $height): void
-    {
-        $stampText = $this->toPdfText(mb_strtoupper($text));
-        $fontSize = 18;
-        $maxWidth = max(52.0, $width - 10.0);
-
-        do {
-            $pdf->SetFont('Arial', 'B', $fontSize);
-            $textWidth = $pdf->GetStringWidth($stampText) + 12;
-            $fontSize--;
-        } while ($textWidth > $maxWidth && $fontSize >= 12);
-
-        $stampWidth = min($maxWidth, max(60.0, $textWidth));
-        $stampHeight = 14.0;
-        $x = max(4.0, ($width - $stampWidth) / 2);
-        $y = min(max(54.0, $height * 0.62), max(4.0, $height - $stampHeight - 28.0));
-
-        $pdf->SetAlpha(0.5);
-        $pdf->SetTextColor(185, 28, 28);
-        $pdf->SetDrawColor(185, 28, 28);
-        $pdf->SetLineWidth(0.8);
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($stampWidth, $stampHeight, $stampText, 1, 0, 'C');
-        $pdf->SetAlpha(1);
-        $pdf->SetTextColor(0, 0, 0);
-        $pdf->SetDrawColor(0, 0, 0);
     }
 
     private function stampFooter(WatermarkedFpdi $pdf, string $text, float $width, float $height): void
@@ -121,9 +92,9 @@ class PdfWatermarkService
         $x = max(4.0, ($width - $stampWidth) / 2);
         $y = max(4.0, $height - $stampHeight - 14.0);
 
-        $pdf->SetAlpha(0.5);
-        $pdf->SetTextColor(185, 28, 28);
-        $pdf->SetDrawColor(185, 28, 28);
+        $pdf->SetAlpha(1);
+        $pdf->SetTextColor(0, 0, 0);
+        $pdf->SetDrawColor(0, 0, 0);
         $pdf->SetLineWidth(0.45);
         $pdf->SetXY($x, $y);
         $pdf->Cell($stampWidth, $stampHeight, $stampText, 1, 0, 'C');
