@@ -37,6 +37,7 @@
         <div class="menu-group">
           <span>Marketplace</span>
           <RouterLink to="/marketplace/auto-sync">Sinkronisasi Otomatis</RouterLink>
+          <RouterLink to="/marketplace/import">Import Marketplace</RouterLink>
           <RouterLink to="/marketplace/cetak-resi">Cetak Resi</RouterLink>
           <RouterLink to="/marketplace/stock-anomalies">Anomali Stok</RouterLink>
         </div>

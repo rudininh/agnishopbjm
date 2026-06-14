@@ -303,6 +303,50 @@ class MarketplaceApiService
         return ['status' => 'success', 'order' => $order, 'response' => $response];
     }
 
+    public function fetchShopeeOrderDetails(array $orderSns): array
+    {
+        $orderSns = collect($orderSns)
+            ->map(fn ($orderSn): string => trim((string) $orderSn))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($orderSns === []) {
+            return ['status' => 'success', 'orders' => []];
+        }
+
+        $token = $this->activeShopeeToken();
+        if (! $token) {
+            return ['status' => 'error', 'message' => 'Token Shopee aktif belum tersedia.'];
+        }
+
+        $orders = [];
+        foreach (array_chunk($orderSns, 50) as $chunk) {
+            $response = $this->shopeeSignedGet('/api/v2/order/get_order_detail', (int) $token->shop_id, (string) $token->access_token, [
+                'order_sn_list' => implode(',', $chunk),
+                'response_optional_fields' => 'order_status,item_list,recipient_address,package_list,shipping_carrier,update_time',
+            ]);
+
+            if (($response['error'] ?? '') !== '') {
+                return ['status' => 'error', 'message' => $response['message'] ?? $response['error'], 'response' => $response];
+            }
+
+            foreach ((array) data_get($response, 'response.order_list', []) as $order) {
+                if (! is_array($order)) {
+                    continue;
+                }
+
+                $orderSn = trim((string) ($order['order_sn'] ?? ''));
+                if ($orderSn !== '') {
+                    $orders[$orderSn] = $order;
+                }
+            }
+        }
+
+        return ['status' => 'success', 'orders' => $orders];
+    }
+
     public function fetchShopeeOrderSnList(int $timeFrom, int $timeTo, ?string $orderStatus = null): array
     {
         $token = $this->activeShopeeToken();
@@ -474,7 +518,7 @@ class MarketplaceApiService
         if (! is_array($payload) || (int) ($payload['code'] ?? -1) !== 0) {
             return [
                 'status' => 'error',
-                'message' => is_array($payload) ? ($payload['message'] ?? 'Dokumen resmi TikTok gagal diambil.') : 'TikTok tidak mengembalikan JSON valid.',
+                'message' => is_array($payload) ? $this->humanizeTiktokShippingDocumentError($payload) : 'TikTok tidak mengembalikan JSON valid.',
                 'http_status' => $response->status(),
                 'response' => $payload,
             ];
@@ -840,7 +884,7 @@ class MarketplaceApiService
 
     private function firstDocumentUrl(array $payload): string
     {
-        foreach (['document_url', 'shipping_document_url', 'url', 'file_url', 'download_url'] as $key) {
+        foreach (['doc_url', 'document_url', 'shipping_document_url', 'url', 'file_url', 'download_url'] as $key) {
             $value = data_get($payload, 'data.'.$key, data_get($payload, 'response.'.$key, data_get($payload, $key)));
             if (is_string($value) && str_starts_with($value, 'http')) {
                 return $value;
@@ -878,6 +922,11 @@ class MarketplaceApiService
             'package_list.0.package_id',
             'package_id',
             'fulfillment_packages.0.id',
+            'fulfillment_packages.0.package_id',
+            'delivery_packages.0.id',
+            'delivery_packages.0.package_id',
+            'logistics_packages.0.id',
+            'logistics_packages.0.package_id',
         ] as $path) {
             $value = trim((string) data_get($order, $path, ''));
             if ($value !== '') {
@@ -886,6 +935,23 @@ class MarketplaceApiService
         }
 
         return '';
+    }
+
+    private function humanizeTiktokShippingDocumentError(array $payload): string
+    {
+        $message = (string) ($payload['message'] ?? 'Dokumen resmi TikTok gagal diambil.');
+        $code = (int) ($payload['code'] ?? 0);
+        $lower = mb_strtolower($message);
+
+        if ($code === 21042102 || str_contains($lower, 'pickup') || str_contains($lower, 'picked')) {
+            return 'Dokumen TikTok tidak bisa dicetak dari API karena paket sudah di-pickup. TikTok hanya mengizinkan dokumen diambil sebelum pickup; untuk cetak ulang gunakan Seller Center TikTok.';
+        }
+
+        if ($code === 21042101 || str_contains($lower, 'cancellation') || str_contains($lower, 'refund')) {
+            return 'Dokumen TikTok tidak bisa dicetak karena order sedang/ sudah masuk proses cancel atau refund.';
+        }
+
+        return $message;
     }
 
     private function shopeeModelStock(array $model): int

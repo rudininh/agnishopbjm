@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use setasign\Fpdi\Fpdi;
+use setasign\Fpdi\PdfReader\PageBoundaries;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -58,7 +59,7 @@ class PdfWatermarkService
             $pageCount = $pdf->setSourceFile($inputPath);
 
             for ($pageNumber = 1; $pageNumber <= $pageCount; $pageNumber++) {
-                $template = $pdf->importPage($pageNumber);
+                $template = $pdf->importPage($pageNumber, PageBoundaries::MEDIA_BOX);
                 $size = $pdf->getTemplateSize($template);
                 $width = (float) $size['width'];
                 $height = (float) $size['height'];

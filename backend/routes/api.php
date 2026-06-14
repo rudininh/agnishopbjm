@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CartController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\MarketplaceAutoSyncController;
+use App\Http\Controllers\MarketplaceImportController;
 use App\Http\Controllers\MarketplaceWebhookController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OmnichannelController;
@@ -26,6 +27,7 @@ Route::get('get-stock-master', [OmnichannelController::class, 'stockMaster']);
 Route::get('product-variant-analysis', [OmnichannelController::class, 'productVariantAnalysis']);
 Route::post('product-variant-analysis/confirm', [OmnichannelController::class, 'confirmProductVariantAnalysisIssue']);
 Route::get('product-variant-image-anomalies', [OmnichannelController::class, 'imageVariantAnomalies']);
+Route::post('product-variant-image-anomalies/sync-tiktok-from-shopee', [OmnichannelController::class, 'syncTiktokImagesFromShopee']);
 Route::get('sku-mapping', [OmnichannelController::class, 'skuMapping']);
 Route::post('sku-mapping', [OmnichannelController::class, 'saveSkuMapping']);
 Route::post('sku-mapping/sync-marketplaces', [OmnichannelController::class, 'syncMarketplaceCaches']);
@@ -59,6 +61,7 @@ Route::get('marketplace/auto-sync/order-sync', [MarketplaceAutoSyncController::c
 Route::get('marketplace/shipping-labels/orders', [MarketplaceAutoSyncController::class, 'shippingLabelOrders']);
 Route::get('marketplace/shipping-labels/order-detail', [MarketplaceAutoSyncController::class, 'shippingLabelOrderDetail']);
 Route::post('marketplace/shipping-labels/official-document', [MarketplaceAutoSyncController::class, 'shippingLabelOfficialDocument']);
+Route::post('marketplace/shipping-labels/mark-printed', [MarketplaceAutoSyncController::class, 'markShippingLabelsPrinted']);
 Route::get('marketplace/auto-sync/stock-anomalies', [MarketplaceAutoSyncController::class, 'stockAnomalies']);
 Route::get('marketplace/auto-sync/sku-change-history', [MarketplaceAutoSyncController::class, 'skuChangeHistory']);
 Route::get('marketplace/auto-sync/order-watchdog', [MarketplaceAutoSyncController::class, 'orderWatchdog']);
@@ -76,6 +79,10 @@ Route::post('marketplace/auto-sync/retry-open-issues', [MarketplaceAutoSyncContr
 Route::post('marketplace/auto-sync/bulk-update-empty-skus', [MarketplaceAutoSyncController::class, 'bulkUpdateEmptySkus']);
 Route::post('marketplace/auto-sync/poll-shopee-orders', [MarketplaceAutoSyncController::class, 'pollShopeeOrders']);
 Route::post('marketplace/auto-sync/poll-tiktok-orders', [MarketplaceAutoSyncController::class, 'pollTiktokOrders']);
+Route::get('marketplace/import/shopee-gita/mass-update', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdate']);
+Route::get('marketplace/import/shopee-gita/mass-update/{type}', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdateFile'])
+    ->where('type', 'basic-info|sales-info|media-info|shipping-info|dts-info|republish-items');
+Route::post('marketplace/import/manual-stock-sync', [MarketplaceImportController::class, 'manualStockSync']);
 Route::post('webhooks/shopee', [MarketplaceWebhookController::class, 'shopee']);
 Route::post('webhooks/tiktok', [MarketplaceWebhookController::class, 'tiktok']);
 

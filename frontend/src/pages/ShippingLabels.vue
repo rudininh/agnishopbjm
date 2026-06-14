@@ -13,19 +13,25 @@
     <p v-if="notice.message" :class="['notice', notice.type]">{{ notice.message }}</p>
 
     <section class="summary-grid">
-      <article><span>Total Order</span><strong>{{ summary.total || 0 }}</strong></article>
+      <article><span>Belum Dikirim</span><strong>{{ summary.total || 0 }}</strong></article>
       <article><span>Shopee</span><strong>{{ summary.shopee || 0 }}</strong></article>
       <article><span>TikTok</span><strong>{{ summary.tiktok || 0 }}</strong></article>
-      <article><span>Belum Shipped</span><strong>{{ summary.total || 0 }}</strong></article>
+      <article><span>Siap Cetak</span><strong>{{ summary.total || 0 }}</strong></article>
     </section>
 
     <div class="workspace">
       <section class="panel list-panel">
         <div class="filter-stack">
           <div class="chip-row">
-            <button :class="{ active: filters.marketplace === 'all' }" type="button" @click="setFilter('marketplace', 'all')">Semua</button>
-            <button :class="{ active: filters.marketplace === 'shopee' }" type="button" @click="setFilter('marketplace', 'shopee')">Shopee</button>
-            <button :class="{ active: filters.marketplace === 'tiktok' }" type="button" @click="setFilter('marketplace', 'tiktok')">TikTok</button>
+            <button
+              v-for="tab in orderTabs"
+              :key="tab.key"
+              :class="{ active: activeTab === tab.key }"
+              type="button"
+              @click="setOrderTab(tab)"
+            >
+              {{ tab.label }}
+            </button>
           </div>
           <div class="filter-row">
             <select v-model="filters.status" @change="loadOrders(1)">
@@ -55,17 +61,32 @@
               <span :class="['market-badge', order.marketplace]">{{ marketplaceLabel(order.marketplace) }}</span>
               <strong>{{ order.order_ref }}</strong>
               <small>{{ formatDate(order.created_at) }} | {{ order.order_status || '-' }} | {{ order.shipping_carrier || '-' }} {{ order.tracking_number || '' }}</small>
+              <small>Status marketplace: {{ order.print_status || order.order_status || '-' }}<template v-if="order.marketplace_logistics_status"> | {{ order.marketplace_logistics_status }}</template></small>
+              <small>{{ order.app_print_status || 'Belum print dari aplikasi' }}<template v-if="order.app_last_printed_at"> | Terakhir {{ formatDate(order.app_last_printed_at) }}</template></small>
+              <div v-if="(order.items || []).length" class="ordered-items">
+                <div v-for="(item, index) in order.items.slice(0, 3)" :key="`${orderKey(order)}:${index}`" class="ordered-item">
+                  <img v-if="item.image_url" :src="item.image_url" alt="" loading="lazy" />
+                  <div v-else class="item-image-empty">IMG</div>
+                  <div>
+                    <strong>{{ item.name || '-' }}</strong>
+                    <small>{{ item.variant || '-' }} | {{ item.sku || '-' }} | Qty {{ item.qty || 1 }}</small>
+                  </div>
+                </div>
+                <small v-if="order.items.length > 3">+{{ order.items.length - 3 }} item lain</small>
+              </div>
               <small>{{ order.message || '-' }}</small>
             </div>
             <div class="order-actions">
               <span :class="['status-badge', order.status]">{{ order.status }}</span>
+              <span :class="['print-badge', marketplacePrintClass(order)]">{{ order.print_status || order.order_status || '-' }}</span>
+              <span :class="['app-print-badge', (order.app_print_count || 0) > 0 ? 'printed' : 'not-printed']">{{ order.app_print_status || 'Belum print app' }}</span>
               <span class="order-status">{{ order.order_status || '-' }}</span>
               <button class="mini" type="button" @click="previewOrder(order)" :disabled="previewingKey === orderKey(order)">
                 {{ previewingKey === orderKey(order) ? 'Preview...' : 'Preview' }}
               </button>
             </div>
           </article>
-          <div v-if="!orders.length" class="empty">{{ loading ? 'Sedang memuat order...' : 'Belum ada order untuk filter ini.' }}</div>
+          <div v-if="!orders.length" class="empty">{{ loading ? 'Sedang memuat order belum dikirim...' : 'Belum ada resi belum dikirim untuk filter ini.' }}</div>
         </div>
 
         <div class="pagination">
@@ -81,11 +102,11 @@
 
         <label class="check-row">
           <input v-model="documents.shipping_label" type="checkbox" />
-          <span>Label Pengiriman</span>
+          <span>Label Pengiriman (A6)</span>
         </label>
         <label class="check-row">
           <input v-model="documents.picking_list" type="checkbox" />
-          <span>Daftar Pesanan</span>
+          <span>Daftar Pengemasan (A6)</span>
         </label>
 
         <div class="print-mode">
@@ -103,14 +124,6 @@
               <option value="A4">A4</option>
             </select>
           </label>
-          <label>
-            Dokumen TikTok
-            <select v-model="officialDocumentType">
-              <option value="SHIPPING_LABEL">Shipping Label</option>
-              <option value="PACKING_SLIP">Packing Slip</option>
-              <option value="SHIPPING_LABEL_AND_PACKING_SLIP">Label + Packing Slip</option>
-            </select>
-          </label>
           <label class="watermark-option">
             <span><input v-model="officialWatermarkEnabled" type="checkbox" /> Watermark</span>
             <input v-model.trim="officialWatermarkText" :disabled="!officialWatermarkEnabled" maxlength="80" />
@@ -122,15 +135,25 @@
           <strong>{{ marketplaceLabel(previewLabel.marketplace) }} {{ previewLabel.order_ref }}</strong>
           <small>{{ previewLabel.buyer_name || '-' }}</small>
           <small>{{ previewLabel.shipping_carrier || '-' }} {{ previewLabel.tracking_number || '' }}</small>
+          <div v-if="(previewLabel.items || []).length" class="preview-items">
+            <div v-for="(item, index) in previewLabel.items" :key="`preview:${index}`" class="ordered-item">
+              <img v-if="item.image_url" :src="item.image_url" alt="" loading="lazy" />
+              <div v-else class="item-image-empty">IMG</div>
+              <div>
+                <strong>{{ item.name || '-' }}</strong>
+                <small>{{ item.variant || '-' }} | {{ item.sku || '-' }} | Qty {{ item.qty || 1 }}</small>
+              </div>
+            </div>
+          </div>
         </div>
 
         <button class="primary full" type="button" @click="printSelected" :disabled="!canPrint || printing">
           {{ printing ? 'Menyiapkan...' : 'Cetak Label Terpilih' }}
         </button>
-        <button class="ghost full" type="button" @click="printOfficialSelected" :disabled="!selectedCount || officialPrinting">
+        <button class="ghost full" type="button" @click="printOfficialSelected" :disabled="!canPrint || officialPrinting">
           {{ officialPrinting ? 'Mengambil dokumen...' : 'Cetak Dokumen Resmi' }}
         </button>
-        <p class="hint">Tabel hanya menampilkan order yang belum shipped. Dokumen resmi mengikuti aturan marketplace.</p>
+        <p class="hint">Tabel hanya menampilkan resi yang belum dikirim. Dokumen resmi mengikuti aturan marketplace.</p>
       </aside>
     </div>
   </section>
@@ -151,20 +174,32 @@ const selected = ref({})
 const detailCache = ref({})
 const previewLabel = ref(null)
 const printMode = ref('thermal')
+const activeTab = ref('all')
 const officialDocumentSize = ref('A6')
-const officialDocumentType = ref('SHIPPING_LABEL')
 const officialWatermarkEnabled = ref(true)
 const officialWatermarkText = ref('WAJIB VIDEO UNBOXING')
 const notice = ref({ type: '', message: '' })
-const documents = reactive({ shipping_label: true, picking_list: false })
-const filters = reactive({ marketplace: 'all', status: 'all', search: '' })
+const documents = reactive({ shipping_label: true, picking_list: true })
+const filters = reactive({ marketplace: 'all', status: 'all', search: '', mode: 'regular' })
 let pdfJsLoader = null
+
+const orderTabs = [
+  { key: 'all', label: 'Semua', marketplace: 'all', mode: 'regular' },
+  { key: 'shopee', label: 'Shopee', marketplace: 'shopee', mode: 'regular' },
+  { key: 'tiktok', label: 'TikTok', marketplace: 'tiktok', mode: 'regular' },
+  { key: 'shopee_instant', label: 'Instant Shopee', marketplace: 'shopee', mode: 'shopee_instant' }
+]
 
 const orderKey = (order) => `${order.marketplace}:${order.order_ref}`
 const selectedKeys = computed(() => Object.keys(selected.value).filter((key) => selected.value[key]))
 const selectedCount = computed(() => selectedKeys.value.length)
 const canPrint = computed(() => selectedCount.value > 0 && (documents.shipping_label || documents.picking_list))
 const allPageSelected = computed(() => orders.value.length > 0 && orders.value.every((order) => selected.value[orderKey(order)]))
+const officialTiktokDocumentType = computed(() => {
+  if (documents.shipping_label && documents.picking_list) return 'SHIPPING_LABEL_AND_PACKING_SLIP'
+  if (documents.picking_list) return 'PACKING_SLIP'
+  return 'SHIPPING_LABEL'
+})
 
 const setNotice = (type, message) => {
   notice.value = { type, message }
@@ -173,10 +208,38 @@ const setNotice = (type, message) => {
 const marketplaceLabel = (value) => value === 'tiktok' ? 'TikTok' : 'Shopee'
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]))
+const marketplacePrintClass = (order) => {
+  const text = `${order.print_status || ''} ${order.order_status || ''} ${order.marketplace_logistics_status || ''}`.toLowerCase()
+  if (text.includes('sudah dikirim') || text.includes('shipped') || text.includes('pickup_done') || text.includes('deliver')) return 'sent'
+  if (text.includes('ready') || text.includes('processed') || text.includes('logistics_ready')) return 'ready'
+  return 'not-printed'
+}
 
 const setFilter = (key, value) => {
   filters[key] = value
   loadOrders(1)
+}
+
+const setOrderTab = (tab) => {
+  activeTab.value = tab.key
+  filters.marketplace = tab.marketplace
+  filters.mode = tab.mode
+  selected.value = {}
+  loadOrders(1)
+}
+
+const mapWithConcurrency = async (items, limit, mapper) => {
+  const results = new Array(items.length)
+  let index = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const currentIndex = index
+      index += 1
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex)
+    }
+  })
+  await Promise.all(workers)
+  return results
 }
 
 const loadOrders = async (page = pagination.value.page || 1) => {
@@ -237,11 +300,37 @@ const selectedOrders = () => {
   return selectedKeys.value.map((key) => currentOrders.get(key)).filter(Boolean)
 }
 
+const mergePrintStatuses = (items = []) => {
+  if (!items.length) return
+
+  const statusMap = new Map(items.map((item) => [orderKey(item), item]))
+  orders.value = orders.value.map((order) => {
+    const printed = statusMap.get(orderKey(order))
+    return printed ? { ...order, ...printed } : order
+  })
+}
+
+const markPrinted = async (rows, documentType, source) => {
+  if (!rows.length) return
+
+  try {
+    const { data } = await omnichannelService.markShippingLabelsPrinted({
+      items: rows.map((order) => ({ marketplace: order.marketplace, order_ref: order.order_ref })),
+      document_type: documentType,
+      source
+    })
+    mergePrintStatuses(data.items || [])
+  } catch (error) {
+    setNotice('error', error?.response?.data?.message || error?.message || 'Status print gagal dicatat.')
+  }
+}
+
 const labelHtml = (label) => {
   const items = (label.items || []).map((item, index) => `
     <tr>
       <td>${index + 1}</td>
       <td>${escapeHtml(item.name)}</td>
+      <td>${item.image_url ? `<img class="item-thumb" src="${escapeHtml(item.image_url)}" />` : ''}</td>
       <td>${escapeHtml(item.sku)}</td>
       <td>${escapeHtml(item.variant)}</td>
       <td>${escapeHtml(item.qty)}</td>
@@ -260,7 +349,7 @@ const labelHtml = (label) => {
         <div><span>Pengirim</span><strong>${escapeHtml(label.sender_name || 'Agni Shop Banjarmasin')}</strong><p>KOTA BANJARMASIN</p></div>
       </div>
       <div class="meta"><span>No Pesanan: ${escapeHtml(label.order_ref)}</span><span>Status: ${escapeHtml(label.order_status || '-')}</span></div>
-      ${documents.picking_list ? `<table><thead><tr><th>#</th><th>Produk</th><th>SKU</th><th>Varian</th><th>Qty</th></tr></thead><tbody>${items}</tbody></table>` : ''}
+      ${documents.picking_list ? `<table><thead><tr><th>#</th><th>Produk</th><th>Gambar</th><th>SKU</th><th>Varian</th><th>Qty</th></tr></thead><tbody>${items}</tbody></table>` : ''}
     </section>
   `
 }
@@ -275,10 +364,7 @@ const printSelected = async () => {
   printing.value = true
   setNotice('', '')
   try {
-    const labels = []
-    for (const order of rows) {
-      labels.push(await fetchDetail(order))
-    }
+    const labels = await mapWithConcurrency(rows, 5, fetchDetail)
 
     const popup = window.open('', '_blank', 'width=900,height=900')
     if (!popup) throw new Error('Popup diblokir browser. Izinkan pop-up untuk mencetak label.')
@@ -292,12 +378,13 @@ const printSelected = async () => {
       .split { display:grid; grid-template-columns:1fr 1fr; gap:8px; border-bottom:1px dashed #111827; padding-bottom:8px; }
       span, small { color:#374151; font-size:11px; } strong { display:block; font-size:13px; } p { margin:4px 0; font-size:12px; line-height:1.25; }
       .meta { display:flex; justify-content:space-between; gap:8px; margin:7px 0; font-size:11px; }
-      table { width:100%; border-collapse:collapse; font-size:10px; } th,td { border-top:1px solid #d1d5db; padding:3px; text-align:left; vertical-align:top; }
+      table { width:100%; border-collapse:collapse; font-size:10px; } th,td { border-top:1px solid #d1d5db; padding:3px; text-align:left; vertical-align:top; } .item-thumb { width:34px; height:34px; object-fit:cover; border:1px solid #d1d5db; }
       @media print { body { background:#fff; } .label { margin:0; border:1px solid #111827; } }
     </style></head><body>${labels.map(labelHtml).join('')}</body></html>`)
     popup.document.close()
     popup.focus()
     popup.print()
+    await markPrinted(rows, documents.picking_list ? 'local_label_with_picking_list' : 'local_label', 'custom_label')
   } catch (error) {
     setNotice('error', error?.response?.data?.message || error?.message || 'Label gagal disiapkan.')
   } finally {
@@ -336,7 +423,7 @@ const loadPdfJs = async () => {
   return pdfJsLoader
 }
 
-const drawCanvasStamp = (ctx, width, height, text) => {
+const drawCanvasStamp = (ctx, width, centerY, text) => {
   const stampText = String(text || 'WAJIB VIDEO UNBOXING').toUpperCase()
   const drawStamp = (centerY, fontSize, lineWidth) => {
     ctx.save()
@@ -357,7 +444,7 @@ const drawCanvasStamp = (ctx, width, height, text) => {
     ctx.restore()
   }
 
-  drawStamp(height * 0.86, Math.max(26, Math.min(42, width * 0.052)), Math.max(2, width * 0.004))
+  drawStamp(centerY, Math.max(26, Math.min(42, width * 0.052)), Math.max(2, width * 0.004))
 }
 
 const renderWatermarkedPdfImages = async (marketplaceDocument, watermarkText) => {
@@ -371,10 +458,14 @@ const renderWatermarkedPdfImages = async (marketplaceDocument, watermarkText) =>
     const viewport = page.getViewport({ scale: 2.25 })
     const canvas = window.document.createElement('canvas')
     const context = canvas.getContext('2d')
-    canvas.width = Math.floor(viewport.width)
-    canvas.height = Math.floor(viewport.height)
+    const renderedWidth = Math.floor(viewport.width)
+    const renderedHeight = Math.floor(viewport.height)
+    canvas.width = renderedWidth
+    canvas.height = renderedHeight
+    context.fillStyle = '#fff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
     await page.render({ canvasContext: context, viewport }).promise
-    drawCanvasStamp(context, canvas.width, canvas.height, watermarkText)
+    drawCanvasStamp(context, canvas.width, renderedHeight * 0.92, watermarkText)
     images.push(canvas.toDataURL('image/png'))
   }
   return images
@@ -394,11 +485,14 @@ const officialDocumentHtml = async ({ order, data }) => {
     return `<section class="doc error"><h2>${title}</h2><p>Dokumen kosong.</p></section>`
   }
 
-  if (data.document?.watermark_error && data.document?.content_base64) {
+  const shouldRenderFallbackWatermark = data.document?.watermark_error
+    && data.document?.content_base64
+
+  if (shouldRenderFallbackWatermark) {
     try {
       const pages = await renderWatermarkedPdfImages(data.document, officialWatermarkText.value)
       if (pages.length) {
-        return `<section class="doc rendered-doc"><h2>${title}</h2><p class="watermark-ok">Watermark aktif di hasil render cetak.</p><button class="print-now" type="button" onclick="window.print()">Print Watermark</button><div class="rendered-pages">${pages.map((src) => `<img class="rendered-page" src="${src}" />`).join('')}</div></section>`
+        return `<section class="doc rendered-doc"><h2>${title}</h2><p class="watermark-ok">Watermark aktif di hasil render cetak. PDF asli memakai kompresi TikTok, jadi watermark digambar di halaman yang sama.</p><button class="print-now" type="button" onclick="window.print()">Print Watermark</button><div class="rendered-pages">${pages.map((src) => `<img class="rendered-page" src="${src}" />`).join('')}</div></section>`
       }
     } catch (error) {
       return `<section class="doc error"><h2>${title}</h2><p>Watermark gagal dirender: ${escapeHtml(error?.message || 'PDF tidak bisa dirender.')}</p></section>`
@@ -418,6 +512,10 @@ const printOfficialSelected = async () => {
     setNotice('error', 'Pilih order pada halaman ini dulu.')
     return
   }
+  if (!documents.shipping_label && !documents.picking_list) {
+    setNotice('error', 'Pilih Label Pengiriman atau Daftar Pengemasan dulu.')
+    return
+  }
 
   const popup = window.open('', '_blank', 'width=1000,height=900')
   if (!popup) {
@@ -430,36 +528,36 @@ const printOfficialSelected = async () => {
   popup.document.write('<!doctype html><html><head><title>Dokumen Resmi Marketplace</title><style>body{font-family:Arial,sans-serif;margin:18px;background:#f3f4f6;color:#111827}.doc{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-bottom:14px}iframe,object{width:100%;height:760px;border:1px solid #e5e7eb}a{color:#0f5fc7;font-weight:700}.error{color:#991b1b;background:#fef2f2;border-color:#fecaca}</style></head><body><h1>Menyiapkan dokumen resmi...</h1></body></html>')
   popup.document.close()
 
-  const results = []
-  for (const order of rows) {
+  const results = await mapWithConcurrency(rows, 3, async (order) => {
     try {
       const { data } = await omnichannelService.shippingLabelOfficialDocument({
         marketplace: order.marketplace,
         order_ref: order.order_ref,
         document_size: officialDocumentSize.value,
-        document_type: order.marketplace === 'tiktok' ? officialDocumentType.value : undefined,
+        document_type: order.marketplace === 'tiktok' ? officialTiktokDocumentType.value : undefined,
         document_format: 'PDF',
         watermark_enabled: officialWatermarkEnabled.value,
         watermark_text: officialWatermarkText.value
       })
-      results.push({ order, data })
+      return { order, data }
     } catch (error) {
       const message = error?.response?.data?.message || error?.message || 'Dokumen resmi gagal diambil.'
-      results.push({
+      return {
         order,
         data: {
           status: 'error',
           message
         }
-      })
+      }
     }
-  }
+  })
 
   const html = (await Promise.all(results.map(officialDocumentHtml))).join('')
 
   popup.document.open()
   popup.document.write(`<!doctype html><html><head><title>Dokumen Resmi Marketplace</title><style>@page{size:${officialDocumentSize.value};margin:0}body{font-family:Arial,sans-serif;margin:18px;background:#f3f4f6;color:#111827}.doc{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-bottom:14px}iframe{width:100%;height:760px;border:1px solid #e5e7eb;background:#fff}a{color:#0f5fc7;font-weight:700}.error{color:#991b1b;background:#fef2f2;border-color:#fecaca}.watermark-ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px}.watermark-warning{color:#9a3412;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px 10px}.print-now{border:0;border-radius:6px;background:#0f5fc7;color:#fff;font-weight:800;padding:9px 13px;margin:0 0 10px}.rendered-pages{display:grid;gap:12px}.rendered-page{display:block;width:100%;max-width:760px;margin:0 auto;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,.18)}h1{font-size:22px}h2{font-size:16px;margin:0 0 8px}@media print{body{background:#fff;margin:0}.doc{page-break-after:always;border:0;padding:0;margin:0}.doc:not(.rendered-doc) iframe{height:100vh;border:0}.rendered-pages{display:block}.rendered-page{width:100%;max-width:none;margin:0;box-shadow:none;page-break-after:always}.watermark-ok,.watermark-warning,h1,h2,p a,.print-now{display:none}}</style></head><body><h1>Dokumen Resmi Marketplace</h1>${html}</body></html>`)
   popup.document.close()
+  await markPrinted(results.filter((result) => result.data.status === 'success').map((result) => result.order), officialTiktokDocumentType.value, 'official_document')
   setNotice(results.some((result) => result.data.status !== 'success') ? 'error' : 'success', `${results.length} dokumen resmi selesai diproses. Bila PDF tidak langsung tampil, klik Buka / Download Dokumen.`)
   officialPrinting.value = false
 }
@@ -501,13 +599,24 @@ select,input { width:100%; border:1px solid #cbd5e1; border-radius:6px; padding:
 .order-main strong,.order-main small { display:block; }
 .order-main strong { margin:4px 0; overflow-wrap:anywhere; }
 .order-main small { color:#64748b; line-height:1.35; }
+.ordered-items,.preview-items { display:grid; gap:6px; margin:8px 0; }
+.ordered-item { display:grid; grid-template-columns:42px minmax(0,1fr); gap:8px; align-items:center; border:1px solid #e2e8f0; border-radius:6px; padding:6px; background:#f8fafc; }
+.ordered-item img,.item-image-empty { width:42px; height:42px; border-radius:5px; object-fit:cover; background:#e2e8f0; border:1px solid #cbd5e1; }
+.item-image-empty { display:grid; place-items:center; color:#64748b; font-size:10px; font-weight:800; }
+.ordered-item strong { font-size:12px; margin:0 0 2px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.ordered-item small { font-size:11px; overflow-wrap:anywhere; }
 .order-actions { display:grid; gap:7px; justify-items:end; }
-.market-badge,.status-badge { display:inline-flex; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:800; text-transform:uppercase; }
+.market-badge,.status-badge,.print-badge,.app-print-badge { display:inline-flex; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:800; text-transform:uppercase; }
 .market-badge.shopee { background:#fff1ed; color:#c2410c; }
 .market-badge.tiktok { background:#111827; color:#fff; }
 .status-badge.success { background:#dcfce7; color:#166534; }
 .status-badge.error { background:#fee2e2; color:#991b1b; }
 .status-badge.skipped { background:#e2e8f0; color:#475569; }
+.print-badge.not-printed { background:#f8fafc; color:#64748b; border:1px solid #cbd5e1; }
+.print-badge.ready { background:#dbeafe; color:#1d4ed8; }
+.print-badge.sent { background:#dcfce7; color:#166534; }
+.app-print-badge.not-printed { background:#f8fafc; color:#64748b; border:1px solid #cbd5e1; }
+.app-print-badge.printed { background:#fef3c7; color:#92400e; }
 .order-status { display:inline-flex; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:800; background:#eef2ff; color:#3730a3; }
 .mini { background:#0f5fc7; color:#fff; padding:7px 9px; font-size:12px; }
 .pagination { display:flex; justify-content:flex-end; align-items:center; gap:10px; margin-top:12px; color:#475569; font-size:13px; }

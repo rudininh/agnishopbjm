@@ -5,12 +5,55 @@
         <p>Produk</p>
         <h1>Anomali Gambar Variant</h1>
       </div>
-      <button class="primary" type="button" @click="loadData(1)" :disabled="loading">
-        {{ loading ? 'Memuat...' : 'Scan Gambar' }}
-      </button>
+      <div class="header-actions">
+        <button class="danger" type="button" @click="syncTiktokImagesFromShopee" :disabled="loading || syncingImages">
+          {{ syncingImages ? 'Update gambar...' : 'Update Gambar TikTok dari Shopee' }}
+        </button>
+        <button class="primary" type="button" @click="loadData(1)" :disabled="loading || syncingImages">
+          {{ loading ? 'Memuat...' : 'Scan Gambar' }}
+        </button>
+      </div>
     </header>
 
     <p v-if="notice.message" :class="['notice', notice.type]">{{ notice.message }}</p>
+
+    <section v-if="syncReport" class="sync-report">
+      <div class="sync-report-head">
+        <strong>Laporan sinkron gambar</strong>
+        <span>Batch {{ syncReport.batches }} | SKU diproses {{ syncReport.matched }} | Warning {{ syncReport.warnings }}</span>
+      </div>
+
+      <div v-if="syncReport.failureReasons.length || syncReport.warningReasons.length" class="reason-grid">
+        <article v-if="syncReport.failureReasons.length" class="reason-card error">
+          <h2>Alasan gagal</h2>
+          <ul>
+            <li v-for="reason in syncReport.failureReasons" :key="reason.message">
+              <strong>{{ reason.count }}x</strong>
+              <span>{{ reason.message }}</span>
+              <small v-if="reason.samples.length">Contoh: {{ reason.samples.map(formatReasonSample).join(' ; ') }}</small>
+            </li>
+          </ul>
+        </article>
+
+        <article v-if="syncReport.warningReasons.length" class="reason-card warning">
+          <h2>Warning</h2>
+          <ul>
+            <li v-for="reason in syncReport.warningReasons" :key="reason.message">
+              <strong>{{ reason.count }}x</strong>
+              <span>{{ reason.message }}</span>
+              <small v-if="reason.samples.length">Contoh: {{ reason.samples.map(formatReasonSample).join(' ; ') }}</small>
+            </li>
+          </ul>
+        </article>
+      </div>
+
+      <p v-if="syncReport.skippedText.length" class="skipped-note">
+        Dilewati saat scan terakhir: {{ syncReport.skippedText.join(' | ') }}
+      </p>
+      <p v-if="syncReport.stoppedByLimit" class="skipped-note">
+        Proses berhenti di batas aman 100 batch. Jalankan tombol lagi bila masih ada data yang perlu dilanjutkan.
+      </p>
+    </section>
 
     <section class="summary-grid">
       <article><span>Total anomali</span><strong>{{ summary.total_anomalies || 0 }}</strong></article>
@@ -114,11 +157,13 @@ import { onMounted, reactive, ref } from 'vue'
 import { omnichannelService } from '@/services'
 
 const loading = ref(false)
+const syncingImages = ref(false)
 const rows = ref([])
 const summary = ref({})
 const pagination = ref({ page: 1, last_page: 1, total: 0 })
 const filters = reactive({ search: '', type: '' })
 const notice = ref({ type: '', message: '' })
+const syncReport = ref(null)
 
 const issueLabel = (type) => ({
   missing_shopee_image: 'Shopee kosong',
@@ -139,6 +184,56 @@ const setNotice = (type, message) => {
   notice.value = { type, message }
 }
 
+const skippedReasonLabels = {
+  missing_shopee_sku: 'SKU Shopee kosong',
+  missing_shopee_image: 'Gambar Shopee kosong',
+  missing_exact_tiktok_sku: 'SKU TikTok tidak cocok persis',
+  conflicting_target_image: 'Target TikTok konflik',
+  already_synced: 'Sudah sama'
+}
+
+const normalizeReasonGroups = (groups = []) => {
+  if (Array.isArray(groups)) return groups
+  if (groups && typeof groups === 'object') return Object.values(groups)
+  return []
+}
+
+const mergeReasonGroups = (target, groups = []) => {
+  normalizeReasonGroups(groups).forEach((reason) => {
+    const message = String(reason?.message || 'Tanpa pesan detail.')
+    if (!target[message]) {
+      target[message] = { message, count: 0, samples: [] }
+    }
+
+    target[message].count += Number(reason?.count || 0)
+    ;(reason?.samples || []).forEach((sample) => {
+      const sampleKey = JSON.stringify(sample)
+      const exists = target[message].samples.some((item) => JSON.stringify(item) === sampleKey)
+      if (!exists && target[message].samples.length < 5) {
+        target[message].samples.push(sample)
+      }
+    })
+  })
+}
+
+const reasonGroupsToList = (groups) => Object.values(groups)
+  .filter((reason) => reason.count > 0)
+  .sort((a, b) => b.count - a.count)
+
+const formatSkippedReasons = (reasons = {}) => Object.entries(reasons || {})
+  .filter(([, count]) => Number(count) > 0)
+  .map(([key, count]) => `${skippedReasonLabels[key] || key}: ${count}`)
+
+const formatReasonSample = (sample = {}) => {
+  const parts = [
+    sample.seller_sku ? `SKU ${sample.seller_sku}` : '',
+    sample.product_id ? `Product ${sample.product_id}` : '',
+    sample.sku_id ? `Varian ${sample.sku_id}` : '',
+    sample.stock_master_id ? `SM ${sample.stock_master_id}` : ''
+  ].filter(Boolean)
+  return parts.join(' / ') || '-'
+}
+
 const copyUrl = async (url) => {
   if (!url) return
   try {
@@ -146,6 +241,84 @@ const copyUrl = async (url) => {
     setNotice('success', 'URL gambar berhasil disalin.')
   } catch (error) {
     setNotice('error', 'URL gambar gagal disalin.')
+  }
+}
+
+const syncTiktokImagesFromShopee = async () => {
+  const confirmed = window.confirm('Paksa update real semua gambar product dan variant TikTok mengikuti Shopee berdasarkan SKU yang sama persis? Aksi ini hanya mengirim perubahan gambar ke TikTok.')
+  if (!confirmed) return
+
+  syncingImages.value = true
+  syncReport.value = null
+  setNotice('', '')
+  try {
+    const maxBatches = 100
+    const failureReasonMap = {}
+    const warningReasonMap = {}
+    let skippedReasons = {}
+    let stoppedByLimit = false
+    const totals = {
+      batches: 0,
+      matched: 0,
+      updatedProducts: 0,
+      updatedVariants: 0,
+      skipped: 0,
+      failed: 0,
+      warnings: 0
+    }
+
+    for (let batch = 1; batch <= maxBatches; batch += 1) {
+      const offset = (batch - 1) * 10
+      const { data } = await omnichannelService.syncTiktokImagesFromShopee({ limit: 10, offset, force: true })
+      totals.batches += 1
+      totals.matched += data?.matched || 0
+      totals.updatedProducts += data?.updated_products || 0
+      totals.updatedVariants += data?.updated_variants || 0
+      totals.skipped = data?.skipped || 0
+      totals.failed += data?.failed || 0
+      totals.warnings += data?.warnings || 0
+      skippedReasons = data?.skipped_reasons || skippedReasons
+      mergeReasonGroups(failureReasonMap, data?.failure_reasons)
+      mergeReasonGroups(warningReasonMap, data?.warning_reasons)
+
+      setNotice('success', `Update gambar berjalan... batch ${totals.batches}, variant update ${totals.updatedVariants}, gagal ${totals.failed}`)
+
+      if ((data?.matched || 0) === 0 || !data?.has_more) {
+        break
+      }
+      if (batch === maxBatches) {
+        stoppedByLimit = true
+      }
+    }
+
+    const parts = [
+      'Sinkron gambar TikTok dari Shopee selesai diproses.',
+      `Batch: ${totals.batches}`,
+      `SKU cocok: ${totals.matched}`,
+      `Produk update: ${totals.updatedProducts}`,
+      `Variant update: ${totals.updatedVariants}`,
+      `Dilewati: ${totals.skipped}`,
+      `Gagal: ${totals.failed}`,
+      `Warning: ${totals.warnings}`
+    ]
+    if (stoppedByLimit) parts.push('Batas batch aman tercapai')
+
+    syncReport.value = {
+      ...totals,
+      failureReasons: reasonGroupsToList(failureReasonMap),
+      warningReasons: reasonGroupsToList(warningReasonMap),
+      skippedText: formatSkippedReasons(skippedReasons),
+      stoppedByLimit
+    }
+
+    const noticeType = totals.failed > 0 ? 'error' : (totals.warnings > 0 ? 'warning' : 'success')
+    const noticeMessage = parts.join(' | ')
+    await loadData(1)
+    setNotice(noticeType, noticeMessage)
+  } catch (error) {
+    setNotice('error', error?.response?.data?.message || error?.message || 'Update gambar TikTok dari Shopee gagal dijalankan.')
+  } finally {
+    syncingImages.value = false
   }
 }
 
@@ -176,13 +349,31 @@ onMounted(() => loadData(1))
 .page-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:18px; }
 .page-header p { color:#64748b; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
 .page-header h1 { font-size:28px; line-height:1.15; margin-top:4px; }
+.header-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; }
 button { border:0; border-radius:6px; padding:9px 13px; font-weight:700; cursor:pointer; }
 button:disabled { opacity:.55; cursor:not-allowed; }
 .primary { background:#0f5fc7; color:#fff; }
+.danger { background:#b91c1c; color:#fff; }
 .ghost { background:#fff; color:#0f172a; border:1px solid #dbe3ef; }
 .notice { border-radius:6px; padding:10px 12px; margin-bottom:14px; }
 .notice.error { border:1px solid #fecaca; background:#fef2f2; color:#991b1b; }
 .notice.success { border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; }
+.notice.warning { border:1px solid #fde68a; background:#fffbeb; color:#92400e; }
+.sync-report { border:1px solid #dbe3ef; background:#fff; border-radius:8px; padding:14px; margin-bottom:14px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
+.sync-report-head { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; margin-bottom:10px; }
+.sync-report-head strong { font-size:14px; }
+.sync-report-head span { color:#475569; font-size:12px; font-weight:700; }
+.reason-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; }
+.reason-card { border-radius:8px; padding:12px; border:1px solid #e2e8f0; }
+.reason-card.error { border-color:#fecaca; background:#fef2f2; }
+.reason-card.warning { border-color:#fde68a; background:#fffbeb; }
+.reason-card h2 { margin:0 0 8px; font-size:13px; }
+.reason-card ul { list-style:none; padding:0; margin:0; display:grid; gap:8px; }
+.reason-card li { display:grid; grid-template-columns:auto minmax(0,1fr); gap:6px 8px; align-items:start; }
+.reason-card li strong { font-size:12px; }
+.reason-card li span { font-size:12px; line-height:1.35; }
+.reason-card li small { grid-column:1 / -1; color:#64748b; font-size:11px; }
+.skipped-note { margin:10px 0 0; color:#475569; font-size:12px; line-height:1.4; }
 .summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:14px; }
 .summary-grid article { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .summary-grid span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
@@ -214,6 +405,8 @@ tr.error td { background:#fef2f2; }
 @media (max-width:820px) {
   .page-shell { margin-left:0; padding:16px; }
   .page-header { flex-direction:column; align-items:stretch; }
+  .header-actions { justify-content:stretch; }
+  .header-actions button { width:100%; }
   .filter-row { grid-template-columns:1fr; }
 }
 </style>

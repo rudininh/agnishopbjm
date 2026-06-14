@@ -11,6 +11,7 @@ import ProductVariantAnalysis from '@/pages/ProductVariantAnalysis.vue'
 import AnomaliGambarVariant from '@/pages/AnomaliGambarVariant.vue'
 import DetailProdukMarketplace from '@/pages/DetailProdukMarketplace.vue'
 import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
+import ImportMarketplace from '@/pages/ImportMarketplace.vue'
 import StockAnomalies from '@/pages/StockAnomalies.vue'
 import ShippingLabels from '@/pages/ShippingLabels.vue'
 import POSOffline from '@/pages/POSOffline.vue'
@@ -85,6 +86,11 @@ const routes = [
     path: '/marketplace/auto-sync',
     name: 'marketplace-auto-sync',
     component: MarketplaceAutoSync
+  },
+  {
+    path: '/marketplace/import',
+    name: 'marketplace-import',
+    component: ImportMarketplace
   },
   {
     path: '/marketplace/cetak-resi',

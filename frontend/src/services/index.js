@@ -129,6 +129,10 @@ export const omnichannelService = {
     return api.get('/product-variant-image-anomalies', { params })
   },
 
+  syncTiktokImagesFromShopee(data = {}) {
+    return api.post('/product-variant-image-anomalies/sync-tiktok-from-shopee', data)
+  },
+
   skuMapping(params = {}) {
     return api.get('/sku-mapping', { params })
   },
@@ -273,6 +277,10 @@ export const omnichannelService = {
     return api.post('/marketplace/shipping-labels/official-document', payload)
   },
 
+  markShippingLabelsPrinted(payload = {}) {
+    return api.post('/marketplace/shipping-labels/mark-printed', payload)
+  },
+
   autoSyncStockAnomalies(params = {}) {
     return api.get('/marketplace/auto-sync/stock-anomalies', { params })
   },
@@ -342,6 +350,16 @@ export const omnichannelService = {
 
   pollAutoSyncTiktokOrders(hours = 24) {
     return api.post('/marketplace/auto-sync/poll-tiktok-orders', { hours })
+  },
+
+  downloadShopeeGitaMassUpdate() {
+    return api.get('/marketplace/import/shopee-gita/mass-update', {
+      responseType: 'blob'
+    })
+  },
+
+  manualImportMarketplaceStockSync(payload = {}) {
+    return api.post('/marketplace/import/manual-stock-sync', payload)
   },
 
   runTokenAction(action) {

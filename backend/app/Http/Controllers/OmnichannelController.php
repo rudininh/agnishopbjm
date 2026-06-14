@@ -377,6 +377,1056 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    public function syncTiktokImagesFromShopee(Request $request): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        $data = $request->validate([
+            'dry_run' => ['nullable'],
+            'force' => ['nullable'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:5000'],
+            'offset' => ['nullable', 'integer', 'min:0'],
+            'seller_sku' => ['nullable', 'string', 'max:150'],
+        ]);
+
+        $dryRun = $this->boolString($data['dry_run'] ?? false) === 'true';
+        $force = $this->boolString($data['force'] ?? false) === 'true';
+        $limit = isset($data['limit']) ? (int) $data['limit'] : 10;
+        $offset = isset($data['offset']) ? max(0, (int) $data['offset']) : 0;
+        $sellerSkuFilter = trim((string) ($data['seller_sku'] ?? ''));
+        if (! $dryRun) {
+            $this->autoRefreshMarketplaceTokens();
+        }
+
+        $context = $this->resolveTiktokGetProductContext(['version' => '202509']);
+        $accessToken = trim((string) ($context['access_token'] ?? ''));
+        $shopId = trim((string) ($context['shop_id'] ?? ''));
+        $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+        abort_if($accessToken === '', 422, 'Token TikTok belum aktif. Jalankan login/refresh token dulu.');
+        abort_if($shopId === '' || $shopCipher === '', 422, 'Shop TikTok belum lengkap. Jalankan Get Auth Shop dulu.');
+
+        $candidateResult = $this->tiktokImageSyncCandidatesFromShopee(
+            $sellerSkuFilter !== '' ? null : $limit,
+            $force,
+            $sellerSkuFilter !== '' ? 0 : $offset
+        );
+        if ($sellerSkuFilter !== '') {
+            $filteredCandidates = array_values(array_filter(
+                $candidateResult['items'],
+                fn (array $item): bool => $this->sameExactMarketplaceSku($item['seller_sku'] ?? '', $sellerSkuFilter)
+            ));
+            $candidateResult['items'] = array_slice($filteredCandidates, $offset, $limit);
+            $candidateResult['has_more'] = ($offset + $limit) < count($filteredCandidates);
+        }
+        $candidates = $candidateResult['items'];
+        $skippedReasons = $candidateResult['skipped_reasons'];
+        $skippedDetails = $candidateResult['skipped_details'];
+
+        $result = [
+            'status' => 'ok',
+            'message' => 'Tidak ada gambar TikTok yang perlu diproses dari Shopee.',
+            'dry_run' => $dryRun,
+            'force' => $force,
+            'checked' => (int) $candidateResult['checked'],
+            'batch_limit' => $limit,
+            'offset' => $offset,
+            'has_more' => (bool) ($candidateResult['has_more'] ?? false),
+            'matched' => count($candidates),
+            'products' => 0,
+            'updated_products' => 0,
+            'updated_variants' => 0,
+            'skipped' => array_sum($skippedReasons),
+            'failed' => 0,
+            'warnings' => 0,
+            'skipped_reasons' => $skippedReasons,
+            'skipped_details' => array_slice($skippedDetails, 0, 50),
+            'failure_reasons' => [],
+            'warning_reasons' => [],
+            'details' => [],
+        ];
+
+        if ($candidates === []) {
+            return response()->json($result);
+        }
+
+        $config = $this->tiktokConfig();
+        $shop = (object) [
+            'shop_id' => $shopId,
+            'shop_cipher' => $shopCipher,
+            'cipher' => $shopCipher,
+        ];
+        $uploadCache = [];
+        $now = now();
+        $productGroups = collect($candidates)->groupBy('tiktok_product_id');
+        $result['products'] = $productGroups->count();
+
+        foreach ($productGroups as $productId => $group) {
+            $productId = trim((string) $productId);
+            $groupRows = $group->values()->all();
+            $productDetail = null;
+            $requestPayload = null;
+            $responsePayload = null;
+
+            try {
+                $detail = $this->fetchTiktokProductDetail(
+                    $config,
+                    $accessToken,
+                    $shop,
+                    $productId,
+                    $config['api_host'].'/product/202309/products/'
+                );
+                abort_if(! is_array($detail), 422, 'Detail produk TikTok belum bisa dibaca untuk menjaga SKU lain tidak berubah.');
+                $productDetail = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
+
+                $skuImageUpdates = [];
+                foreach ($groupRows as $candidate) {
+                    $skuId = trim((string) ($candidate['tiktok_sku_id'] ?? ''));
+                    $sourceImageUrl = trim((string) ($candidate['shopee_variant_image_url'] ?? ''));
+
+                    if ($skuId === '' || $sourceImageUrl === '') {
+                        continue;
+                    }
+
+                    if ($dryRun) {
+                        $skuImageUpdates[$skuId] = [
+                            'uri' => $sourceImageUrl,
+                            'source_image_url' => $sourceImageUrl,
+                            'candidate' => $candidate,
+                        ];
+                        continue;
+                    }
+
+                    $uploadResult = $this->uploadTiktokImageForShopeeSync($accessToken, $sourceImageUrl, $uploadCache);
+                    $uploadedUri = trim((string) ($uploadResult['uri'] ?? ''));
+                    if (($uploadResult['ok'] ?? false) !== true || $uploadedUri === '') {
+                        $message = $uploadResult['message'] ?? 'Upload gambar Shopee ke TikTok gagal.';
+                        $result['failed']++;
+                        $this->addTiktokImageSyncReason($result, 'failure_reasons', $message, [
+                            'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                            'product_id' => $productId,
+                            'sku_id' => $skuId,
+                            'seller_sku' => $candidate['seller_sku'] ?? null,
+                        ]);
+                        $result['details'][] = [
+                            'status' => 'error',
+                            'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                            'product_id' => $productId,
+                            'sku_id' => $skuId,
+                            'seller_sku' => $candidate['seller_sku'] ?? null,
+                            'message' => $message,
+                        ];
+                        $this->recordTiktokImageSyncAction($candidate, 'error', null, $uploadResult, $message);
+                        continue;
+                    }
+
+                    $skuImageUpdates[$skuId] = [
+                        'uri' => $uploadedUri,
+                        'source_image_url' => $sourceImageUrl,
+                        'candidate' => $candidate,
+                    ];
+                }
+
+                $productImageUris = [];
+                foreach ($this->shopeeProductMainImageUrlsForTiktokSync($groupRows) as $sourceImageUrl) {
+                    if ($dryRun) {
+                        $productImageUris[] = $sourceImageUrl;
+                        continue;
+                    }
+
+                    $uploadResult = $this->uploadTiktokImageForShopeeSync($accessToken, $sourceImageUrl, $uploadCache);
+                    $uploadedUri = trim((string) ($uploadResult['uri'] ?? ''));
+                    if (($uploadResult['ok'] ?? false) === true && $uploadedUri !== '') {
+                        $productImageUris[] = $uploadedUri;
+                    }
+                }
+
+                $skuBuild = $this->buildTiktokImagePartialEditSkuRows(
+                    $productDetail,
+                    $skuImageUpdates,
+                    $this->tiktokDeletedVariantIdsForProduct($productId)
+                );
+                $foundSkuIds = array_flip($skuBuild['found_sku_ids']);
+                foreach ($skuImageUpdates as $skuId => $update) {
+                    $skuId = trim((string) $skuId);
+                    if (! isset($foundSkuIds[$skuId])) {
+                        $candidate = $update['candidate'] ?? [];
+                        $message = 'SKU TikTok target tidak ditemukan di detail terbaru atau tidak punya atribut gambar varian.';
+                        $result['failed']++;
+                        $this->addTiktokImageSyncReason($result, 'failure_reasons', $message, [
+                            'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                            'product_id' => $productId,
+                            'sku_id' => $skuId,
+                            'seller_sku' => $candidate['seller_sku'] ?? null,
+                        ]);
+                        $result['details'][] = [
+                            'status' => 'error',
+                            'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                            'product_id' => $productId,
+                            'sku_id' => $skuId,
+                            'seller_sku' => $candidate['seller_sku'] ?? null,
+                            'message' => $message,
+                        ];
+                        $this->recordTiktokImageSyncAction($candidate, 'error', null, null, $message);
+                        unset($skuImageUpdates[$skuId]);
+                    }
+                }
+
+                $variantPayload = null;
+                $productPayload = null;
+                $variantRequestPayload = null;
+                $variantResponsePayload = null;
+                $productRequestPayload = null;
+                $productResponsePayload = null;
+                $productImageUris = array_values(array_unique(array_filter($productImageUris)));
+                if ($productImageUris !== []) {
+                    $productPayload = [
+                        'save_mode' => 'LISTING',
+                        'main_images' => array_map(
+                            fn (string $uri): array => ['uri' => $uri],
+                            array_slice($productImageUris, 0, 9)
+                        ),
+                    ];
+                }
+                if ($skuImageUpdates !== []) {
+                    $variantPayload = [
+                        'save_mode' => 'LISTING',
+                        'skus' => $skuBuild['rows'],
+                    ];
+                }
+
+                if ($productPayload === null && $variantPayload === null) {
+                    $result['skipped'] += count($groupRows);
+                    $result['details'][] = [
+                        'status' => 'skipped',
+                        'product_id' => $productId,
+                        'message' => 'Tidak ada gambar valid yang bisa dikirim untuk produk TikTok ini.',
+                    ];
+                    continue;
+                }
+
+                $tiktokPath = '/product/202509/products/'.$productId.'/partial_edit';
+
+                if ($variantPayload !== null) {
+                    $variantRequestPayload = $this->summarizeTiktokImageSyncRequest($tiktokPath, $variantPayload);
+                    $variantResponsePayload = $dryRun
+                        ? ['code' => 0, 'message' => 'Dry run. Request varian belum dikirim.']
+                        : $this->summarizeTiktokImageSyncResponse($this->submitTiktokPartialEditPayload($tiktokPath, $variantPayload, $context));
+
+                    if ((int) ($variantResponsePayload['code'] ?? -1) !== 0) {
+                        $message = $variantResponsePayload['message'] ?? 'TikTok menolak update gambar varian.';
+                        $result['failed'] += count($skuImageUpdates);
+                        $result['details'][] = [
+                            'status' => 'error',
+                            'product_id' => $productId,
+                            'message' => $message,
+                        ];
+
+                        foreach ($skuImageUpdates as $update) {
+                            $candidate = $update['candidate'] ?? [];
+                            $this->addTiktokImageSyncReason($result, 'failure_reasons', $message, [
+                                'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                                'product_id' => $productId,
+                                'sku_id' => $candidate['tiktok_sku_id'] ?? null,
+                                'seller_sku' => $candidate['seller_sku'] ?? null,
+                            ]);
+                            $this->recordTiktokImageSyncAction($candidate, 'error', $variantRequestPayload, $variantResponsePayload, $message);
+                        }
+
+                        continue;
+                    }
+
+                    if (! $dryRun) {
+                        $verification = $this->verifyTiktokSkuImageUpdates(
+                            $config,
+                            $accessToken,
+                            $shop,
+                            $productId,
+                            $skuImageUpdates
+                        );
+
+                        foreach ($verification['failed'] as $skuId => $failure) {
+                            $update = $skuImageUpdates[$skuId] ?? [];
+                            $candidate = $update['candidate'] ?? [];
+                            $message = $failure['message'] ?? 'TikTok menerima request, tetapi gambar varian belum berubah setelah verifikasi.';
+                            $result['failed']++;
+                            $this->addTiktokImageSyncReason($result, 'failure_reasons', $message, [
+                                'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                                'product_id' => $productId,
+                                'sku_id' => $skuId,
+                                'seller_sku' => $candidate['seller_sku'] ?? null,
+                            ]);
+                            $result['details'][] = [
+                                'status' => 'error',
+                                'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                                'product_id' => $productId,
+                                'sku_id' => $skuId,
+                                'seller_sku' => $candidate['seller_sku'] ?? null,
+                                'message' => $message,
+                            ];
+                            $this->recordTiktokImageSyncAction(
+                                $candidate,
+                                'error',
+                                $variantRequestPayload,
+                                [...$variantResponsePayload, 'verification' => $failure],
+                                $message
+                            );
+                            unset($skuImageUpdates[$skuId]);
+                        }
+                    }
+                }
+
+                if ($productPayload !== null) {
+                    $productRequestPayload = $this->summarizeTiktokImageSyncRequest($tiktokPath, $productPayload);
+                    $productResponsePayload = $dryRun
+                        ? ['code' => 0, 'message' => 'Dry run. Request main image belum dikirim.']
+                        : $this->summarizeTiktokImageSyncResponse($this->submitTiktokPartialEditPayload($tiktokPath, $productPayload, $context));
+
+                    if ((int) ($productResponsePayload['code'] ?? -1) === 0) {
+                        $result['updated_products']++;
+                    } else {
+                        $message = $productResponsePayload['message'] ?? 'Main image produk TikTok belum berhasil dikirim.';
+                        $result['warnings']++;
+                        $this->addTiktokImageSyncReason($result, 'warning_reasons', $message, [
+                            'product_id' => $productId,
+                        ]);
+                        $result['details'][] = [
+                            'status' => 'warning',
+                            'product_id' => $productId,
+                            'message' => $message,
+                        ];
+                    }
+                }
+
+                $requestPayload = $variantRequestPayload ?? $productRequestPayload;
+                $responsePayload = $variantResponsePayload ?? $productResponsePayload;
+
+                foreach ($skuImageUpdates as $skuId => $update) {
+                    $skuId = trim((string) $skuId);
+                    $candidate = $update['candidate'] ?? [];
+                    $sourceImageUrl = trim((string) ($update['source_image_url'] ?? ''));
+                    $result['updated_variants']++;
+                    $result['details'][] = [
+                        'status' => $dryRun ? 'dry_run' : 'ok',
+                        'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                        'product_id' => $productId,
+                        'sku_id' => $skuId,
+                        'seller_sku' => $candidate['seller_sku'] ?? null,
+                        'source_image_url' => $sourceImageUrl,
+                        'message' => $dryRun ? 'Dry run gambar siap dikirim.' : 'Gambar TikTok diperbarui mengikuti Shopee.',
+                    ];
+
+                    if (! $dryRun) {
+                        DB::table('tiktok_products')
+                            ->where('product_id', (string) $productId)
+                            ->where('sku_id', (string) $skuId)
+                            ->update([
+                                'image_url' => $sourceImageUrl ?: null,
+                                'updated_at' => $now,
+                            ]);
+
+                        if (! empty($candidate['stock_master_id'])) {
+                            DB::table('sku_mappings')->updateOrInsert(
+                                ['stock_master_id' => (int) $candidate['stock_master_id']],
+                                [
+                                    'shopee_item_id' => $candidate['shopee_item_id'] ?? null,
+                                    'shopee_model_id' => $candidate['shopee_model_id'] ?? null,
+                                    'tiktok_product_id' => (string) $productId,
+                                    'tiktok_sku_id' => (string) $skuId,
+                                    'tiktok_sku_name' => $candidate['tiktok_sku_name'] ?? null,
+                                    'seller_sku' => $candidate['seller_sku'] ?? null,
+                                    'shopee_image_url' => $sourceImageUrl ?: null,
+                                    'tiktok_image_url' => $sourceImageUrl ?: null,
+                                    'updated_at' => $now,
+                                    'created_at' => $now,
+                                ]
+                            );
+                        }
+                    }
+
+                    $this->recordTiktokImageSyncAction(
+                        $candidate,
+                        $dryRun ? 'dry_run' : 'ok',
+                        $requestPayload,
+                        $responsePayload,
+                        $dryRun ? 'Dry run gambar TikTok dari Shopee.' : 'Gambar TikTok diperbarui mengikuti Shopee.'
+                    );
+                }
+            } catch (\Throwable $exception) {
+                $message = $exception->getMessage();
+                $result['failed'] += count($groupRows);
+                $result['details'][] = [
+                    'status' => 'error',
+                    'product_id' => $productId,
+                    'message' => $message,
+                ];
+
+                foreach ($groupRows as $candidate) {
+                    $this->addTiktokImageSyncReason($result, 'failure_reasons', $message, [
+                        'stock_master_id' => $candidate['stock_master_id'] ?? null,
+                        'product_id' => $productId,
+                        'sku_id' => $candidate['tiktok_sku_id'] ?? null,
+                        'seller_sku' => $candidate['seller_sku'] ?? null,
+                    ]);
+                    $this->recordTiktokImageSyncAction(
+                        $candidate,
+                        'error',
+                        $requestPayload,
+                        $responsePayload,
+                        $message
+                    );
+                }
+            }
+        }
+
+        $result['details'] = array_slice($result['details'], 0, 100);
+        $result['failure_reasons'] = array_values($result['failure_reasons']);
+        $result['warning_reasons'] = array_values($result['warning_reasons']);
+        $result['status'] = $result['failed'] > 0 ? 'warning' : 'ok';
+        $result['message'] = $dryRun
+            ? 'Preview sinkron gambar TikTok dari Shopee selesai.'
+            : 'Sinkron gambar TikTok dari Shopee selesai diproses.';
+
+        return response()->json($result, $result['status'] === 'warning' ? 207 : 200);
+    }
+
+    private function tiktokImageSyncCandidatesFromShopee(?int $limit = null, bool $force = false, int $offset = 0): array
+    {
+        $tiktokBySellerSku = "(
+            SELECT product_id, product_name, sku_id, sku_name, seller_sku, image_url, updated_at
+            FROM (
+                SELECT
+                    product_id,
+                    product_name,
+                    sku_id,
+                    sku_name,
+                    seller_sku,
+                    image_url,
+                    updated_at,
+                    id,
+                    COUNT(*) OVER (PARTITION BY LOWER(TRIM(seller_sku))) as seller_sku_count,
+                    ROW_NUMBER() OVER (PARTITION BY LOWER(TRIM(seller_sku)) ORDER BY updated_at DESC, id DESC) as row_number
+                FROM tiktok_products
+                WHERE COALESCE(is_active, true) = true
+                  AND seller_sku IS NOT NULL
+                  AND TRIM(seller_sku) <> ''
+            ) ranked_tiktok_skus
+            WHERE seller_sku_count = 1
+              AND row_number = 1
+        ) as tps";
+
+        $query = DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->leftJoin('shopee_product as sp', function ($join) {
+                $join->on('sp.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->whereRaw('COALESCE(sp.is_active, true) = true');
+            })
+            ->leftJoin('shopee_product_model as spm', function ($join) {
+                $join->on('spm.item_id', '=', 'sp.item_id')
+                    ->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join) {
+                $join->on('spmi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->on('spmi.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
+                $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            })
+            ->leftJoin('tiktok_products as tp', function ($join) {
+                $join->on('tp.product_id', '=', DB::raw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, ''))"))
+                    ->on('tp.sku_id', '=', DB::raw("COALESCE(NULLIF(map.tiktok_sku_id, ''), NULLIF(sm.tiktok_sku, ''))"))
+                    ->whereRaw('COALESCE(tp.is_active, true) = true');
+            })
+            ->leftJoin(DB::raw($tiktokBySellerSku), function ($join) {
+                $join->on(
+                    DB::raw('LOWER(TRIM(tps.seller_sku))'),
+                    '=',
+                    DB::raw("LOWER(TRIM(COALESCE(NULLIF(spm.model_sku, ''), NULLIF(sm.shopee_seller_sku, ''), NULLIF(map.seller_sku, ''), NULLIF(sm.internal_sku, ''))))")
+                );
+            })
+            ->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false')
+            ->select(
+                'sm.id as stock_master_id',
+                'sm.internal_sku',
+                'sm.product_name',
+                'sm.variant_name',
+                'map.seller_sku as mapped_seller_sku',
+                'map.shopee_item_id',
+                'map.shopee_model_id',
+                'map.shopee_image_url',
+                'map.tiktok_image_url as mapped_tiktok_image_url',
+                'map.tiktok_product_id as mapped_tiktok_product_id',
+                'map.tiktok_sku_id',
+                'map.tiktok_sku_name',
+                'sm.shopee_product_id',
+                'sm.shopee_sku',
+                'sm.shopee_seller_sku',
+                'sm.tiktok_product_id',
+                'sm.tiktok_sku',
+                'sm.tiktok_seller_sku',
+                'sp.name as shopee_product_name',
+                'spm.name as shopee_variant_name',
+                'spm.model_sku as shopee_model_sku',
+                'spmi.image_url as shopee_model_image_url',
+                'spi.image_url as shopee_product_image_url',
+                'tp.product_id as mapped_actual_tiktok_product_id',
+                'tp.product_name as mapped_actual_tiktok_product_name',
+                'tp.sku_id as mapped_actual_tiktok_sku_id',
+                'tp.sku_name as mapped_actual_tiktok_sku_name',
+                'tp.seller_sku as mapped_actual_tiktok_seller_sku',
+                'tp.image_url as mapped_actual_tiktok_image_url',
+                'tps.product_id as sku_match_tiktok_product_id',
+                'tps.product_name as sku_match_tiktok_product_name',
+                'tps.sku_id as sku_match_tiktok_sku_id',
+                'tps.sku_name as sku_match_tiktok_sku_name',
+                'tps.seller_sku as sku_match_tiktok_seller_sku',
+                'tps.image_url as sku_match_tiktok_image_url'
+            )
+            ->orderBy('sm.product_name')
+            ->orderBy('sm.variant_name');
+
+        $rows = $query->get();
+        $items = [];
+        $blockedTargets = [];
+        $skippedReasons = [
+            'missing_shopee_sku' => 0,
+            'missing_shopee_image' => 0,
+            'missing_exact_tiktok_sku' => 0,
+            'conflicting_target_image' => 0,
+            'already_synced' => 0,
+        ];
+        $skippedDetails = [];
+
+        foreach ($rows as $row) {
+            $shopeeSellerSku = $this->firstFilledText([
+                $row->shopee_model_sku,
+                $row->shopee_seller_sku,
+                $row->mapped_seller_sku,
+                $row->internal_sku,
+            ]);
+            $shopeeSellerSkuKey = $this->exactMarketplaceSkuKey($shopeeSellerSku);
+            if ($shopeeSellerSkuKey === '') {
+                $skippedReasons['missing_shopee_sku']++;
+                continue;
+            }
+
+            $sourceImageUrl = $this->firstFilledImage([
+                $row->shopee_model_image_url,
+                $row->shopee_image_url,
+                $row->shopee_product_image_url,
+            ]);
+            if ($sourceImageUrl === '') {
+                $skippedReasons['missing_shopee_image']++;
+                $skippedDetails[] = [
+                    'stock_master_id' => (int) $row->stock_master_id,
+                    'seller_sku' => $shopeeSellerSku,
+                    'reason' => 'Gambar Shopee kosong.',
+                ];
+                continue;
+            }
+
+            $target = null;
+            if ($this->sameExactMarketplaceSku($shopeeSellerSku, $row->mapped_actual_tiktok_seller_sku ?? null)) {
+                $target = [
+                    'product_id' => trim((string) ($row->mapped_actual_tiktok_product_id ?? '')),
+                    'product_name' => $row->mapped_actual_tiktok_product_name ?? null,
+                    'sku_id' => trim((string) ($row->mapped_actual_tiktok_sku_id ?? '')),
+                    'sku_name' => $row->mapped_actual_tiktok_sku_name ?? null,
+                    'seller_sku' => trim((string) ($row->mapped_actual_tiktok_seller_sku ?? '')),
+                    'image_url' => $row->mapped_actual_tiktok_image_url ?? null,
+                    'source' => 'mapped',
+                ];
+            } elseif ($this->sameExactMarketplaceSku($shopeeSellerSku, $row->sku_match_tiktok_seller_sku ?? null)) {
+                $target = [
+                    'product_id' => trim((string) ($row->sku_match_tiktok_product_id ?? '')),
+                    'product_name' => $row->sku_match_tiktok_product_name ?? null,
+                    'sku_id' => trim((string) ($row->sku_match_tiktok_sku_id ?? '')),
+                    'sku_name' => $row->sku_match_tiktok_sku_name ?? null,
+                    'seller_sku' => trim((string) ($row->sku_match_tiktok_seller_sku ?? '')),
+                    'image_url' => $row->sku_match_tiktok_image_url ?? null,
+                    'source' => 'seller_sku',
+                ];
+            }
+
+            if (! $target || $target['product_id'] === '' || $target['sku_id'] === '') {
+                $skippedReasons['missing_exact_tiktok_sku']++;
+                continue;
+            }
+
+            if (! $force && $this->sameSyncedImageReference($sourceImageUrl, $target['image_url'] ?? null)) {
+                $skippedReasons['already_synced']++;
+                continue;
+            }
+
+            $targetKey = $target['product_id'].'|'.$target['sku_id'];
+            if (isset($blockedTargets[$targetKey])) {
+                $skippedReasons['conflicting_target_image']++;
+                continue;
+            }
+
+            $item = [
+                'stock_master_id' => (int) $row->stock_master_id,
+                'product_name' => $row->product_name ?: ($row->shopee_product_name ?: $target['product_name']),
+                'variant_name' => $row->variant_name ?: ($row->shopee_variant_name ?: $target['sku_name']),
+                'seller_sku' => $shopeeSellerSku,
+                'shopee_item_id' => $row->shopee_item_id ?: $row->shopee_product_id,
+                'shopee_model_id' => $row->shopee_model_id ?: $row->shopee_sku,
+                'shopee_variant_image_url' => $sourceImageUrl,
+                'shopee_product_image_url' => trim((string) ($row->shopee_product_image_url ?? '')),
+                'tiktok_product_id' => $target['product_id'],
+                'tiktok_sku_id' => $target['sku_id'],
+                'tiktok_sku_name' => $target['sku_name'],
+                'tiktok_current_image_url' => $target['image_url'],
+                'match_source' => $target['source'],
+            ];
+
+            if (isset($items[$targetKey])) {
+                $existingImage = trim((string) ($items[$targetKey]['shopee_variant_image_url'] ?? ''));
+                if ($existingImage !== $sourceImageUrl) {
+                    unset($items[$targetKey]);
+                    $blockedTargets[$targetKey] = true;
+                    $skippedReasons['conflicting_target_image']++;
+                    $skippedDetails[] = [
+                        'product_id' => $target['product_id'],
+                        'sku_id' => $target['sku_id'],
+                        'seller_sku' => $shopeeSellerSku,
+                        'reason' => 'Satu SKU TikTok cocok ke lebih dari satu gambar Shopee.',
+                    ];
+                }
+
+                continue;
+            }
+
+            $items[$targetKey] = $item;
+        }
+
+        $items = array_values($items);
+        $offset = max(0, $offset);
+        $hasMore = $limit !== null && $limit > 0 && ($offset + $limit) < count($items);
+        if ($limit !== null && $limit > 0) {
+            $items = array_slice($items, $offset, $limit);
+        }
+
+        return [
+            'checked' => $rows->count(),
+            'items' => $items,
+            'has_more' => $hasMore,
+            'skipped_reasons' => $skippedReasons,
+            'skipped_details' => $skippedDetails,
+        ];
+    }
+
+    private function shopeeProductMainImageUrlsForTiktokSync(array $candidates): array
+    {
+        $itemIds = collect($candidates)
+            ->pluck('shopee_item_id')
+            ->map(fn ($value): string => trim((string) $value))
+            ->filter(fn (string $value): bool => preg_match('/^\d+$/', $value) === 1)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (count($itemIds) > 1) {
+            return [];
+        }
+
+        $urls = [];
+        if ($itemIds !== []) {
+            $urls = DB::table('shopee_product_image')
+                ->whereIn('item_id', array_map('intval', $itemIds))
+                ->whereNull('model_id')
+                ->whereNotNull('image_url')
+                ->orderBy('id')
+                ->pluck('image_url')
+                ->map(fn ($value): string => trim((string) $value))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+        }
+
+        if ($urls === []) {
+            $urls = collect($candidates)
+                ->pluck('shopee_variant_image_url')
+                ->map(fn ($value): string => trim((string) $value))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+        }
+
+        return array_slice($urls, 0, 9);
+    }
+
+    private function uploadTiktokImageForShopeeSync(string $accessToken, string $sourceImageUrl, array &$uploadCache): array
+    {
+        $sourceImageUrl = trim($sourceImageUrl);
+        if ($sourceImageUrl === '') {
+            return [
+                'ok' => false,
+                'message' => 'Gambar Shopee kosong.',
+            ];
+        }
+
+        $cacheKey = sha1($sourceImageUrl);
+        if (array_key_exists($cacheKey, $uploadCache)) {
+            return $uploadCache[$cacheKey];
+        }
+
+        $uploadCache[$cacheKey] = $this->uploadTiktokProductImage((object) [], $accessToken, $sourceImageUrl, 'MAIN_IMAGE');
+
+        return $uploadCache[$cacheKey];
+    }
+
+    private function buildTiktokImagePartialEditSkuRows(array $productDetail, array $imageUpdatesBySkuId, array $excludedSkuIds = []): array
+    {
+        $rows = [];
+        $foundSkuIds = [];
+        $productId = trim((string) ($productDetail['id'] ?? $productDetail['product_id'] ?? ''));
+        $excludedKeys = collect($excludedSkuIds)
+            ->map(fn (mixed $value): string => $this->normalizeSkuMatchValue($value))
+            ->filter()
+            ->flip()
+            ->all();
+
+        foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
+            if ($skuId === '') {
+                continue;
+            }
+
+            if (isset($excludedKeys[$this->normalizeSkuMatchValue($skuId)])) {
+                continue;
+            }
+
+            $row = $this->buildTiktokPartialEditSkuKeepRow($sku, null, $productId);
+            $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
+            if (is_array($salesAttributes) && $salesAttributes !== []) {
+                if (isset($imageUpdatesBySkuId[$skuId])) {
+                    $uploadedUri = (string) ($imageUpdatesBySkuId[$skuId]['uri'] ?? '');
+                    $salesAttributes = $this->withTiktokSalesAttributeImageUri(
+                        $salesAttributes,
+                        $uploadedUri
+                    );
+                    if (trim($uploadedUri) !== '') {
+                        $row['sku_img'] = ['uri' => trim($uploadedUri)];
+                    }
+                    $foundSkuIds[] = $skuId;
+                }
+
+                $row['sales_attributes'] = $this->sanitizeTiktokSalesAttributesForPartialEdit($salesAttributes);
+            }
+
+            $rows[] = $row;
+        }
+
+        return [
+            'rows' => $rows,
+            'found_sku_ids' => array_values(array_unique($foundSkuIds)),
+        ];
+    }
+
+    private function withTiktokSalesAttributeImageUri(array $salesAttributes, string $uploadedUri): array
+    {
+        $uploadedUri = trim($uploadedUri);
+        if ($uploadedUri === '') {
+            return $salesAttributes;
+        }
+
+        $targetIndex = null;
+        foreach ($salesAttributes as $index => $attribute) {
+            if (is_array($attribute) && is_array(data_get($attribute, 'sku_img'))) {
+                $targetIndex = $index;
+                break;
+            }
+        }
+
+        if ($targetIndex === null) {
+            foreach ($salesAttributes as $index => $attribute) {
+                if (is_array($attribute)) {
+                    $targetIndex = $index;
+                    break;
+                }
+            }
+        }
+
+        if ($targetIndex === null || ! is_array($salesAttributes[$targetIndex] ?? null)) {
+            return $salesAttributes;
+        }
+
+        $salesAttributes[$targetIndex]['sku_img'] = ['uri' => $uploadedUri];
+
+        return $salesAttributes;
+    }
+
+    private function sanitizeTiktokSalesAttributesForPartialEdit(array $salesAttributes): array
+    {
+        $rows = [];
+        foreach ($salesAttributes as $attribute) {
+            if (! is_array($attribute)) {
+                continue;
+            }
+
+            $row = [];
+            foreach (['id', 'name', 'value_id', 'value_name'] as $key) {
+                $value = $attribute[$key] ?? null;
+                if ($value !== null && trim((string) $value) !== '') {
+                    $row[$key] = (string) $value;
+                }
+            }
+
+            $skuImgUri = trim((string) data_get($attribute, 'sku_img.uri', ''));
+            if ($skuImgUri !== '') {
+                $row['sku_img'] = ['uri' => $skuImgUri];
+            }
+
+            $supplementaryImages = data_get($attribute, 'supplementary_sku_images', []);
+            if (is_array($supplementaryImages) && $supplementaryImages !== [] && isset($row['sku_img'])) {
+                $row['supplementary_sku_images'] = collect($supplementaryImages)
+                    ->map(fn ($image): string => trim((string) data_get($image, 'uri', $image)))
+                    ->filter()
+                    ->map(fn (string $uri): array => ['uri' => $uri])
+                    ->values()
+                    ->all();
+            }
+
+            if ($row !== []) {
+                $rows[] = $row;
+            }
+        }
+
+        return $rows;
+    }
+
+    private function summarizeTiktokImageSyncRequest(string $path, array $payload): array
+    {
+        $skuIds = collect($payload['skus'] ?? [])
+            ->map(fn ($sku): string => trim((string) data_get($sku, 'id', '')))
+            ->filter()
+            ->values()
+            ->all();
+
+        $imageSkuIds = collect($payload['skus'] ?? [])
+            ->filter(function ($sku): bool {
+                if (! is_array($sku)) {
+                    return false;
+                }
+
+                foreach ((array) data_get($sku, 'sales_attributes', []) as $attribute) {
+                    if (trim((string) data_get($attribute, 'sku_img.uri', '')) !== '') {
+                        return true;
+                    }
+                }
+
+                return false;
+            })
+            ->map(fn ($sku): string => trim((string) data_get($sku, 'id', '')))
+            ->filter()
+            ->values()
+            ->all();
+
+        return [
+            'method' => 'POST',
+            'path' => $path,
+            'save_mode' => $payload['save_mode'] ?? null,
+            'main_image_count' => is_array($payload['main_images'] ?? null) ? count($payload['main_images']) : 0,
+            'sku_count' => count($skuIds),
+            'sku_ids' => array_slice($skuIds, 0, 50),
+            'image_sku_ids' => array_slice($imageSkuIds, 0, 50),
+        ];
+    }
+
+    private function summarizeTiktokImageSyncResponse(array $response): array
+    {
+        $data = is_array($response['data'] ?? null) ? $response['data'] : null;
+
+        return array_filter([
+            'code' => $response['code'] ?? null,
+            'message' => $response['message'] ?? null,
+            'request_id' => data_get($response, 'request_id'),
+            'data' => $data !== null && strlen(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '') <= 5000
+                ? $data
+                : null,
+            '_http_status' => $response['_http_status'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+    }
+
+    private function sameSyncedImageReference(mixed $left, mixed $right): bool
+    {
+        $left = trim((string) ($left ?? ''));
+        $right = trim((string) ($right ?? ''));
+
+        return $left !== '' && $right !== '' && $left === $right;
+    }
+
+    private function verifyTiktokSkuImageUpdates(array $config, string $accessToken, object $shop, string $productId, array $skuImageUpdates): array
+    {
+        $expected = [];
+        foreach ($skuImageUpdates as $skuId => $update) {
+            $skuId = trim((string) $skuId);
+            $uri = trim((string) ($update['uri'] ?? ''));
+            if ($skuId !== '' && $uri !== '') {
+                $expected[$skuId] = $uri;
+            }
+        }
+
+        if ($expected === []) {
+            return ['ok' => [], 'failed' => []];
+        }
+
+        $lastError = null;
+        $currentUris = [];
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            if ($attempt > 1) {
+                usleep(800000);
+            }
+
+            try {
+                $detail = $this->fetchTiktokProductDetail(
+                    $config,
+                    $accessToken,
+                    $shop,
+                    $productId,
+                    $config['api_host'].'/product/202309/products/'
+                );
+                $productDetail = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
+                $currentUris = $this->tiktokSkuImageUriMap($productDetail);
+            } catch (\Throwable $exception) {
+                $lastError = $exception->getMessage();
+                continue;
+            }
+
+            $allMatched = true;
+            foreach ($expected as $skuId => $expectedUri) {
+                if (($currentUris[$skuId] ?? '') !== $expectedUri) {
+                    $allMatched = false;
+                    break;
+                }
+            }
+
+            if ($allMatched) {
+                break;
+            }
+        }
+
+        $ok = [];
+        $failed = [];
+        foreach ($expected as $skuId => $expectedUri) {
+            $currentUri = $currentUris[$skuId] ?? '';
+            if ($currentUri === $expectedUri) {
+                $ok[$skuId] = true;
+                continue;
+            }
+
+            $failed[$skuId] = [
+                'message' => $lastError
+                    ? 'Verifikasi gambar varian TikTok gagal: '.$lastError
+                    : 'TikTok membalas Success, tetapi gambar varian belum berubah saat verifikasi. Biasanya ini terjadi karena gambar varian dibatasi/ditahan review oleh TikTok pada produk dengan banyak gambar atau varian.',
+                'expected_uri' => $expectedUri,
+                'current_uri' => $currentUri !== '' ? $currentUri : null,
+            ];
+        }
+
+        return ['ok' => $ok, 'failed' => $failed];
+    }
+
+    private function tiktokSkuImageUriMap(array $productDetail): array
+    {
+        $uris = [];
+        foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
+            if (! is_array($sku)) {
+                continue;
+            }
+
+            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
+            if ($skuId === '') {
+                continue;
+            }
+
+            $uri = trim((string) data_get($sku, 'sku_img.uri', ''));
+            $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
+            if (is_array($salesAttributes)) {
+                foreach ($salesAttributes as $attribute) {
+                    $candidate = trim((string) data_get($attribute, 'sku_img.uri', ''));
+                    if ($candidate !== '') {
+                        $uri = $candidate;
+                        break;
+                    }
+                }
+            }
+
+            $uris[$skuId] = $uri;
+        }
+
+        return $uris;
+    }
+
+    private function addTiktokImageSyncReason(array &$result, string $bucket, string $message, array $context = []): void
+    {
+        if (! isset($result[$bucket]) || ! is_array($result[$bucket])) {
+            $result[$bucket] = [];
+        }
+
+        $message = trim($message) !== '' ? trim($message) : 'Tanpa pesan detail.';
+        if (mb_strlen($message) > 300) {
+            $message = mb_substr($message, 0, 300).'...';
+        }
+
+        if (! isset($result[$bucket][$message])) {
+            $result[$bucket][$message] = [
+                'message' => $message,
+                'count' => 0,
+                'samples' => [],
+            ];
+        }
+
+        $result[$bucket][$message]['count']++;
+
+        $sample = array_filter([
+            'stock_master_id' => $context['stock_master_id'] ?? null,
+            'product_id' => isset($context['product_id']) ? (string) $context['product_id'] : null,
+            'sku_id' => isset($context['sku_id']) ? (string) $context['sku_id'] : null,
+            'seller_sku' => $context['seller_sku'] ?? null,
+        ], fn ($value): bool => $value !== null && $value !== '');
+
+        if ($sample !== [] && count($result[$bucket][$message]['samples']) < 5) {
+            $result[$bucket][$message]['samples'][] = $sample;
+        }
+    }
+
+    private function recordTiktokImageSyncAction(array $candidate, string $status, ?array $requestPayload = null, ?array $responsePayload = null, ?string $message = null): void
+    {
+        if (! Schema::hasTable('sku_variant_actions') || empty($candidate['stock_master_id'])) {
+            return;
+        }
+
+        DB::table('sku_variant_actions')->updateOrInsert(
+            [
+                'stock_master_id' => (int) $candidate['stock_master_id'],
+                'target_channel' => 'tiktok',
+                'action_type' => 'sync_image_from_shopee',
+            ],
+            [
+                'source_channel' => 'shopee',
+                'payload' => json_encode([
+                    'seller_sku' => $candidate['seller_sku'] ?? null,
+                    'product_id' => isset($candidate['tiktok_product_id']) ? (string) $candidate['tiktok_product_id'] : null,
+                    'sku_id' => isset($candidate['tiktok_sku_id']) ? (string) $candidate['tiktok_sku_id'] : null,
+                    'source_image_url' => $candidate['shopee_variant_image_url'] ?? null,
+                    'request' => $requestPayload,
+                    'response' => $responsePayload,
+                    'message' => $message,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => $status,
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+    }
+
     private function firstFilledImage(array $values): string
     {
         foreach ($values as $value) {
@@ -387,6 +1437,31 @@ class OmnichannelController extends Controller
         }
 
         return '';
+    }
+
+    private function firstFilledText(array $values): string
+    {
+        foreach ($values as $value) {
+            $text = trim((string) ($value ?? ''));
+            if ($text !== '') {
+                return $text;
+            }
+        }
+
+        return '';
+    }
+
+    private function exactMarketplaceSkuKey(mixed $value): string
+    {
+        return mb_strtolower(trim((string) ($value ?? '')));
+    }
+
+    private function sameExactMarketplaceSku(mixed $left, mixed $right): bool
+    {
+        $leftKey = $this->exactMarketplaceSkuKey($left);
+        $rightKey = $this->exactMarketplaceSkuKey($right);
+
+        return $leftKey !== '' && $rightKey !== '' && $leftKey === $rightKey;
     }
 
     private function imageVariantIssueType(bool $hasShopeeIdentity, bool $hasTiktokIdentity, string $shopeeImage, string $tiktokImage): string
@@ -3325,14 +4400,28 @@ class OmnichannelController extends Controller
             ];
         }
 
-        $response = Http::timeout(45)
-            ->withHeaders([
-                'x-tts-access-token' => $accessToken,
-            ])
-            ->attach('data', file_get_contents($absolutePath), basename($absolutePath))
-            ->post($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), [
-                'use_case' => $useCase,
-            ]);
+        $imageStream = @fopen($absolutePath, 'r');
+        if (! is_resource($imageStream)) {
+            return [
+                'ok' => false,
+                'message' => 'Gambar sumber belum bisa dibuka untuk diupload ke TikTok.',
+            ];
+        }
+
+        try {
+            $response = Http::timeout(45)
+                ->withHeaders([
+                    'x-tts-access-token' => $accessToken,
+                ])
+                ->attach('data', $imageStream, basename($absolutePath))
+                ->post($config['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), [
+                    'use_case' => $useCase,
+                ]);
+        } finally {
+            if (is_resource($imageStream)) {
+                fclose($imageStream);
+            }
+        }
 
         $payload = $response->json();
         if (! is_array($payload)) {
