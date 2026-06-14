@@ -370,9 +370,9 @@ const printSelected = async () => {
     if (!popup) throw new Error('Popup diblokir browser. Izinkan pop-up untuk mencetak label.')
 
     popup.document.write(`<!doctype html><html><head><title>Cetak Resi</title><style>
-      @page { size: ${printMode.value === 'thermal' ? '100mm 150mm' : 'A4'}; margin: 6mm; }
+      @page { size: ${printMode.value === 'thermal' ? '101.6mm 154mm' : 'A4'}; margin: ${printMode.value === 'thermal' ? '0' : '6mm'}; }
       body { margin:0; background:#e5e7eb; font-family:Arial,sans-serif; color:#111827; }
-      .label { width:${printMode.value === 'thermal' ? '96mm' : '180mm'}; min-height:${printMode.value === 'thermal' ? '135mm' : '120mm'}; background:#fff; border:1px solid #111827; margin:10px auto; padding:8px; page-break-after:always; box-sizing:border-box; }
+      .label { width:${printMode.value === 'thermal' ? '101.6mm' : '180mm'}; min-height:${printMode.value === 'thermal' ? '154mm' : '120mm'}; background:#fff; border:1px solid #111827; margin:${printMode.value === 'thermal' ? '0' : '10px auto'}; padding:8px; page-break-after:always; box-sizing:border-box; }
       header { display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #111827; padding-bottom:5px; font-size:16px; }
       .barcode { border:1px solid #111827; margin:8px 0; padding:10px; text-align:center; font-family:'Courier New',monospace; font-size:18px; font-weight:800; letter-spacing:1px; }
       .split { display:grid; grid-template-columns:1fr 1fr; gap:8px; border-bottom:1px dashed #111827; padding-bottom:8px; }
@@ -453,9 +453,11 @@ const renderWatermarkedPdfImages = async (marketplaceDocument, watermarkText) =>
   const pdfjs = await loadPdfJs()
   const pdf = await pdfjs.getDocument({ data: base64ToBytes(marketplaceDocument.content_base64) }).promise
   const images = []
+  const renderScale = 2.25
+  const halfCentimeterInCanvasPixels = Math.round((72 / 2.54) * 0.5 * renderScale)
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber)
-    const viewport = page.getViewport({ scale: 2.25 })
+    const viewport = page.getViewport({ scale: renderScale })
     const canvas = window.document.createElement('canvas')
     const context = canvas.getContext('2d')
     const renderedWidth = Math.floor(viewport.width)
@@ -465,7 +467,8 @@ const renderWatermarkedPdfImages = async (marketplaceDocument, watermarkText) =>
     context.fillStyle = '#fff'
     context.fillRect(0, 0, canvas.width, canvas.height)
     await page.render({ canvasContext: context, viewport }).promise
-    drawCanvasStamp(context, canvas.width, renderedHeight * 0.92, watermarkText)
+    const watermarkCenterY = renderedHeight - Math.max(20, Math.floor(renderedWidth * 0.028)) - halfCentimeterInCanvasPixels
+    drawCanvasStamp(context, canvas.width, watermarkCenterY, watermarkText)
     images.push(canvas.toDataURL('image/png'))
   }
   return images
@@ -555,7 +558,7 @@ const printOfficialSelected = async () => {
   const html = (await Promise.all(results.map(officialDocumentHtml))).join('')
 
   popup.document.open()
-  popup.document.write(`<!doctype html><html><head><title>Dokumen Resmi Marketplace</title><style>@page{size:${officialDocumentSize.value};margin:0}body{font-family:Arial,sans-serif;margin:18px;background:#f3f4f6;color:#111827}.doc{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-bottom:14px}iframe{width:100%;height:760px;border:1px solid #e5e7eb;background:#fff}a{color:#0f5fc7;font-weight:700}.error{color:#991b1b;background:#fef2f2;border-color:#fecaca}.watermark-ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px}.watermark-warning{color:#9a3412;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px 10px}.print-now{border:0;border-radius:6px;background:#0f5fc7;color:#fff;font-weight:800;padding:9px 13px;margin:0 0 10px}.rendered-pages{display:grid;gap:12px}.rendered-page{display:block;width:100%;max-width:760px;margin:0 auto;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,.18)}h1{font-size:22px}h2{font-size:16px;margin:0 0 8px}@media print{body{background:#fff;margin:0}.doc{page-break-after:always;border:0;padding:0;margin:0}.doc:not(.rendered-doc) iframe{height:100vh;border:0}.rendered-pages{display:block}.rendered-page{width:100%;max-width:none;margin:0;box-shadow:none;page-break-after:always}.watermark-ok,.watermark-warning,h1,h2,p a,.print-now{display:none}}</style></head><body><h1>Dokumen Resmi Marketplace</h1>${html}</body></html>`)
+  popup.document.write(`<!doctype html><html><head><title>Dokumen Resmi Marketplace</title><style>@page{size:101.6mm 154mm;margin:0}body{font-family:Arial,sans-serif;margin:18px;background:#f3f4f6;color:#111827}.doc{background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-bottom:14px}iframe{width:100%;height:760px;border:1px solid #e5e7eb;background:#fff}a{color:#0f5fc7;font-weight:700}.error{color:#991b1b;background:#fef2f2;border-color:#fecaca}.watermark-ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px}.watermark-warning{color:#9a3412;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px 10px}.print-now{border:0;border-radius:6px;background:#0f5fc7;color:#fff;font-weight:800;padding:9px 13px;margin:0 0 10px}.rendered-pages{display:grid;gap:12px}.rendered-page{display:block;width:100%;max-width:760px;margin:0 auto;background:#fff;box-shadow:0 1px 4px rgba(15,23,42,.18)}h1{font-size:22px}h2{font-size:16px;margin:0 0 8px}@media print{html,body{width:101.6mm;height:154mm;background:#fff;margin:0;overflow:hidden}.doc{width:101.6mm;height:154mm;page-break-after:always;break-after:page;border:0;padding:0;margin:0;box-sizing:border-box;overflow:hidden}.doc:not(.rendered-doc) iframe{width:101.6mm;height:154mm;border:0}.rendered-pages{display:block;width:101.6mm;height:154mm;overflow:hidden}.rendered-page{display:block;width:101.6mm;height:154mm;max-width:none;object-fit:fill;margin:0;box-shadow:none;page-break-after:always;break-after:page}.watermark-ok,.watermark-warning,h1,h2,p a,.print-now{display:none}}</style></head><body><h1>Dokumen Resmi Marketplace</h1>${html}</body></html>`)
   popup.document.close()
   await markPrinted(results.filter((result) => result.data.status === 'success').map((result) => result.order), officialTiktokDocumentType.value, 'official_document')
   setNotice(results.some((result) => result.data.status !== 'success') ? 'error' : 'success', `${results.length} dokumen resmi selesai diproses. Bila PDF tidak langsung tampil, klik Buka / Download Dokumen.`)
