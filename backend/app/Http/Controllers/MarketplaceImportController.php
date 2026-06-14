@@ -769,6 +769,7 @@ class MarketplaceImportController extends Controller
         $text = str_replace(["\r\n", "\r"], "\n", (string) $value);
         $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text) ?? $text;
         $text = preg_replace('/[\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{1F000}-\x{1FAFF}\x{FE0F}]/u', '', $text) ?? $text;
+        $text = preg_replace('/[\p{S}\x{FE0F}]/u', '', $text) ?? $text;
         $text = preg_replace('/[ \t]+$/m', '', $text) ?? $text;
         $text = preg_replace("/\n{4,}/", "\n\n\n", $text) ?? $text;
 
