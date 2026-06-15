@@ -196,6 +196,9 @@ class MarketplaceAutoSyncController extends Controller
         $orderStatus = $row['marketplace'] === 'shopee'
             ? strtoupper((string) ($order['order_status'] ?? ''))
             : strtoupper((string) ($order['status'] ?? $order['order_status'] ?? data_get($order, 'line_items.0.display_status', '')));
+        $address = $row['marketplace'] === 'shopee'
+            ? data_get($order, 'recipient_address', [])
+            : data_get($order, 'recipient_address', data_get($order, 'shipping_address', []));
 
         if (! $this->isUnshippedOrderStatus($row['marketplace'], $orderStatus)) {
             return null;
@@ -219,6 +222,12 @@ class MarketplaceAutoSyncController extends Controller
             'tracking_number' => $row['marketplace'] === 'shopee'
                 ? (string) (data_get($order, 'package_list.0.tracking_number') ?: data_get($order, 'package_list.0.package_number') ?: '')
                 : (string) ($order['tracking_number'] ?? data_get($order, 'packages.0.tracking_number', '')),
+            'buyer_name' => $row['marketplace'] === 'shopee'
+                ? (string) data_get($address, 'name', '-')
+                : (string) (data_get($address, 'name') ?: data_get($address, 'recipient_name', '-')),
+            'buyer_phone' => $row['marketplace'] === 'shopee'
+                ? (string) data_get($address, 'phone', '')
+                : (string) (data_get($address, 'phone_number') ?: data_get($address, 'phone', '')),
             'items' => $row['marketplace'] === 'shopee'
                 ? $this->shopeeShippingLabelItems($order)
                 : $this->tiktokShippingLabelItems($order),
