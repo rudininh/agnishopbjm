@@ -123,7 +123,7 @@
         :class="['market-card', marketplace.key]"
       >
         <div class="card-top">
-          <div class="market-logo">{{ marketplace.short }}</div>
+          <div class="market-logo" v-html="marketplace.logo"></div>
           <span>Manual</span>
         </div>
 
@@ -215,19 +215,19 @@ const shopeeGitaMassUpdateFileUrl = (type) => `${shopeeGitaMassUpdateUrl}/${type
 const marketplaces = [
   {
     key: 'shopee',
-    short: 'S',
+    logo: '<svg viewBox="0 0 64 64" aria-label="Shopee" role="img"><rect width="64" height="64" rx="14" fill="#ee4d2d"/><path d="M20 24h24l-2 26H22L20 24Z" fill="#fff"/><path d="M25 24c.5-8 4-12 7-12s6.5 4 7 12" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/><path d="M36.8 31.5c-1.4-1-2.9-1.5-4.7-1.5-2.1 0-3.4.8-3.4 2.1 0 1.4 1.3 1.9 4.2 2.9 3.8 1.2 5.8 3 5.8 6.1 0 3.7-3.2 6.1-7.8 6.1-3 0-5.6-.9-7.5-2.4l1.9-3.2c1.7 1.3 3.6 2 5.7 2 2.2 0 3.6-.8 3.6-2.2 0-1.3-1-1.9-4-2.9-3.6-1.1-5.9-2.8-5.9-6.1 0-3.5 3-5.9 7.3-5.9 2.6 0 4.8.7 6.5 2l-1.7 3Z" fill="#ee4d2d"/></svg>',
     name: 'Shopee',
     account: 'Gitashopcollection'
   },
   {
     key: 'lazada',
-    short: 'L',
+    logo: '<svg viewBox="0 0 180 64" aria-label="Lazada" role="img"><rect width="180" height="64" rx="14" fill="#fff"/><path d="M41 14 22 25v22l19 11 19-11V25L41 14Z" fill="#1a2a6c"/><path d="M22 25 41 36v22L22 47V25Z" fill="#f36f21"/><path d="M60 25 41 36v22l19-11V25Z" fill="#f7b500"/><path d="M22 25 41 14l19 11-19 11L22 25Z" fill="#ff0084"/><text x="74" y="42" fill="#1a2a6c" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="800">Lazada</text></svg>',
     name: 'Lazada',
     account: 'Agni Shop Banjarmasin'
   },
   {
     key: 'blibli',
-    short: 'B',
+    logo: '<svg viewBox="0 0 180 64" aria-label="Blibli" role="img"><rect width="180" height="64" rx="14" fill="#fff"/><rect x="14" y="14" width="36" height="36" rx="9" fill="#0095da"/><text x="23" y="42" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="900">B</text><text x="62" y="42" fill="#0095da" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="900">blibli</text></svg>',
     name: 'Blibli',
     account: 'Agni Shop Banjarmasin'
   }
@@ -464,10 +464,10 @@ select,input { border:1px solid #cbd5e1; border-radius:6px; min-height:40px; pad
 .market-card { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); display:grid; gap:16px; min-height:280px; padding:16px; }
 .card-top { align-items:flex-start; display:flex; justify-content:space-between; gap:12px; }
 .card-top span { border-radius:999px; border:1px solid #dbe3ef; color:#475569; font-size:12px; font-weight:800; padding:5px 9px; }
-.market-logo { align-items:center; border-radius:8px; color:#fff; display:grid; font-size:24px; font-weight:900; height:58px; width:58px; }
-.market-card.shopee .market-logo { background:#ee4d2d; }
-.market-card.lazada .market-logo { background:#1a2a6c; }
-.market-card.blibli .market-logo { background:#0095da; }
+.market-logo { align-items:center; display:grid; height:58px; justify-items:start; width:180px; }
+.market-logo :deep(svg) { display:block; height:58px; max-width:180px; width:auto; }
+.market-card.shopee .market-logo { width:58px; }
+.market-card.shopee .market-logo :deep(svg) { width:58px; }
 .market-body { display:grid; gap:5px; }
 .market-body h2 { font-size:22px; line-height:1.2; }
 .market-body strong { color:#334155; font-size:15px; line-height:1.35; }
