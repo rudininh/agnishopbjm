@@ -28,18 +28,29 @@ return new class extends Migration
             ->whereNull('access_token_expire_at')
             ->update(['access_token_expire_at' => DB::raw('expire_at')]);
 
+        $refreshExpireExpression = match (DB::getDriverName()) {
+            'pgsql' => "created_at + INTERVAL '365 days'",
+            'sqlite' => "datetime(created_at, '+365 days')",
+            'mysql', 'mariadb' => 'date_add(created_at, interval 365 day)',
+            default => null,
+        };
+
+        if ($refreshExpireExpression === null) {
+            return;
+        }
+
         DB::table('shopee_tokens')
             ->whereNotNull('refresh_token')
             ->whereNull('refresh_token_expire_at')
             ->whereNotNull('created_at')
-            ->update(['refresh_token_expire_at' => DB::raw("created_at + INTERVAL '365 days'")]);
+            ->update(['refresh_token_expire_at' => DB::raw($refreshExpireExpression)]);
 
         DB::table('shopee_tokens')
             ->whereNotNull('refresh_token')
             ->whereNotNull('refresh_token_expire_at')
             ->whereNotNull('created_at')
-            ->whereRaw("refresh_token_expire_at < created_at + INTERVAL '365 days'")
-            ->update(['refresh_token_expire_at' => DB::raw("created_at + INTERVAL '365 days'")]);
+            ->whereRaw('refresh_token_expire_at < '.$refreshExpireExpression)
+            ->update(['refresh_token_expire_at' => DB::raw($refreshExpireExpression)]);
     }
 
     public function down(): void

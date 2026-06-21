@@ -43,6 +43,7 @@ Route::post('shopee/api-test', [OmnichannelController::class, 'shopeeApiTest']);
 Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiTestContext']);
 Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
+Route::get('runtime/stb-status', [SyncRuntimeController::class, 'stbStatus']);
 Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
 Route::get('marketplace/auto-sync/runtime-status', [SyncRuntimeController::class, 'status']);
 Route::get('marketplace/auto-sync/bridge-status', [SyncRuntimeController::class, 'bridgeStatus']);
@@ -96,13 +97,15 @@ Route::post('auth/logout', [AuthController::class, 'logout'])->middleware('auth:
 Route::apiResource('products', ProductController::class);
 Route::apiResource('categories', CategoryController::class)->only(['index', 'show', 'store', 'update', 'destroy']);
 
-Route::get('cart', [CartController::class, 'show']);
-Route::post('cart/items', [CartController::class, 'addItem']);
-Route::put('cart/items/{item}', [CartController::class, 'updateItem']);
-Route::delete('cart/items/{item}', [CartController::class, 'removeItem']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('cart', [CartController::class, 'show']);
+    Route::post('cart/items', [CartController::class, 'addItem']);
+    Route::put('cart/items/{item}', [CartController::class, 'updateItem']);
+    Route::delete('cart/items/{item}', [CartController::class, 'removeItem']);
 
-Route::post('orders', [OrderController::class, 'checkout']);
-Route::get('orders', [OrderController::class, 'index']);
-Route::get('orders/{order}', [OrderController::class, 'show']);
+    Route::post('orders', [OrderController::class, 'checkout']);
+    Route::get('orders', [OrderController::class, 'index']);
+    Route::get('orders/{order}', [OrderController::class, 'show']);
+});
 Route::get('pos/stock-master-products', [PosController::class, 'stockMasterProducts']);
 Route::post('pos/offline-orders', [PosController::class, 'checkout']);

@@ -27,8 +27,10 @@ class MarketplaceSyncService
             'engine' => [
                 'status' => 'active',
                 'realtime_sync' => true,
-                'safety_check' => true,
+                'safety_check' => ! $this->stbHeavyFeaturesDisabled(),
                 'live_push' => $this->livePushEnabled(),
+                'stb_worker' => (bool) config('stb.sync_worker', false),
+                'browser_auto_sync_allowed' => (bool) config('stb.features.auto_browser', true),
                 'failure_notifications' => [
                     'enabled' => (bool) config('marketplace_notifications.failure.enabled'),
                     'telegram' => (bool) config('marketplace_notifications.telegram.enabled'),
@@ -140,7 +142,9 @@ class MarketplaceSyncService
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->first();
-        $stockSummary = $this->stockAnomalies([], 1, 1)['summary'] ?? [];
+        $stockSummary = $this->stbHeavyFeaturesDisabled()
+            ? []
+            : ($this->stockAnomalies([], 1, 1)['summary'] ?? []);
 
         $alerts = [];
         if ($openIssueCount > 0) {
@@ -170,6 +174,28 @@ class MarketplaceSyncService
 
     public function stockAnomalies(array $filters = [], int $page = 1, int $perPage = 30): array
     {
+        if ($this->stbHeavyFeaturesDisabled()) {
+            return [
+                'summary' => [
+                    'total_anomalies' => 0,
+                    'stock_mismatch' => 0,
+                    'missing_shopee_stock' => 0,
+                    'missing_tiktok_stock' => 0,
+                    'incomplete_mapping' => 0,
+                    'last_safety_run' => $this->lastSafetyRun(),
+                    'disabled' => true,
+                    'message' => 'Stock anomaly deep scan dinonaktifkan di mode STB sync worker.',
+                ],
+                'items' => collect(),
+                'pagination' => [
+                    'page' => max(1, $page),
+                    'per_page' => min(100, max(1, $perPage)),
+                    'total' => 0,
+                    'last_page' => 1,
+                ],
+            ];
+        }
+
         $this->autoHideInactiveStockMasterMappings();
 
         $type = trim((string) ($filters['type'] ?? ''));
@@ -376,6 +402,25 @@ class MarketplaceSyncService
 
     public function reconciliationReport(array $filters = []): array
     {
+        if ($this->stbHeavyFeaturesDisabled()) {
+            return [
+                'generated_at' => now()->toDateTimeString(),
+                'summary' => [
+                    'total_active_mappings' => 0,
+                    'aligned' => 0,
+                    'total_anomalies' => 0,
+                    'stock_mismatch' => 0,
+                    'missing_shopee_stock' => 0,
+                    'missing_tiktok_stock' => 0,
+                    'incomplete_mapping' => 0,
+                    'last_safety_run' => $this->lastSafetyRun(),
+                    'disabled' => true,
+                    'message' => 'Reconciliation report dinonaktifkan di mode STB sync worker.',
+                ],
+                'items' => [],
+            ];
+        }
+
         $anomalyData = $this->stockAnomalies($filters, 1, 100);
         $summary = $anomalyData['summary'] ?? [];
         $totalMappings = $this->activeSkuMappings()->count();
@@ -403,7 +448,7 @@ class MarketplaceSyncService
         $limit = max(1, min(100, $limit));
         $since = now()->subHours($hours);
         $base = DB::table('marketplace_sync_logs')
-            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order', 'manual_shopee_master', 'manual_anomaly_tiktok_master', 'safety_check'])
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order', 'manual_shopee_master', 'manual_anomaly_tiktok_master', 'safety_check', 'stb_order_sync', 'stb_marketplace_lite', 'stb_safety_check_lite'])
             ->where('created_at', '>=', $since);
         $statusCounts = (clone $base)
             ->select('status', DB::raw('COUNT(*) as total'))
@@ -1166,6 +1211,12 @@ class MarketplaceSyncService
     private function livePushEnabled(): bool
     {
         return filter_var(env('AUTO_SYNC_PUSH_LIVE', false), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function stbHeavyFeaturesDisabled(): bool
+    {
+        return (bool) config('stb.sync_worker', false)
+            && ! (bool) config('stb.features.stock_analysis', false);
     }
 
     private function ensureSkuMappingVisibilityColumns(): void

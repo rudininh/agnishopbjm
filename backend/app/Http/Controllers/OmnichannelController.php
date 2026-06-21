@@ -5662,6 +5662,10 @@ class OmnichannelController extends Controller
 
     public function syncMarketplaceCaches(Request $request): JsonResponse
     {
+        if ((bool) config('stb.sync_worker', false)) {
+            abort(423, 'Full marketplace sync dari dashboard dibatasi di mode STB sync worker. Gunakan php artisan agnishop:sync-marketplace-lite atau matikan STB_SYNC_WORKER.');
+        }
+
         return response()->json($this->syncMarketplaceCachesForSkuMapping());
     }
 

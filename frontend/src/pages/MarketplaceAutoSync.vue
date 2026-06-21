@@ -19,7 +19,7 @@
         <button class="primary" type="button" @click="pollTiktokOrders" :disabled="runningTiktokOrderPoll">
           {{ runningTiktokOrderPoll ? 'Cek TikTok...' : 'Cek Pesanan TikTok Sekarang' }}
         </button>
-        <button :class="browserAutoSyncEnabled ? 'danger' : 'primary'" type="button" @click="toggleBrowserAutoSync">
+        <button :class="browserAutoSyncEnabled ? 'danger' : 'primary'" type="button" @click="toggleBrowserAutoSync" :disabled="isBrowserAutoSyncLocked">
           {{ browserAutoSyncEnabled ? 'Matikan Auto Browser' : 'Aktifkan Auto Browser' }}
         </button>
         <button class="danger" type="button" @click="syncShopeeToTiktok" :disabled="runningShopeeToTiktok">
@@ -52,12 +52,35 @@
     <section class="browser-auto-strip">
       <div>
         <span>Auto Browser</span>
-        <strong :class="['badge', browserAutoSyncEnabled ? 'success' : 'neutral']">{{ browserAutoSyncEnabled ? 'Active' : 'Off' }}</strong>
+        <strong :class="['badge', browserAutoSyncEnabled ? 'success' : 'neutral']">{{ isBrowserAutoSyncLocked ? 'Locked' : (browserAutoSyncEnabled ? 'Active' : 'Off') }}</strong>
       </div>
       <div><span>Running</span><strong>{{ browserAutoSyncRunning ? 'Sedang cek order' : '-' }}</strong></div>
       <div><span>Last run</span><strong>{{ formatDate(browserAutoSyncLastRun) }}</strong></div>
       <div><span>Countdown</span><strong>{{ browserAutoSyncCountdownLabel }}</strong></div>
       <div><span>Next run</span><strong>{{ browserAutoSyncNextRunLabel }}</strong></div>
+    </section>
+
+    <section class="stb-worker-strip">
+      <article>
+        <span>STB Worker</span>
+        <strong :class="['badge', stbStatus.worker_online ? 'success' : 'error']">{{ stbStatus.worker_online ? 'Online' : 'Offline' }}</strong>
+      </article>
+      <article>
+        <span>Last STB Heartbeat</span>
+        <strong>{{ formatDate(stbStatus.last_heartbeat_at) }}</strong>
+      </article>
+      <article>
+        <span>Last Order Sync by STB</span>
+        <strong>{{ formatDate(stbStatus.last_order_sync_at) }}</strong>
+      </article>
+      <article>
+        <span>Queue Worker Status</span>
+        <strong :class="['badge', queueStatusClass]">{{ queueStatusLabel }}</strong>
+      </article>
+      <article>
+        <span>Scheduler Status</span>
+        <strong :class="['badge', schedulerStatusClass]">{{ schedulerStatusLabel }}</strong>
+      </article>
     </section>
 
     <section class="runtime-strip">
@@ -738,6 +761,7 @@ const notice = ref('')
 const noticeType = ref('success')
 const dashboard = ref({ statuses: {}, engine: {}, safety: {}, order_sync: {}, webhook_urls: {} })
 const runtimeStatus = ref({})
+const stbStatus = ref({})
 const runtimeEvents = ref({ items: [], pagination: { page: 1, last_page: 1, total: 0 } })
 const bridgeStatus = ref({})
 const runtimeReadiness = ref({ checks: [], summary: {}, ready_for_real_run: false })
@@ -800,6 +824,7 @@ const labelMarketplace = (value) => {
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'
 const formatTime = (value) => value ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)) : '-'
 const browserAutoSyncCountdownLabel = computed(() => {
+  if (isBrowserAutoSyncLocked.value) return '-'
   if (!browserAutoSyncEnabled.value) return '-'
   if (browserAutoSyncRunning.value) return 'Sedang berjalan'
 
@@ -810,16 +835,39 @@ const browserAutoSyncCountdownLabel = computed(() => {
   return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
 })
 const browserAutoSyncNextRunLabel = computed(() => browserAutoSyncNextRun.value ? `${formatTime(browserAutoSyncNextRun.value)} WITA` : '-')
+const isStbWorkerMode = computed(() => Boolean(stbStatus.value.stb_sync_worker || runtimeStatus.value.stb_sync_worker))
+const isBrowserAutoSyncLocked = computed(() => isStbWorkerMode.value || stbStatus.value.auto_browser_enabled === false || runtimeStatus.value.enable_auto_browser === false)
 const runtimeOwnerLabel = computed(() => {
+  if (runtimeStatus.value.active_owner === 'stb_sync_worker') return 'STB worker'
   if (runtimeStatus.value.active_owner === 'online_backup') return 'Online backup'
   if (runtimeStatus.value.active_owner === 'paused') return 'Pause'
   return 'Local'
 })
 const runtimeOwnerClass = computed(() => {
+  if (runtimeStatus.value.active_owner === 'stb_sync_worker') return 'success'
   if (runtimeStatus.value.active_owner === 'online_backup') return 'neutral'
   if (runtimeStatus.value.active_owner === 'paused') return 'error'
   return 'success'
 })
+const queueStatusLabel = computed(() => {
+  const status = stbStatus.value.queue_status?.status
+  if (!status) return '-'
+  if (status === 'running') return 'Running'
+  if (status === 'unknown') return 'Unknown'
+  return status
+})
+const queueStatusClass = computed(() => {
+  const status = stbStatus.value.queue_status?.status
+  if (status === 'running') return 'success'
+  if (status === 'unknown') return 'neutral'
+  return 'error'
+})
+const schedulerStatusLabel = computed(() => {
+  const status = stbStatus.value.scheduler_status?.status
+  if (!status) return '-'
+  return status === 'online' ? 'Online' : 'Offline'
+})
+const schedulerStatusClass = computed(() => stbStatus.value.scheduler_status?.status === 'online' ? 'success' : 'error')
 const bridgeStatusClass = computed(() => {
   if (bridgeStatus.value.status === 'ok') return 'success'
   if (bridgeStatus.value.status === 'warning') return 'neutral'
@@ -862,6 +910,14 @@ const loadDashboard = async () => {
 const loadRuntimeStatus = async () => {
   const { data } = await omnichannelService.autoSyncRuntimeStatus()
   runtimeStatus.value = data.data || {}
+}
+
+const loadStbStatus = async () => {
+  const { data } = await omnichannelService.stbRuntimeStatus()
+  stbStatus.value = data || {}
+  if (isBrowserAutoSyncLocked.value && browserAutoSyncEnabled.value) {
+    stopBrowserAutoSync()
+  }
 }
 
 const loadBridgeStatus = async () => {
@@ -1149,6 +1205,7 @@ const loadAll = async () => {
     await Promise.all([
       loadDashboard(),
       loadRuntimeStatus(),
+      loadStbStatus(),
       loadBridgeStatus(),
       loadRuntimeReadiness(),
       loadRuntimeEvents(1),
@@ -1451,6 +1508,7 @@ const startBrowserAutoSyncCountdown = () => {
 
 const scheduleBrowserAutoSync = (delay = BROWSER_AUTO_SYNC_INTERVAL_MS) => {
   clearBrowserAutoSyncTimer()
+  if (isBrowserAutoSyncLocked.value) return
   if (!browserAutoSyncEnabled.value) return
 
   browserAutoSyncNextRun.value = new Date(Date.now() + delay).toISOString()
@@ -1495,6 +1553,11 @@ const refreshMarketplaceTokensFromBrowser = async (shopeeResult, tiktokResult) =
 }
 
 const runBrowserAutoSync = async () => {
+  if (isBrowserAutoSyncLocked.value) {
+    stopBrowserAutoSync()
+    return
+  }
+
   if (!browserAutoSyncEnabled.value || browserAutoSyncRunning.value) return
 
   browserAutoSyncRunning.value = true
@@ -1546,6 +1609,13 @@ const runBrowserAutoSync = async () => {
 }
 
 const startBrowserAutoSync = () => {
+  if (isBrowserAutoSyncLocked.value) {
+    stopBrowserAutoSync()
+    notice.value = 'Auto Browser dikunci oleh konfigurasi backend.'
+    noticeType.value = 'error'
+    return
+  }
+
   browserAutoSyncEnabled.value = true
   window.localStorage.setItem(BROWSER_AUTO_SYNC_KEY, '1')
   runBrowserAutoSync()
@@ -1561,6 +1631,13 @@ const stopBrowserAutoSync = () => {
 }
 
 const toggleBrowserAutoSync = () => {
+  if (isBrowserAutoSyncLocked.value) {
+    stopBrowserAutoSync()
+    notice.value = 'Auto Browser tidak aktif pada konfigurasi backend saat ini.'
+    noticeType.value = 'error'
+    return
+  }
+
   if (browserAutoSyncEnabled.value) {
     stopBrowserAutoSync()
     notice.value = 'Auto Browser sync dimatikan.'
@@ -1644,7 +1721,9 @@ onMounted(async () => {
   await startRuntimeHeartbeat()
   stockAnomalyAutoRefreshTimer = setInterval(refreshStockAnomaliesIfVisible, STOCK_ANOMALY_AUTO_REFRESH_MS)
   document.addEventListener('visibilitychange', refreshStockAnomaliesIfVisible)
-  if (window.localStorage.getItem(BROWSER_AUTO_SYNC_KEY) === '1') {
+  if (isBrowserAutoSyncLocked.value) {
+    window.localStorage.removeItem(BROWSER_AUTO_SYNC_KEY)
+  } else if (window.localStorage.getItem(BROWSER_AUTO_SYNC_KEY) === '1') {
     startBrowserAutoSync()
   }
 })
@@ -1675,6 +1754,10 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .browser-auto-strip div { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; min-width:0; }
 .browser-auto-strip span { color:#64748b; font-size:12px; font-weight:800; }
 .browser-auto-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.stb-worker-strip { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.stb-worker-strip article { display:grid; gap:6px; background:#fff; border:1px solid #bbf7d0; border-radius:8px; padding:12px; min-width:0; }
+.stb-worker-strip span { color:#166534; font-size:12px; font-weight:800; }
+.stb-worker-strip strong:not(.badge) { color:#0f172a; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .runtime-strip { display:grid; grid-template-columns:1fr 1fr 1.2fr 1fr .8fr 1.8fr 2fr; gap:10px; margin-bottom:14px; }
 .runtime-strip article { display:grid; gap:6px; background:#fff; border:1px solid #dbeafe; border-radius:8px; padding:12px; min-width:0; }
 .runtime-strip span { color:#1d4ed8; font-size:12px; font-weight:800; }
@@ -1769,6 +1852,6 @@ td { color:#0f172a; }
 .detail-items span { display:block; color:#475569; font-size:12px; margin-top:2px; }
 .detail-table table { min-width:980px; }
 @media (max-width:1360px) { .status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.runtime-strip,.bridge-strip { grid-template-columns:1fr; } }
+@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.stb-worker-strip,.runtime-strip,.bridge-strip { grid-template-columns:1fr; } }
 @media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.alert-card,.detail-grid,.detail-items article,.anomaly-filter-row,.compact-filter-row { grid-template-columns:1fr; } }
 </style>

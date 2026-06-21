@@ -6,6 +6,7 @@ use App\Services\MarketplaceSyncService;
 use App\Services\MarketplaceOrderSyncService;
 use App\Services\MarketplaceApiService;
 use App\Services\PdfWatermarkService;
+use App\Services\StbSyncWorkerService;
 use App\Services\StockConsistencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class MarketplaceAutoSyncController extends Controller
         private readonly MarketplaceApiService $marketplaceApiService,
         private readonly StockConsistencyService $stockConsistencyService,
         private readonly PdfWatermarkService $pdfWatermarkService,
+        private readonly StbSyncWorkerService $stbSyncWorkerService,
     ) {
     }
 
@@ -588,6 +590,7 @@ class MarketplaceAutoSyncController extends Controller
     public function syncStockAnomaly(Request $request): JsonResponse
     {
         set_time_limit(0);
+        $this->abortIfStbHeavyDisabled('Stock anomaly sync dinonaktifkan di mode STB sync worker.');
         app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
         $data = $request->validate([
             'sku' => ['required', 'string'],
@@ -602,6 +605,7 @@ class MarketplaceAutoSyncController extends Controller
     public function refreshStockAnomalyProducts(Request $request): JsonResponse
     {
         set_time_limit(0);
+        $this->abortIfStbHeavyDisabled('Refresh produk anomali stok dinonaktifkan di mode STB sync worker.');
         $data = $request->validate([
             'items' => ['required', 'array', 'min:1', 'max:50'],
             'items.*.issue_type' => ['nullable', 'string'],
@@ -800,6 +804,10 @@ class MarketplaceAutoSyncController extends Controller
 
     public function runSafetyCheck(): JsonResponse
     {
+        if ((bool) config('stb.sync_worker', false) && ! (bool) config('stb.features.stock_analysis', false)) {
+            return response()->json($this->stbSyncWorkerService->safetyCheckLite());
+        }
+
         app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
 
         return response()->json($this->stockConsistencyService->run());
@@ -808,6 +816,7 @@ class MarketplaceAutoSyncController extends Controller
     public function syncShopeeToTiktok(): JsonResponse
     {
         set_time_limit(0);
+        $this->abortIfStbHeavyDisabled('Sync stok massal Shopee ke TikTok dinonaktifkan di mode STB sync worker.');
         app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
 
         return response()->json($this->syncService->syncShopeeStocksToTiktok(true));
@@ -936,6 +945,10 @@ class MarketplaceAutoSyncController extends Controller
     public function bulkUpdateEmptySkus(Request $request): JsonResponse
     {
         set_time_limit(0);
+        if ((bool) config('stb.sync_worker', false) && ! (bool) config('stb.features.bulk_sku', false)) {
+            abort(423, 'Bulk SKU dinonaktifkan di mode STB sync worker.');
+        }
+
         if (! $request->boolean('dry_run', false)) {
             app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
         }
@@ -1044,5 +1057,12 @@ class MarketplaceAutoSyncController extends Controller
         return response()->json($this->orderSyncService->pollTiktokUpdatedOrders(
             (int) $request->integer('hours', 24)
         ));
+    }
+
+    private function abortIfStbHeavyDisabled(string $message): void
+    {
+        if ((bool) config('stb.sync_worker', false) && ! (bool) config('stb.features.stock_analysis', false)) {
+            abort(423, $message);
+        }
     }
 }

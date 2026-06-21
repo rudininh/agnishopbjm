@@ -213,6 +213,10 @@ export const omnichannelService = {
     return api.get('/marketplace/auto-sync/runtime-status')
   },
 
+  stbRuntimeStatus() {
+    return api.get('/runtime/stb-status')
+  },
+
   autoSyncBridgeStatus() {
     return api.get('/marketplace/auto-sync/bridge-status')
   },

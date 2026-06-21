@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\MarketplaceOrderSyncService;
+use App\Services\StbRuntimeService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,6 +19,7 @@ class SyncRuntimeController extends Controller
 
     public function __construct(
         private readonly MarketplaceOrderSyncService $orderSyncService,
+        private readonly StbRuntimeService $stbRuntimeService,
     ) {
     }
 
@@ -29,6 +31,11 @@ class SyncRuntimeController extends Controller
             'status' => 'ok',
             'data' => $this->serializeRuntime($runtime),
         ]);
+    }
+
+    public function stbStatus(): JsonResponse
+    {
+        return response()->json($this->stbRuntimeService->status());
     }
 
     public function bridgeStatus(): JsonResponse
@@ -619,6 +626,8 @@ class SyncRuntimeController extends Controller
             'runner_last_real_run_at' => $runtime->runner_last_real_run_at ?? null,
             'runner_last_scheduler_tick_at' => $runtime->runner_last_scheduler_tick_at ?? null,
             'runner_last_scheduler_status' => $runtime->runner_last_scheduler_status ?? null,
+            'stb_sync_worker' => (bool) config('stb.sync_worker', false),
+            'enable_auto_browser' => (bool) config('stb.features.auto_browser', true),
             'last_decision_at' => $runtime->last_decision_at,
             'last_decision_reason' => $runtime->last_decision_reason,
             'server_time' => now()->toISOString(),
