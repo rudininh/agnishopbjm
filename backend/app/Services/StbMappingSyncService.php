@@ -311,7 +311,7 @@ class StbMappingSyncService
                 ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
         }
 
-        $data['is_active'] = true;
+        $data['is_active'] = DB::raw('true');
         $data['created_at'] = now()->toDateTimeString();
         $data['updated_at'] = now()->toDateTimeString();
 
