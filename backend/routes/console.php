@@ -178,6 +178,82 @@ Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--
     return 0;
 });
 
+Artisan::command('agnishop:prune-marketplace-image-cache {--days=7 : Hapus file lebih tua dari jumlah hari ini} {--all : Hapus semua cache gambar marketplace}', function (): int {
+    $baseDir = storage_path('app/public/marketplace-images');
+    if (! is_dir($baseDir)) {
+        $this->info('Folder cache gambar marketplace belum ada.');
+        return 0;
+    }
+
+    $baseRoot = realpath($baseDir);
+    if ($baseRoot === false) {
+        $this->error('Folder cache gambar marketplace tidak valid.');
+        return 1;
+    }
+
+    $all = (bool) $this->option('all');
+    $days = max(0, (int) $this->option('days'));
+    $cutoff = time() - ($days * 86400);
+    $deleted = 0;
+    $bytes = 0;
+    $errors = 0;
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($baseRoot, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+
+    foreach ($iterator as $file) {
+        $path = $file->getPathname();
+        $realPath = realpath($path);
+        if ($realPath === false || ! str_starts_with($realPath, $baseRoot)) {
+            continue;
+        }
+
+        if ($file->isDir()) {
+            @rmdir($realPath);
+            continue;
+        }
+
+        if (! $file->isFile()) {
+            continue;
+        }
+
+        if (! $all && $file->getMTime() > $cutoff) {
+            continue;
+        }
+
+        $size = $file->getSize();
+        if (@unlink($realPath)) {
+            $deleted++;
+            $bytes += $size;
+        } else {
+            $errors++;
+        }
+    }
+
+    $formatBytes = static function (int $value): string {
+        $amount = (float) $value;
+        foreach (['B', 'KB', 'MB', 'GB'] as $unit) {
+            if ($amount < 1024 || $unit === 'GB') {
+                return round($amount, 2).' '.$unit;
+            }
+            $amount /= 1024;
+        }
+
+        return $value.' B';
+    };
+
+    $this->info(sprintf(
+        'Cache gambar marketplace dibersihkan. File=%s, ruang bebas=%s, gagal=%s.',
+        $deleted,
+        $formatBytes($bytes),
+        $errors
+    ));
+
+    return $errors > 0 ? 1 : 0;
+});
+
 Artisan::command('sku-mapping:sync-marketplaces', function (): int {
     app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
     $result = app(OmnichannelController::class)->syncMarketplaceCachesForSkuMapping();

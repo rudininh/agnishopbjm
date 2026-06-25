@@ -7,6 +7,7 @@ return [
     'mode' => 'stb-sync-worker',
     'sync_worker' => $bool('STB_SYNC_WORKER', false),
     'enable_frontend' => $bool('ENABLE_FRONTEND', true),
+    'cache_marketplace_images' => $bool('CACHE_MARKETPLACE_IMAGES', ! $bool('STB_SYNC_WORKER', false)),
     'status_url' => trim((string) env('STB_STATUS_URL', '')),
     'mapping_sync_url' => trim((string) env('STB_MAPPING_SYNC_URL', '')),
     'mapping_sync_token' => trim((string) env('STB_MAPPING_SYNC_TOKEN', '')),

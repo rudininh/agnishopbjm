@@ -4844,6 +4844,10 @@ class OmnichannelController extends Controller
             return $sourceUrl;
         }
 
+        if (! (bool) config('stb.cache_marketplace_images', true)) {
+            return $sourceUrl;
+        }
+
         $cacheDir = storage_path('app/public/marketplace-images/'.$channel);
         if (! is_dir($cacheDir)) {
             @mkdir($cacheDir, 0775, true);
