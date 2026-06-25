@@ -17,7 +17,7 @@ echo "==> Updating apt metadata"
 $SUDO apt-get update
 
 echo "==> Installing lightweight STB packages"
-COMMON_PACKAGES=(nginx unzip git curl supervisor ca-certificates)
+COMMON_PACKAGES=(nginx unzip git curl supervisor cron ca-certificates)
 if apt-cache show "php${PHP_VERSION}-cli" >/dev/null 2>&1; then
   PHP_PACKAGES=(
     "php${PHP_VERSION}-fpm"
@@ -28,9 +28,10 @@ if apt-cache show "php${PHP_VERSION}-cli" >/dev/null 2>&1; then
     "php${PHP_VERSION}-curl"
     "php${PHP_VERSION}-zip"
     "php${PHP_VERSION}-bcmath"
+    "php${PHP_VERSION}-gd"
   )
 else
-  PHP_PACKAGES=(php-fpm php-cli php-pgsql php-mbstring php-xml php-curl php-zip php-bcmath)
+  PHP_PACKAGES=(php-fpm php-cli php-pgsql php-mbstring php-xml php-curl php-zip php-bcmath php-gd)
 fi
 $SUDO apt-get install -y "${COMMON_PACKAGES[@]}" "${PHP_PACKAGES[@]}"
 

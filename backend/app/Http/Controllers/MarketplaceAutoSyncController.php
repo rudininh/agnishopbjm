@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class MarketplaceAutoSyncController extends Controller
 {
@@ -75,14 +76,195 @@ class MarketplaceAutoSyncController extends Controller
 
     public function orderSync(Request $request): JsonResponse
     {
+        $page = (int) $request->integer('page', 1);
+        $perPage = (int) $request->integer('per_page', 20);
+        $runnerFilter = strtolower(trim((string) $request->query('runner', '')));
+        $includeStb = $request->boolean('include_stb', true)
+            && ! (bool) config('stb.sync_worker', false)
+            && ($runnerFilter === '' || $runnerFilter === 'stb');
+        $fetchPerPage = $includeStb ? min(100, max(1, $page) * min(100, max(1, $perPage))) : $perPage;
+        $history = $this->syncService->orderSyncHistory(
+            $request->only(['type', 'status', 'date', 'search', 'order_class', 'runner']),
+            $includeStb ? 1 : $page,
+            $fetchPerPage
+        );
+
+        if ($includeStb) {
+            $history = $this->mergeRemoteStbOrderSyncHistory($history, $request, $page, $perPage, $fetchPerPage);
+        }
+
         return response()->json([
             'status' => 'ok',
-            ...$this->syncService->orderSyncHistory(
-                $request->only(['type', 'status', 'date', 'search', 'order_class']),
-                (int) $request->integer('page', 1),
-                (int) $request->integer('per_page', 20)
-            ),
+            ...$history,
         ]);
+    }
+
+    private function mergeRemoteStbOrderSyncHistory(array $local, Request $request, int $page, int $perPage, int $fetchPerPage): array
+    {
+        $remote = $this->remoteStbOrderSyncHistory($request, $fetchPerPage);
+        $localItems = collect($local['items'] ?? [])->map(fn ($row): array => (array) $row);
+        $remoteItems = collect($remote['items'] ?? [])->map(fn ($row): array => (array) $row);
+        $items = $localItems
+            ->merge($remoteItems)
+            ->sort(function (array $left, array $right): int {
+                $timeCompare = strcmp((string) ($right['created_at'] ?? ''), (string) ($left['created_at'] ?? ''));
+                if ($timeCompare !== 0) {
+                    return $timeCompare;
+                }
+
+                return ((int) ($right['id'] ?? 0)) <=> ((int) ($left['id'] ?? 0));
+            })
+            ->values();
+
+        $page = max(1, $page);
+        $perPage = min(100, max(1, $perPage));
+        $localTotal = (int) data_get($local, 'pagination.total', $localItems->count());
+        $remoteTotal = (int) data_get($remote, 'pagination.total', $remoteItems->count());
+        $total = $localTotal + $remoteTotal;
+
+        return [
+            'summary' => $this->mergeOrderSyncSummary($local['summary'] ?? [], $remote),
+            'items' => $items->forPage($page, $perPage)->values()->all(),
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'last_page' => (int) max(1, ceil($total / $perPage)),
+            ],
+        ];
+    }
+
+    private function remoteStbOrderSyncHistory(Request $request, int $perPage): ?array
+    {
+        $url = $this->remoteStbApiUrl('marketplace/auto-sync/order-sync');
+        if (! $url) {
+            return null;
+        }
+
+        $params = array_filter(
+            $request->only(['type', 'status', 'date', 'search', 'order_class', 'runner']),
+            static fn ($value): bool => $value !== null && $value !== ''
+        );
+        $params['page'] = 1;
+        $params['per_page'] = min(100, max(1, $perPage));
+        $params['include_stb'] = 0;
+
+        try {
+            $response = Http::timeout(8)->acceptJson()->get($url, $params);
+            $payload = $response->json();
+
+            if (! $response->successful() || ! is_array($payload)) {
+                return [
+                    'status' => 'error',
+                    'message' => 'Remote STB order sync tidak mengembalikan response sukses.',
+                    'items' => [],
+                    'summary' => [],
+                    'pagination' => ['total' => 0],
+                ];
+            }
+
+            return [
+                ...$payload,
+                'status' => 'ok',
+                'items' => $this->syncService->decorateSyncLogRows($payload['items'] ?? [], 'remote_stb'),
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+                'items' => [],
+                'summary' => [],
+                'pagination' => ['total' => 0],
+            ];
+        }
+    }
+
+    private function remoteStbApiUrl(string $path): ?string
+    {
+        $statusUrl = trim((string) config('stb.status_url', ''));
+        if ($statusUrl === '') {
+            return null;
+        }
+
+        $parts = parse_url($statusUrl);
+        if (! is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return null;
+        }
+
+        $base = $parts['scheme'].'://'.$parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '');
+
+        return rtrim($base, '/').'/api/'.ltrim($path, '/');
+    }
+
+    private function mergeOrderSyncSummary(array $local, ?array $remote): array
+    {
+        $summary = $local;
+        $summary['remote_stb_status'] = $remote ? ($remote['status'] ?? 'unknown') : 'not_configured';
+        if (($remote['message'] ?? '') !== '') {
+            $summary['remote_stb_message'] = $remote['message'];
+        }
+
+        $remoteSummary = is_array($remote['summary'] ?? null) ? $remote['summary'] : [];
+        if ($remoteSummary === []) {
+            return $summary;
+        }
+
+        foreach ([
+            'open_issues',
+            'errors_today',
+            'skipped_today',
+            'shopee_orders_processed_today',
+            'tiktok_orders_processed_today',
+            'stock_pushes_today',
+            'tiktok_to_shopee_pushes_today',
+        ] as $key) {
+            $summary[$key] = (int) ($summary[$key] ?? 0) + (int) ($remoteSummary[$key] ?? 0);
+        }
+
+        foreach (['last_order_sync_at', 'last_error_at', 'latest_issue_at', 'latest_open_issue_at'] as $key) {
+            $summary[$key] = $this->latestDateString($summary[$key] ?? null, $remoteSummary[$key] ?? null);
+        }
+
+        if ($this->dateStringIsNewer($remoteSummary['latest_issue_at'] ?? null, $local['latest_issue_at'] ?? null)) {
+            $summary['latest_issue_status'] = $remoteSummary['latest_issue_status'] ?? null;
+            $summary['latest_issue_message'] = $remoteSummary['latest_issue_message'] ?? null;
+        }
+
+        if ($this->dateStringIsNewer($remoteSummary['latest_open_issue_at'] ?? null, $local['latest_open_issue_at'] ?? null)) {
+            $summary['latest_open_issue_status'] = $remoteSummary['latest_open_issue_status'] ?? null;
+            $summary['latest_open_issue_message'] = $remoteSummary['latest_open_issue_message'] ?? null;
+        }
+
+        return $summary;
+    }
+
+    private function latestDateString(mixed $left, mixed $right): ?string
+    {
+        $left = trim((string) $left);
+        $right = trim((string) $right);
+        if ($left === '') {
+            return $right !== '' ? $right : null;
+        }
+        if ($right === '') {
+            return $left;
+        }
+
+        return strtotime($right) > strtotime($left) ? $right : $left;
+    }
+
+    private function dateStringIsNewer(mixed $left, mixed $right): bool
+    {
+        $left = trim((string) $left);
+        if ($left === '') {
+            return false;
+        }
+
+        $right = trim((string) $right);
+        if ($right === '') {
+            return true;
+        }
+
+        return strtotime($left) > strtotime($right);
     }
 
     public function shippingLabelOrders(Request $request): JsonResponse
@@ -764,22 +946,26 @@ class MarketplaceAutoSyncController extends Controller
 
     public function exportOrderSync(Request $request)
     {
-        $rows = $this->syncService->orderSyncExportRows($request->only(['type', 'status', 'date', 'search', 'order_class']));
+        $rows = $this->syncService->decorateSyncLogRows(
+            $this->syncService->orderSyncExportRows($request->only(['type', 'status', 'date', 'search', 'order_class', 'runner']))
+        );
         $filename = 'order-sync-'.now()->format('Ymd-His').'.csv';
 
         return response()->streamDownload(function () use ($rows): void {
             $handle = fopen('php://output', 'w');
-            fputcsv($handle, ['time', 'type', 'target', 'order_or_sku', 'old_stock', 'new_stock', 'status', 'message']);
+            fputcsv($handle, ['time', 'runner', 'machine_name', 'type', 'target', 'order_or_sku', 'old_stock', 'new_stock', 'status', 'message']);
             foreach ($rows as $row) {
                 fputcsv($handle, [
-                    $row->created_at,
-                    $row->source_marketplace,
-                    $row->target_marketplace,
-                    $row->sku,
-                    $row->old_stock,
-                    $row->new_stock,
-                    $row->status,
-                    $row->message,
+                    $row['created_at'] ?? null,
+                    $row['runner_label'] ?? null,
+                    $row['machine_name'] ?? null,
+                    $row['source_marketplace'] ?? null,
+                    $row['target_marketplace'] ?? null,
+                    $row['sku'] ?? null,
+                    $row['old_stock'] ?? null,
+                    $row['new_stock'] ?? null,
+                    $row['status'] ?? null,
+                    $row['message'] ?? null,
                 ]);
             }
             fclose($handle);

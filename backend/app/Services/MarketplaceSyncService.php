@@ -84,7 +84,10 @@ class MarketplaceSyncService
             });
         }
 
-        return $this->paginateQuery($query, $page, $perPage);
+        $result = $this->paginateQuery($query, $page, $perPage);
+        $result['items'] = $this->decorateSyncLogRows($result['items']);
+
+        return $result;
     }
 
     public function safetyHistory(int $page = 1, int $perPage = 20): array
@@ -94,7 +97,10 @@ class MarketplaceSyncService
             ->orderByDesc('created_at')
             ->orderByDesc('id');
 
-        return $this->paginateQuery($query, $page, $perPage);
+        $result = $this->paginateQuery($query, $page, $perPage);
+        $result['items'] = $this->decorateSyncLogRows($result['items']);
+
+        return $result;
     }
 
     public function orderSyncHistory(array $filters = [], int $page = 1, int $perPage = 20): array
@@ -106,9 +112,12 @@ class MarketplaceSyncService
 
         $this->applyOrderSyncFilters($query, $filters);
 
+        $result = $this->paginateQuery($query, $page, $perPage);
+        $result['items'] = $this->decorateSyncLogRows($result['items']);
+
         return [
             'summary' => $this->orderSyncSummary(Carbon::today()),
-            ...$this->paginateQuery($query, $page, $perPage),
+            ...$result,
         ];
     }
 
@@ -564,13 +573,16 @@ class MarketplaceSyncService
         return [
             'status' => 'ok',
             'order_ref' => $orderRef,
-            'log' => $log,
+            'log' => $this->decorateSyncLogRows([$log])[0] ?? $log,
             'order' => $order,
             'stock_updates' => $related->map(fn ($row): array => [
                 'id' => $row->id,
                 'time' => $row->created_at,
                 'type' => $row->source_marketplace,
                 'target' => $row->target_marketplace,
+                'runner' => $row->runner ?? null,
+                'runner_label' => $this->runnerLabel($this->normalizeRunner($row->runner ?? null, 'local')),
+                'machine_name' => $row->machine_name ?? null,
                 'sku' => $row->sku,
                 'old_stock' => $row->old_stock,
                 'new_stock' => $row->new_stock,
@@ -658,6 +670,19 @@ class MarketplaceSyncService
         }
         if (($filters['type'] ?? '') !== '') {
             $query->where('source_marketplace', $filters['type']);
+        }
+        if (($filters['runner'] ?? '') !== '' && $this->hasSyncLogColumn('runner')) {
+            $runner = strtolower(trim((string) $filters['runner']));
+            if ($runner === 'stb') {
+                $query->where('runner', 'stb');
+            } elseif ($runner === 'pc') {
+                $query->where(function ($inner): void {
+                    $inner->where('runner', 'like', 'pc%')
+                        ->orWhereNull('runner');
+                });
+            } elseif ($runner === 'online_backup') {
+                $query->where('runner', 'online_backup');
+            }
         }
         if ($orderClass === 'instant') {
             $query->whereIn('source_marketplace', ['shopee_order', 'tiktok_order'])
@@ -771,6 +796,15 @@ class MarketplaceSyncService
             'created_at' => now(),
             'updated_at' => now(),
         ];
+
+        if ($this->hasSyncLogColumn('runner')) {
+            $payload['runner'] = $this->currentRunner();
+        }
+
+        if ($this->hasSyncLogColumn('machine_name')) {
+            $payload['machine_name'] = gethostname() ?: null;
+        }
+
         $id = (int) DB::table('marketplace_sync_logs')->insertGetId($payload);
 
         try {
@@ -780,6 +814,23 @@ class MarketplaceSyncService
         }
 
         return $id;
+    }
+
+    public function decorateSyncLogRows(iterable $rows, string $origin = 'local'): array
+    {
+        return collect($rows)->map(function ($row) use ($origin): array {
+            $data = (array) $row;
+            $runner = $this->normalizeRunner($data['runner'] ?? null, $origin);
+
+            return [
+                ...$data,
+                'runner' => $runner,
+                'runner_label' => $this->runnerLabel($runner),
+                'machine_name' => $data['machine_name'] ?? null,
+                'log_origin' => $origin,
+                'log_key' => $origin.':'.($data['id'] ?? md5(json_encode($data))),
+            ];
+        })->all();
     }
 
     public function findSkuMapping(string $sku): ?object
@@ -1330,7 +1381,11 @@ class MarketplaceSyncService
 
         return [
             'status' => $lastError && (! $lastOrderSync || $lastError >= $lastOrderSync) ? 'warning' : 'active',
-            'polling_interval' => 'Shopee + TikTok Every 5 Minutes',
+            'polling_interval' => sprintf(
+                'Shopee + TikTok Every %d Minute%s',
+                (int) config('stb.intervals.order_sync_minutes', 5),
+                (int) config('stb.intervals.order_sync_minutes', 5) === 1 ? '' : 's'
+            ),
             'last_order_sync_at' => $lastOrderSync ? (string) $lastOrderSync : null,
             'last_error_at' => $lastError ? (string) $lastError : null,
             'open_issues' => (int) (clone $openIssueQuery)->count(),
@@ -1665,6 +1720,46 @@ class MarketplaceSyncService
                 'last_page' => (int) max(1, ceil($total / $perPage)),
             ],
         ];
+    }
+
+    private function hasSyncLogColumn(string $column): bool
+    {
+        try {
+            return Schema::hasColumn('marketplace_sync_logs', $column);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function currentRunner(): string
+    {
+        if ((bool) config('stb.sync_worker', false)) {
+            return 'stb';
+        }
+
+        return PHP_SAPI === 'cli' ? 'pc_artisan' : 'pc_browser';
+    }
+
+    private function normalizeRunner(mixed $runner, string $origin): string
+    {
+        $runner = trim((string) $runner);
+        if ($runner !== '') {
+            return $runner;
+        }
+
+        return $origin === 'remote_stb' ? 'stb' : 'pc';
+    }
+
+    private function runnerLabel(string $runner): string
+    {
+        return match ($runner) {
+            'stb' => 'STB',
+            'pc_browser' => 'PC Browser',
+            'pc_artisan' => 'PC Artisan',
+            'pc' => 'PC',
+            'online_backup' => 'Online Backup',
+            default => $runner,
+        };
     }
 
     private function emptyPagination(int $page, int $perPage): array

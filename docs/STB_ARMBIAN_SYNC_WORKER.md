@@ -9,7 +9,7 @@ Untuk checklist setting `.env`, cron, supervisor, dan verifikasi setelah perangk
 - STB HG680P/HGP dengan Armbian Server 64-bit.
 - RAM 2GB, storage kosong disarankan minimal 2GB.
 - Koneksi internet stabil.
-- PHP 8.2 atau versi PHP yang memenuhi `composer.json` (`^8.2`).
+- PHP 8.2 atau versi PHP yang memenuhi `composer.json` (`^8.2`) dengan ekstensi PostgreSQL, XML, Curl, Zip, BCMath, dan GD.
 - PostgreSQL bisa berada di STB, komputer utama, VPS, atau database lain yang bisa dijangkau STB.
 - Token dan kredensial Shopee/TikTok yang sama dengan backend utama.
 
@@ -27,10 +27,10 @@ Jika install manual:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y nginx php8.2-fpm php8.2-cli php8.2-pgsql php8.2-mbstring php8.2-xml php8.2-curl php8.2-zip php8.2-bcmath unzip git curl supervisor
+sudo apt-get install -y nginx php8.2-fpm php8.2-cli php8.2-pgsql php8.2-mbstring php8.2-xml php8.2-curl php8.2-zip php8.2-bcmath php8.2-gd unzip git curl supervisor
 ```
 
-Jika paket `php8.2-*` tidak tersedia di image Armbian, gunakan paket default Debian seperti `php-cli php-fpm php-pgsql ...`, atau aktifkan repo PHP yang sesuai untuk board tersebut.
+Jika paket `php8.2-*` tidak tersedia di image Armbian, gunakan paket default Debian seperti `php-cli php-fpm php-pgsql php-gd ...`, atau aktifkan repo PHP yang sesuai untuk board tersebut.
 
 ## Install Composer
 
@@ -96,7 +96,7 @@ ENABLE_ORDER_SYNC=true
 ENABLE_MARKETPLACE_SYNC=true
 ENABLE_STOCK_ANALYSIS=false
 ENABLE_BULK_SKU=false
-ORDER_SYNC_INTERVAL_MINUTES=5
+ORDER_SYNC_INTERVAL_MINUTES=1
 SAFETY_CHECK_INTERVAL_MINUTES=15
 FULL_MARKETPLACE_SYNC_INTERVAL_MINUTES=60
 ```
@@ -160,7 +160,7 @@ sudo chmod 0644 /etc/cron.d/agnishop-scheduler
 Isi cron:
 
 ```cron
-* * * * * cd /opt/agnishopbjm/backend && php artisan schedule:run >> /dev/null 2>&1
+* * * * * www-data cd /opt/agnishopbjm/backend && php artisan schedule:run >> /dev/null 2>&1
 ```
 
 Saat `STB_SYNC_WORKER=true`, scheduler menjalankan:

@@ -111,6 +111,8 @@ class StbRuntimeService
         DB::table('marketplace_sync_logs')->insert([
             'source_marketplace' => $source,
             'target_marketplace' => $target,
+            ...($this->hasColumn('marketplace_sync_logs', 'runner') ? ['runner' => 'stb'] : []),
+            ...($this->hasColumn('marketplace_sync_logs', 'machine_name') ? ['machine_name' => gethostname() ?: null] : []),
             'sku' => self::RUNTIME_KEY,
             'old_stock' => null,
             'new_stock' => null,

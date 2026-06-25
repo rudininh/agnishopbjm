@@ -301,6 +301,12 @@
           <option value="skipped">Skipped / Dilewati</option>
           <option value="error">Error</option>
         </select>
+        <select v-model="orderFilters.runner" @change="loadOrderSync(1)">
+          <option value="">Semua runner</option>
+          <option value="pc">PC</option>
+          <option value="stb">STB</option>
+          <option value="online_backup">Online Backup</option>
+        </select>
         <input v-model="orderFilters.date" type="date" @change="loadOrderSync(1)" />
         <input v-model.trim="orderFilters.search" type="search" placeholder="Cari order / SKU / message" @keyup.enter="loadOrderSync(1)" />
       </div>
@@ -311,10 +317,14 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Time</th><th>Jenis</th><th>Target</th><th>Order/SKU</th><th>Old Stock</th><th>New Stock</th><th>Status</th><th>Message</th></tr></thead>
+          <thead><tr><th>Time</th><th>Runner</th><th>Jenis</th><th>Target</th><th>Order/SKU</th><th>Old Stock</th><th>New Stock</th><th>Status</th><th>Message</th></tr></thead>
           <tbody>
-            <tr v-for="row in orderSync.items" :key="row.id" class="clickable-row" @click="openOrderSyncDetail(row.id)">
+            <tr v-for="row in orderSync.items" :key="row.log_key || row.id" :class="{ 'clickable-row': canOpenOrderSyncDetail(row) }" @click="openOrderSyncDetail(row)">
               <td>{{ formatDate(row.created_at) }}</td>
+              <td>
+                <span :class="['badge', runnerBadgeClass(row)]" :title="runnerTitle(row)">{{ runnerLabel(row) }}</span>
+                <small v-if="row.machine_name" class="runner-machine">{{ row.machine_name }}</small>
+              </td>
               <td>{{ labelMarketplace(row.source_marketplace) }}</td>
               <td>{{ labelMarketplace(row.target_marketplace) }}</td>
               <td>{{ row.sku || '-' }}</td>
@@ -323,7 +333,7 @@
               <td><span :class="['badge', row.status === 'success' ? 'success' : row.status === 'error' ? 'error' : 'neutral']">{{ row.status }}</span></td>
               <td>{{ row.message || '-' }}</td>
             </tr>
-            <tr v-if="!orderSync.items.length"><td colspan="8" class="empty">Belum ada histori order sync.</td></tr>
+            <tr v-if="!orderSync.items.length"><td colspan="9" class="empty">Belum ada histori order sync.</td></tr>
           </tbody>
         </table>
       </div>
@@ -352,10 +362,14 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Time</th><th>Source Marketplace</th><th>Target Marketplace</th><th>SKU</th><th>Old Stock</th><th>New Stock</th><th>Status</th><th>Message</th></tr></thead>
+          <thead><tr><th>Time</th><th>Runner</th><th>Source Marketplace</th><th>Target Marketplace</th><th>SKU</th><th>Old Stock</th><th>New Stock</th><th>Status</th><th>Message</th></tr></thead>
           <tbody>
-            <tr v-for="row in syncLogs" :key="row.id">
+            <tr v-for="row in syncLogs" :key="row.log_key || row.id">
               <td>{{ formatDate(row.created_at) }}</td>
+              <td>
+                <span :class="['badge', runnerBadgeClass(row)]" :title="runnerTitle(row)">{{ runnerLabel(row) }}</span>
+                <small v-if="row.machine_name" class="runner-machine">{{ row.machine_name }}</small>
+              </td>
               <td>{{ labelMarketplace(row.source_marketplace) }}</td>
               <td>{{ labelMarketplace(row.target_marketplace) }}</td>
               <td>{{ row.sku || '-' }}</td>
@@ -364,7 +378,7 @@
               <td><span :class="['badge', row.status === 'success' ? 'success' : row.status === 'error' ? 'error' : 'neutral']">{{ row.status }}</span></td>
               <td>{{ row.message || '-' }}</td>
             </tr>
-            <tr v-if="!syncLogs.length"><td colspan="8" class="empty">Belum ada sync log.</td></tr>
+            <tr v-if="!syncLogs.length"><td colspan="9" class="empty">Belum ada sync log.</td></tr>
           </tbody>
         </table>
       </div>
@@ -648,6 +662,7 @@
             <div><span>Created</span><strong>{{ formatDate(detailModal.data?.order?.create_time) }}</strong></div>
             <div><span>Updated</span><strong>{{ formatDate(detailModal.data?.order?.update_time) }}</strong></div>
             <div><span>Log Status</span><strong>{{ detailModal.data?.log?.status || '-' }}</strong></div>
+            <div><span>Runner</span><strong>{{ runnerLabel(detailModal.data?.log) }}</strong></div>
           </div>
 
           <h3>Produk Order</h3>
@@ -668,10 +683,11 @@
           <h3>Update Stok</h3>
           <div class="table-wrap detail-table">
             <table>
-              <thead><tr><th>Time</th><th>Jenis</th><th>Target</th><th>SKU</th><th>Perubahan</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>Time</th><th>Runner</th><th>Jenis</th><th>Target</th><th>SKU</th><th>Perubahan</th><th>Status</th><th>Message</th></tr></thead>
               <tbody>
                 <tr v-for="row in detailModal.data?.stock_updates || []" :key="row.id">
                   <td>{{ formatDate(row.time) }}</td>
+                  <td><span :class="['badge', runnerBadgeClass(row)]">{{ runnerLabel(row) }}</span></td>
                   <td>{{ labelMarketplace(row.type) }}</td>
                   <td>{{ labelMarketplace(row.target) }}</td>
                   <td>{{ row.sku || '-' }}</td>
@@ -679,7 +695,7 @@
                   <td><span :class="['badge', row.status === 'success' ? 'success' : row.status === 'error' ? 'error' : 'neutral']">{{ row.status }}</span></td>
                   <td>{{ row.message || '-' }}</td>
                 </tr>
-                <tr v-if="!(detailModal.data?.stock_updates || []).length"><td colspan="7" class="empty">Belum ada update stok terkait.</td></tr>
+                <tr v-if="!(detailModal.data?.stock_updates || []).length"><td colspan="8" class="empty">Belum ada update stok terkait.</td></tr>
               </tbody>
             </table>
           </div>
@@ -785,7 +801,7 @@ const detailModal = reactive({ open: false, loading: false, retrying: false, dat
 const bulkSkuPreview = reactive({ open: false, loading: false, data: null })
 const webhookFilters = reactive({ marketplace: '', status: '', date: '' })
 const syncFilters = reactive({ marketplace: '', status: '', date: '' })
-const orderFilters = reactive({ type: '', status: '', date: '', search: '', order_class: '' })
+const orderFilters = reactive({ type: '', status: '', runner: '', date: '', search: '', order_class: '' })
 const stockAnomalyFilters = reactive({ type: '', search: '' })
 const skuHistoryFilters = reactive({ channel: '', status: '', date: '', search: '' })
 const watchdogFilters = reactive({ minutes: 5, hours: 24 })
@@ -820,6 +836,30 @@ const labelMarketplace = (value) => {
   if (text === 'tiktok_order') return 'TikTok Order'
   if (text === 'all') return 'Shopee + TikTok'
   return text
+}
+const runnerLabel = (row) => {
+  if (!row) return '-'
+  if (row.runner_label) return row.runner_label
+  if (row.log_origin === 'remote_stb') return 'STB'
+
+  const runner = String(row.runner || '').toLowerCase()
+  if (runner === 'stb') return 'STB'
+  if (runner === 'pc_browser') return 'PC Browser'
+  if (runner === 'pc_artisan') return 'PC Artisan'
+  if (runner === 'online_backup') return 'Online Backup'
+  if (runner === 'pc') return 'PC'
+
+  return runner ? row.runner : '-'
+}
+const runnerBadgeClass = (row) => {
+  const runner = String(row?.runner || '').toLowerCase()
+  if (runner === 'stb' || row?.log_origin === 'remote_stb') return 'success'
+  if (runner === 'online_backup') return 'neutral'
+  return 'neutral'
+}
+const runnerTitle = (row) => {
+  const label = runnerLabel(row)
+  return row?.machine_name ? `${label} - ${row.machine_name}` : label
 }
 const formatDate = (value) => value ? new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'
 const formatTime = (value) => value ? new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value)) : '-'
@@ -1672,7 +1712,18 @@ const exportOrderSync = async () => {
   }
 }
 
-const openOrderSyncDetail = async (id) => {
+const canOpenOrderSyncDetail = (row) => !row?.log_origin || row.log_origin === 'local'
+
+const openOrderSyncDetail = async (row) => {
+  if (!canOpenOrderSyncDetail(row)) {
+    notice.value = 'Detail log STB remote belum dibuka dari dashboard PC. Lihat ringkasannya di tabel atau buka dashboard STB.'
+    noticeType.value = 'success'
+    return
+  }
+
+  const id = row?.id || row
+  if (!id) return
+
   detailModal.open = true
   detailModal.loading = true
   detailModal.data = null
@@ -1794,6 +1845,7 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .badge.success { background:#dcfce7; color:#166534; }
 .badge.error { background:#fee2e2; color:#991b1b; }
 .badge.neutral { background:#e2e8f0; color:#334155; }
+.runner-machine { display:block; margin-top:4px; color:#64748b; font-size:11px; font-weight:700; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 dl { display:grid; gap:10px; }
 dt { color:#64748b; font-size:12px; }
 dd { color:#0f172a; font-size:14px; font-weight:800; margin-top:2px; }

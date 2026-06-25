@@ -10540,6 +10540,8 @@ class OmnichannelController extends Controller
 
     private function ensureTiktokAuthTables(): void
     {
+        $this->ensureTiktokProductTables();
+
         DB::statement("
             CREATE TABLE IF NOT EXISTS tiktok_config (
                 id BIGSERIAL PRIMARY KEY,

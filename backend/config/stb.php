@@ -7,6 +7,7 @@ return [
     'mode' => 'stb-sync-worker',
     'sync_worker' => $bool('STB_SYNC_WORKER', false),
     'enable_frontend' => $bool('ENABLE_FRONTEND', true),
+    'status_url' => trim((string) env('STB_STATUS_URL', '')),
 
     'features' => [
         'auto_browser' => $bool('ENABLE_AUTO_BROWSER', true),

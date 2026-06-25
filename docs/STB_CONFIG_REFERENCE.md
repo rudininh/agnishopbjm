@@ -59,7 +59,7 @@ ENABLE_BULK_SKU=false
 Interval default:
 
 ```env
-ORDER_SYNC_INTERVAL_MINUTES=5
+ORDER_SYNC_INTERVAL_MINUTES=1
 SAFETY_CHECK_INTERVAL_MINUTES=15
 FULL_MARKETPLACE_SYNC_INTERVAL_MINUTES=60
 ORDER_SYNC_LOOKBACK_HOURS=24
@@ -134,7 +134,7 @@ sudo systemctl restart cron
 Isi cron:
 
 ```cron
-* * * * * cd /opt/agnishopbjm/backend && php artisan schedule:run >> /dev/null 2>&1
+* * * * * www-data cd /opt/agnishopbjm/backend && php artisan schedule:run >> /dev/null 2>&1
 ```
 
 ## Verifikasi

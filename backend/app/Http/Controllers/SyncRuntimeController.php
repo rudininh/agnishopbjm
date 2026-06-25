@@ -35,7 +35,51 @@ class SyncRuntimeController extends Controller
 
     public function stbStatus(): JsonResponse
     {
-        return response()->json($this->stbRuntimeService->status());
+        $statusUrl = trim((string) config('stb.status_url', ''));
+
+        if ($statusUrl !== '') {
+            try {
+                $response = Http::timeout(8)->acceptJson()->get($statusUrl);
+                $payload = $response->json();
+
+                if ($response->successful() && is_array($payload)) {
+                    return response()->json([
+                        ...$payload,
+                        'source' => 'remote_stb',
+                        'status_url' => $statusUrl,
+                        'proxy_checked_at' => now()->toISOString(),
+                    ]);
+                }
+
+                return response()->json([
+                    ...$this->stbRuntimeService->status(),
+                    'source' => 'local_fallback',
+                    'status_url' => $statusUrl,
+                    'remote_status' => [
+                        'status' => 'warning',
+                        'http_status' => $response->status(),
+                        'message' => 'Remote STB status tidak mengembalikan response sukses.',
+                    ],
+                    'proxy_checked_at' => now()->toISOString(),
+                ]);
+            } catch (\Throwable $exception) {
+                return response()->json([
+                    ...$this->stbRuntimeService->status(),
+                    'source' => 'local_fallback',
+                    'status_url' => $statusUrl,
+                    'remote_status' => [
+                        'status' => 'error',
+                        'message' => $exception->getMessage(),
+                    ],
+                    'proxy_checked_at' => now()->toISOString(),
+                ]);
+            }
+        }
+
+        return response()->json([
+            ...$this->stbRuntimeService->status(),
+            'source' => 'local',
+        ]);
     }
 
     public function bridgeStatus(): JsonResponse
