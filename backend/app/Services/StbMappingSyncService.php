@@ -187,6 +187,11 @@ class StbMappingSyncService
                 continue;
             }
 
+            if (in_array($table, ['shopee_tokens', 'tiktok_tokens'], true)) {
+                $data = $this->prepareTokenImportData($table, $data);
+                $condition = $this->conditionForRow($table, $data);
+            }
+
             if ($exists) {
                 $updates = $this->updateData($table, $data, $condition, $preserveStock);
                 if ($updates !== []) {
@@ -238,28 +243,15 @@ class StbMappingSyncService
         }
 
         if ($table === 'shopee_tokens') {
-            if (isset($data['id']) && $this->rowExists($table, ['id' => $data['id']])) {
-                return ['id' => $data['id']];
-            }
-
-            return [
-                'account_key' => $data['account_key'] ?? null,
-                'shop_id' => $data['shop_id'] ?? null,
-                'created_at' => $data['created_at'] ?? null,
-            ];
+            $accountKey = trim((string) ($data['account_key'] ?? ''));
+            $shopId = trim((string) ($data['shop_id'] ?? ''));
+            return $accountKey !== '' && $shopId !== '' ? ['account_key' => $accountKey, 'shop_id' => $shopId] : [];
         }
 
         if ($table === 'tiktok_tokens') {
-            if (isset($data['id']) && $this->rowExists($table, ['id' => $data['id']])) {
-                return ['id' => $data['id']];
-            }
-
-            return [
-                'account_key' => $data['account_key'] ?? null,
-                'open_id' => $data['open_id'] ?? null,
-                'shop_id' => $data['shop_id'] ?? null,
-                'created_at' => $data['created_at'] ?? null,
-            ];
+            $accountKey = trim((string) ($data['account_key'] ?? ''));
+            $openId = trim((string) ($data['open_id'] ?? ''));
+            return $accountKey !== '' && $openId !== '' ? ['account_key' => $accountKey, 'open_id' => $openId] : [];
         }
 
         $condition = [];
@@ -299,6 +291,45 @@ class StbMappingSyncService
     private function insertData(array $data): array
     {
         return $this->normalizeDateTimes($data);
+    }
+
+    private function prepareTokenImportData(string $table, array $data): array
+    {
+        unset($data['id']);
+
+        $accountKey = trim((string) ($data['account_key'] ?? ''));
+        if ($accountKey !== '') {
+            DB::table($table)
+                ->where('account_key', $accountKey)
+                ->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
+        }
+
+        $data['is_active'] = true;
+        $data['created_at'] = now()->toDateTimeString();
+        $data['updated_at'] = now()->toDateTimeString();
+
+        return $this->normalizeJsonColumns($table, $data);
+    }
+
+    private function normalizeJsonColumns(string $table, array $data): array
+    {
+        $jsonColumns = [
+            'shopee_tokens' => ['shop_id_list', 'merchant_id_list', 'supplier_id_list', 'user_id_list', 'raw_response'],
+            'tiktok_tokens' => ['granted_scopes', 'raw_response'],
+            'tiktok_shops' => ['raw_response'],
+        ];
+
+        foreach ($jsonColumns[$table] ?? [] as $column) {
+            if (! array_key_exists($column, $data)) {
+                continue;
+            }
+
+            if (is_array($data[$column]) || is_object($data[$column])) {
+                $data[$column] = json_encode($data[$column], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+        }
+
+        return $data;
     }
 
     private function normalizeDateTimes(array $data): array
