@@ -200,6 +200,7 @@ class StbMappingSyncService
                 }
                 $updated++;
             } else {
+                $this->syncSerialSequence($table);
                 DB::table($table)->insert($this->insertData($data));
                 $inserted++;
             }
