@@ -5,9 +5,19 @@
         <p>Marketplace</p>
         <h1>Anomali Stok</h1>
       </div>
-      <button class="primary" type="button" @click="loadAnomalies(1, { forceProductRefresh: true })" :disabled="loading || productRefreshing">
-        {{ productRefreshing ? 'Sync produk...' : (loading ? 'Memuat...' : 'Refresh') }}
-      </button>
+      <div class="header-actions">
+        <button
+          class="danger"
+          type="button"
+          @click="syncAllFromShopee"
+          :disabled="loading || productRefreshing || Boolean(syncingKey) || syncingAllFromShopee"
+        >
+          {{ syncingAllFromShopee ? 'Sinkron Shopee...' : 'Sinkron dari Shopee Semuanya' }}
+        </button>
+        <button class="primary" type="button" @click="loadAnomalies(1, { forceProductRefresh: true })" :disabled="loading || productRefreshing || syncingAllFromShopee">
+          {{ productRefreshing ? 'Sync produk...' : (loading ? 'Memuat...' : 'Refresh') }}
+        </button>
+      </div>
     </header>
 
     <p v-if="notice.message" :class="['notice', notice.type]">{{ notice.message }}</p>
@@ -32,7 +42,7 @@
           <option value="missing_tiktok_stock">Stok TikTok belum ada</option>
           <option value="incomplete_mapping">Mapping marketplace belum lengkap</option>
         </select>
-        <button class="ghost" type="button" @click="loadAnomalies(1)" :disabled="loading || productRefreshing">Terapkan</button>
+        <button class="ghost" type="button" @click="loadAnomalies(1)" :disabled="loading || productRefreshing || syncingAllFromShopee">Terapkan</button>
       </div>
 
       <div class="table-wrap">
@@ -67,7 +77,7 @@
                   <button
                     class="mini"
                     type="button"
-                    :disabled="Boolean(syncingKey) || productRefreshing"
+                    :disabled="Boolean(syncingKey) || productRefreshing || syncingAllFromShopee"
                     @click="syncRow(row, 'shopee')"
                   >
                     {{ isSyncing(row, 'shopee') ? 'Sinkron...' : 'Sinkron dari Shopee' }}
@@ -75,7 +85,7 @@
                   <button
                     class="mini tiktok"
                     type="button"
-                    :disabled="Boolean(syncingKey) || productRefreshing"
+                    :disabled="Boolean(syncingKey) || productRefreshing || syncingAllFromShopee"
                     @click="syncRow(row, 'tiktok')"
                   >
                     {{ isSyncing(row, 'tiktok') ? 'Sinkron...' : 'Sinkron dari TikTok' }}
@@ -113,6 +123,7 @@ const loading = ref(false)
 const productRefreshing = ref(false)
 const notice = ref({ type: '', message: '' })
 const syncingKey = ref('')
+const syncingAllFromShopee = ref(false)
 const rows = ref([])
 const summary = ref({})
 const pagination = ref({ page: 1, last_page: 1, total: 0 })
@@ -164,7 +175,7 @@ const productRefreshSignature = (items) => {
 }
 
 const refreshProductsForAnomalies = async (items, page, force = false) => {
-  if (productRefreshing.value || syncingKey.value) return
+  if (productRefreshing.value || syncingKey.value || syncingAllFromShopee.value) return
 
   const payloadItems = anomalyProductPayload(items)
   const signature = productRefreshSignature(payloadItems)
@@ -215,12 +226,36 @@ const loadAnomalies = async (page = pagination.value.page || 1, options = {}) =>
 }
 
 const refreshCurrentPage = () => {
-  if (document.hidden || loading.value || productRefreshing.value || syncingKey.value) return
+  if (document.hidden || loading.value || productRefreshing.value || syncingKey.value || syncingAllFromShopee.value) return
   loadAnomalies(pagination.value.page || 1)
 }
 
+const syncAllFromShopee = async () => {
+  if (loading.value || productRefreshing.value || syncingKey.value || syncingAllFromShopee.value) return
+
+  syncingAllFromShopee.value = true
+  setNotice('', '')
+  try {
+    const { data } = await omnichannelService.syncAutoSyncShopeeToTiktok()
+    await loadAnomalies(1, { forceProductRefresh: true, clearNotice: false })
+
+    const stats = [
+      `dicek ${data?.checked ?? 0}`,
+      `dipush ${data?.pushed ?? 0}`,
+      `sudah sama ${data?.unchanged ?? 0}`,
+      `dilewati ${data?.skipped ?? 0}`,
+      `gagal ${data?.failed ?? 0}`
+    ].join(', ')
+    setNotice(data?.status === 'warning' ? 'warning' : 'success', `${data?.message || 'Sinkron stok Shopee ke TikTok selesai.'} (${stats})`)
+  } catch (error) {
+    setNotice('error', error?.response?.data?.message || error?.message || 'Sinkron dari Shopee semuanya gagal dijalankan.')
+  } finally {
+    syncingAllFromShopee.value = false
+  }
+}
+
 const syncRow = async (row, sourceMarketplace) => {
-  if (productRefreshing.value) return
+  if (productRefreshing.value || syncingAllFromShopee.value) return
   syncingKey.value = rowKey(row, sourceMarketplace)
   setNotice('', '')
   try {
@@ -254,9 +289,11 @@ onBeforeUnmount(() => {
 .page-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:18px; }
 .page-header p { color:#64748b; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
 .page-header h1 { font-size:28px; line-height:1.15; margin-top:4px; }
+.header-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; }
 button { border:0; border-radius:6px; padding:9px 13px; font-weight:700; cursor:pointer; }
 button:disabled { opacity:.6; cursor:not-allowed; }
 .primary { background:#0f5fc7; color:#fff; }
+.danger { background:#b91c1c; color:#fff; }
 .ghost { background:#fff; color:#0f172a; border:1px solid #dbe3ef; }
 .notice { border-radius:6px; padding:10px 12px; margin-bottom:14px; }
 .notice.error { border:1px solid #fecaca; background:#fef2f2; color:#991b1b; }
@@ -288,7 +325,7 @@ tr.error td { background:#fef2f2; }
 .pagination { display:flex; justify-content:flex-end; align-items:center; gap:10px; margin-top:12px; color:#475569; font-size:13px; }
 @media (max-width:820px) {
   .page-shell { margin-left:0; padding:16px; }
-  .page-header { flex-direction:column; align-items:stretch; }
+  .page-header,.header-actions { flex-direction:column; align-items:stretch; }
   .filter-row { grid-template-columns:1fr; }
 }
 </style>
