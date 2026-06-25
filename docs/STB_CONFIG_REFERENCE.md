@@ -115,6 +115,56 @@ php artisan queue:work --sleep=3 --tries=3 --timeout=120 --memory=256
 
 Mode ini hanya 1 worker supaya RAM 2GB tetap aman.
 
+## Sync Mapping PC ke STB
+
+Fitur ini dipakai agar STB ikut mendapat `stock_master`, `sku_mappings`, cache produk Shopee, cache varian Shopee, image Shopee, dan cache produk TikTok dari PC utama.
+
+Di STB `/opt/agnishopbjm/backend/.env`, isi token rahasia:
+
+```env
+STB_MAPPING_SYNC_TOKEN=ISI_TOKEN_PANJANG_SAMA_DENGAN_PC
+```
+
+Di PC utama `backend/.env`, isi:
+
+```env
+STB_MAPPING_SYNC_URL=http://IP-STB:8088/api/runtime/stb-mapping-sync
+STB_MAPPING_SYNC_TOKEN=ISI_TOKEN_PANJANG_SAMA_DENGAN_STB
+STB_MAPPING_SYNC_ENABLED=true
+STB_MAPPING_SYNC_INTERVAL_MINUTES=15
+STB_MAPPING_SYNC_PRESERVE_STOCK=true
+```
+
+`STB_MAPPING_SYNC_PRESERVE_STOCK=true` artinya row lama di STB tidak ditimpa nilai stoknya; stok hanya ikut masuk untuk produk/varian baru. Ini default yang disarankan karena STB bisa punya stok terbaru dari order sync.
+
+Push manual dari PC:
+
+```bash
+cd backend
+php artisan agnishop:push-stb-mapping
+```
+
+Dry-run dari PC:
+
+```bash
+php artisan agnishop:push-stb-mapping --dry-run
+```
+
+Jika ingin benar-benar mirror stok dari PC ke STB:
+
+```bash
+php artisan agnishop:push-stb-mapping --with-stock
+```
+
+Setelah push pertama di STB:
+
+```bash
+cd /opt/agnishopbjm/backend
+php artisan config:clear
+php artisan config:cache
+sudo supervisorctl restart agnishop-worker
+```
+
 ## Cron Scheduler
 
 File sumber repo:

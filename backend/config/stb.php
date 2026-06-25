@@ -8,6 +8,11 @@ return [
     'sync_worker' => $bool('STB_SYNC_WORKER', false),
     'enable_frontend' => $bool('ENABLE_FRONTEND', true),
     'status_url' => trim((string) env('STB_STATUS_URL', '')),
+    'mapping_sync_url' => trim((string) env('STB_MAPPING_SYNC_URL', '')),
+    'mapping_sync_token' => trim((string) env('STB_MAPPING_SYNC_TOKEN', '')),
+    'mapping_sync_enabled' => $bool('STB_MAPPING_SYNC_ENABLED', false),
+    'mapping_sync_minutes' => $int('STB_MAPPING_SYNC_INTERVAL_MINUTES', 15, 1, 60),
+    'mapping_sync_preserve_stock' => $bool('STB_MAPPING_SYNC_PRESERVE_STOCK', true),
 
     'features' => [
         'auto_browser' => $bool('ENABLE_AUTO_BROWSER', true),

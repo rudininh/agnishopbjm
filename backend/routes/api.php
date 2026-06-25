@@ -11,6 +11,7 @@ use App\Http\Controllers\OmnichannelController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\SyncRuntimeController;
+use App\Http\Controllers\StbMappingSyncController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('health', fn () => response()->json(['status' => 'ok', 'service' => 'agnishop-api']));
@@ -44,6 +45,7 @@ Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiT
 Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
 Route::get('runtime/stb-status', [SyncRuntimeController::class, 'stbStatus']);
+Route::post('runtime/stb-mapping-sync', [StbMappingSyncController::class, 'import']);
 Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
 Route::get('marketplace/auto-sync/runtime-status', [SyncRuntimeController::class, 'status']);
 Route::get('marketplace/auto-sync/bridge-status', [SyncRuntimeController::class, 'bridgeStatus']);

@@ -2,9 +2,11 @@
 
 use App\Http\Controllers\OmnichannelController;
 use App\Services\MarketplaceOrderSyncService;
+use App\Services\StbMappingSyncService;
 use App\Services\StbSyncWorkerService;
 use App\Services\StockConsistencyService;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schedule;
 
 $stbMode = (bool) config('stb.sync_worker', false);
@@ -80,6 +82,102 @@ Artisan::command('agnishop:runtime-status {--json}', function (): int {
     return ($status['db_status']['ok'] ?? false) ? 0 : 1;
 });
 
+Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output}', function (): int {
+    $snapshot = app(StbMappingSyncService::class)->snapshot();
+    $output = trim((string) ($this->option('output') ?: base_path('../stb-mapping-snapshot.json')));
+    file_put_contents($output, json_encode($snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+    $this->info('Snapshot mapping STB dibuat: '.$output);
+    foreach ($snapshot['tables'] ?? [] as $table => $payload) {
+        $this->line($table.': '.(int) ($payload['count'] ?? 0).' rows');
+    }
+
+    return 0;
+});
+
+Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--token= : Token STB mapping sync} {--with-stock : Overwrite stok existing di STB} {--dry-run : Validasi tanpa import permanen} {--chunk=500 : Jumlah row per request} {--timeout=90}', function (): int {
+    $service = app(StbMappingSyncService::class);
+    $url = $service->endpointFromBase($this->option('url'));
+    $token = trim((string) ($this->option('token') ?: config('stb.mapping_sync_token', '')));
+    $timeout = max(10, min(300, (int) $this->option('timeout')));
+
+    if ($url === '') {
+        $this->error('URL STB belum diisi. Pakai --url=http://192.168.18.15:8088 atau STB_MAPPING_SYNC_URL.');
+        return 1;
+    }
+    if ($token === '') {
+        $this->error('Token STB belum diisi. Pakai --token=... atau STB_MAPPING_SYNC_TOKEN.');
+        return 1;
+    }
+
+    $snapshot = $service->snapshot();
+    $this->info('Mengirim snapshot mapping ke '.$url);
+    foreach ($snapshot['tables'] ?? [] as $table => $payload) {
+        $this->line($table.': '.(int) ($payload['count'] ?? 0).' rows');
+    }
+
+    $chunkSize = max(50, min(2000, (int) $this->option('chunk')));
+    $aggregate = [];
+    foreach (($snapshot['tables'] ?? []) as $table => $payload) {
+        $rows = is_array($payload['rows'] ?? null) ? $payload['rows'] : [];
+        $chunks = array_chunk($rows, $chunkSize);
+        if ($chunks === []) {
+            $chunks = [[]];
+        }
+
+        foreach ($chunks as $index => $rowsChunk) {
+            $partialSnapshot = [
+                ...$snapshot,
+                'tables' => [
+                    $table => [
+                        ...$payload,
+                        'count' => count($rowsChunk),
+                        'rows' => $rowsChunk,
+                    ],
+                ],
+            ];
+
+            $response = Http::timeout($timeout)
+                ->acceptJson()
+                ->withToken($token)
+                ->post($url, [
+                    'snapshot' => $partialSnapshot,
+                    'preserve_stock' => ! (bool) $this->option('with-stock'),
+                    'dry_run' => (bool) $this->option('dry-run'),
+                ]);
+
+            $responsePayload = $response->json();
+            if (! $response->successful() || ! is_array($responsePayload)) {
+                $this->error(sprintf('Push mapping STB gagal di %s chunk %s. HTTP %s', $table, $index + 1, $response->status()));
+                $this->line($response->body());
+                return 1;
+            }
+
+            foreach (($responsePayload['tables'] ?? []) as $summaryTable => $summary) {
+                foreach (['received', 'inserted', 'updated', 'skipped'] as $key) {
+                    $aggregate[$summaryTable][$key] = (int) ($aggregate[$summaryTable][$key] ?? 0) + (int) ($summary[$key] ?? 0);
+                }
+            }
+
+            $this->line(sprintf('%s chunk %s/%s terkirim.', $table, $index + 1, count($chunks)));
+        }
+    }
+
+    $this->info('Push mapping STB selesai.');
+    foreach ($aggregate as $table => $summary) {
+        $this->line(sprintf(
+            '%s: received=%s inserted=%s updated=%s skipped=%s',
+            $table,
+            (int) ($summary['received'] ?? 0),
+            (int) ($summary['inserted'] ?? 0),
+            (int) ($summary['updated'] ?? 0),
+            (int) ($summary['skipped'] ?? 0),
+        ));
+    }
+
+    return 0;
+});
+
 Artisan::command('sku-mapping:sync-marketplaces', function (): int {
     app(OmnichannelController::class)->autoRefreshMarketplaceTokens();
     $result = app(OmnichannelController::class)->syncMarketplaceCachesForSkuMapping();
@@ -96,6 +194,12 @@ if (! $stbMode) {
     Schedule::command('sku-mapping:sync-marketplaces')
         ->everyFifteenMinutes()
         ->withoutOverlapping();
+
+    if ((bool) config('stb.mapping_sync_enabled', false)) {
+        Schedule::command('agnishop:push-stb-mapping')
+            ->cron($stbCron((int) config('stb.mapping_sync_minutes', 15)))
+            ->withoutOverlapping();
+    }
 }
 
 Artisan::command('marketplace:refresh-tokens {--force}', function (): int {

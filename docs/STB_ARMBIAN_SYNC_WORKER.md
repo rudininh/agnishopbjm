@@ -138,6 +138,7 @@ php artisan agnishop:sync-orders
 php artisan agnishop:sync-marketplace-lite
 php artisan agnishop:safety-check-lite
 php artisan agnishop:runtime-status
+php artisan agnishop:push-stb-mapping
 ```
 
 Fungsi:
@@ -147,6 +148,33 @@ Fungsi:
 - `agnishop:safety-check-lite`: cek error/stale sync ringan. Deep stock analysis hanya berjalan bila `ENABLE_STOCK_ANALYSIS=true`.
 - `agnishop:runtime-status`: cek heartbeat, last sync, database, scheduler, supervisor queue, disk, dan memori.
 - `agnishop:stb-heartbeat`: menyimpan heartbeat STB agar dashboard utama tahu worker hidup.
+- `agnishop:push-stb-mapping`: dijalankan dari PC utama untuk mengirim mapping/cache produk ke endpoint STB.
+
+## Sync Mapping PC ke STB
+
+Set token yang sama di PC dan STB:
+
+```env
+STB_MAPPING_SYNC_TOKEN=ISI_TOKEN_PANJANG
+```
+
+Di PC utama tambahkan URL STB:
+
+```env
+STB_MAPPING_SYNC_URL=http://IP-STB:8088/api/runtime/stb-mapping-sync
+STB_MAPPING_SYNC_ENABLED=true
+STB_MAPPING_SYNC_INTERVAL_MINUTES=15
+STB_MAPPING_SYNC_PRESERVE_STOCK=true
+```
+
+Push manual dari PC:
+
+```bash
+cd backend
+php artisan agnishop:push-stb-mapping
+```
+
+Default `preserve_stock=true`, jadi stok existing di STB tidak ditimpa oleh snapshot PC. Gunakan `--with-stock` hanya saat memang ingin mirror stok PC ke STB.
 
 ## Laravel Scheduler
 
