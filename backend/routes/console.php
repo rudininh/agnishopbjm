@@ -82,12 +82,15 @@ Artisan::command('agnishop:runtime-status {--json}', function (): int {
     return ($status['db_status']['ok'] ?? false) ? 0 : 1;
 });
 
-Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output}', function (): int {
-    $snapshot = app(StbMappingSyncService::class)->snapshot();
+Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output} {--with-tokens : Sertakan token marketplace aktif}', function (): int {
+    $snapshot = app(StbMappingSyncService::class)->snapshot((bool) $this->option('with-tokens'));
     $output = trim((string) ($this->option('output') ?: base_path('../stb-mapping-snapshot.json')));
     file_put_contents($output, json_encode($snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 
     $this->info('Snapshot mapping STB dibuat: '.$output);
+    if ((bool) $this->option('with-tokens')) {
+        $this->warn('Snapshot ini berisi token marketplace. Simpan dan hapus dengan hati-hati.');
+    }
     foreach ($snapshot['tables'] ?? [] as $table => $payload) {
         $this->line($table.': '.(int) ($payload['count'] ?? 0).' rows');
     }
@@ -95,7 +98,7 @@ Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output
     return 0;
 });
 
-Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--token= : Token STB mapping sync} {--with-stock : Overwrite stok existing di STB} {--dry-run : Validasi tanpa import permanen} {--chunk=500 : Jumlah row per request} {--timeout=90}', function (): int {
+Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--token= : Token STB mapping sync} {--with-stock : Overwrite stok existing di STB} {--with-tokens : Sertakan token marketplace aktif untuk STB} {--dry-run : Validasi tanpa import permanen} {--chunk=500 : Jumlah row per request} {--timeout=90}', function (): int {
     $service = app(StbMappingSyncService::class);
     $url = $service->endpointFromBase($this->option('url'));
     $token = trim((string) ($this->option('token') ?: config('stb.mapping_sync_token', '')));
@@ -110,8 +113,11 @@ Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--
         return 1;
     }
 
-    $snapshot = $service->snapshot();
+    $snapshot = $service->snapshot((bool) $this->option('with-tokens'));
     $this->info('Mengirim snapshot mapping ke '.$url);
+    if ((bool) $this->option('with-tokens')) {
+        $this->warn('Mode token aktif: token marketplace ikut dikirim ke STB melalui endpoint internal.');
+    }
     foreach ($snapshot['tables'] ?? [] as $table => $payload) {
         $this->line($table.': '.(int) ($payload['count'] ?? 0).' rows');
     }

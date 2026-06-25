@@ -16,6 +16,12 @@ class StbMappingSyncService
         'tiktok_products' => ['product_id', 'sku_id'],
     ];
 
+    private const TOKEN_TABLES = [
+        'shopee_tokens' => ['account_key', 'shop_id', 'created_at'],
+        'tiktok_tokens' => ['account_key', 'open_id', 'shop_id', 'created_at'],
+        'tiktok_shops' => ['id'],
+    ];
+
     private const STOCK_COLUMNS = [
         'stock_master' => ['stock_qty'],
         'shopee_product' => ['stock'],
@@ -23,19 +29,22 @@ class StbMappingSyncService
         'tiktok_products' => ['stock_qty'],
     ];
 
-    public function snapshot(): array
+    public function snapshot(bool $includeTokens = false): array
     {
         $this->ensureTables();
 
         $tables = [];
-        foreach (array_keys(self::TABLES) as $table) {
+        foreach (array_keys($this->tables($includeTokens)) as $table) {
             if (! Schema::hasTable($table)) {
                 continue;
             }
 
             $columns = Schema::getColumnListing($table);
             $query = DB::table($table);
-            foreach (self::TABLES[$table] as $column) {
+            if (in_array($table, ['shopee_tokens', 'tiktok_tokens'], true) && in_array('is_active', $columns, true)) {
+                $query->whereRaw('COALESCE(is_active, true) = true');
+            }
+            foreach ($this->tables($includeTokens)[$table] as $column) {
                 if (in_array($column, $columns, true)) {
                     $query->orderBy($column);
                 }
@@ -57,6 +66,7 @@ class StbMappingSyncService
             'schema_version' => 1,
             'generated_at' => now()->toISOString(),
             'source_host' => gethostname() ?: null,
+            'includes_tokens' => $includeTokens,
             'tables' => $tables,
         ];
     }
@@ -76,7 +86,7 @@ class StbMappingSyncService
 
         $summary = [];
         $import = function () use ($tables, $preserveStock, $dryRun, &$summary): void {
-            foreach (array_keys(self::TABLES) as $table) {
+            foreach (array_keys($this->tables(isset($tables['shopee_tokens']) || isset($tables['tiktok_tokens']) || isset($tables['tiktok_shops']))) as $table) {
                 if (! isset($tables[$table]) || ! is_array($tables[$table])) {
                     continue;
                 }
@@ -214,8 +224,33 @@ class StbMappingSyncService
             }
         }
 
+        if ($table === 'shopee_tokens') {
+            if (isset($data['id']) && $this->rowExists($table, ['id' => $data['id']])) {
+                return ['id' => $data['id']];
+            }
+
+            return [
+                'account_key' => $data['account_key'] ?? null,
+                'shop_id' => $data['shop_id'] ?? null,
+                'created_at' => $data['created_at'] ?? null,
+            ];
+        }
+
+        if ($table === 'tiktok_tokens') {
+            if (isset($data['id']) && $this->rowExists($table, ['id' => $data['id']])) {
+                return ['id' => $data['id']];
+            }
+
+            return [
+                'account_key' => $data['account_key'] ?? null,
+                'open_id' => $data['open_id'] ?? null,
+                'shop_id' => $data['shop_id'] ?? null,
+                'created_at' => $data['created_at'] ?? null,
+            ];
+        }
+
         $condition = [];
-        foreach (self::TABLES[$table] ?? [] as $column) {
+        foreach ($this->tables(true)[$table] ?? [] as $column) {
             if (! array_key_exists($column, $data) || ($data[$column] === null && $column !== 'model_id')) {
                 return [];
             }
@@ -395,6 +430,77 @@ class StbMappingSyncService
             )
         ");
 
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS shopee_tokens (
+                id BIGSERIAL PRIMARY KEY,
+                account_key TEXT NULL,
+                account_name TEXT NULL,
+                partner_id BIGINT NULL,
+                shop_id BIGINT NULL,
+                merchant_id BIGINT NULL,
+                supplier_id BIGINT NULL,
+                user_id BIGINT NULL,
+                shop_id_list JSONB NULL,
+                merchant_id_list JSONB NULL,
+                supplier_id_list JSONB NULL,
+                user_id_list JSONB NULL,
+                access_token TEXT NULL,
+                refresh_token TEXT NULL,
+                expire_in INTEGER NULL,
+                expire_at TIMESTAMP NULL,
+                access_token_expire_at TIMESTAMP NULL,
+                refresh_token_expire_at TIMESTAMP NULL,
+                request_id TEXT NULL,
+                error TEXT NULL,
+                message TEXT NULL,
+                raw_response JSONB NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_tokens (
+                id BIGSERIAL PRIMARY KEY,
+                account_key TEXT NULL,
+                account_name TEXT NULL,
+                open_id TEXT NULL,
+                seller_name TEXT NULL,
+                seller_region TEXT NULL,
+                access_token TEXT NULL,
+                refresh_token TEXT NULL,
+                expire_at TIMESTAMP NULL,
+                expire_in INTEGER NULL,
+                access_token_expire_at TIMESTAMP NULL,
+                refresh_token_expire_at TIMESTAMP NULL,
+                granted_scopes JSONB NULL,
+                shop_id TEXT NULL,
+                request_id TEXT NULL,
+                message TEXT NULL,
+                raw_response JSONB NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
+        DB::statement("
+            CREATE TABLE IF NOT EXISTS tiktok_shops (
+                id TEXT PRIMARY KEY,
+                shop_id TEXT NULL,
+                code TEXT NULL,
+                name TEXT NULL,
+                region TEXT NULL,
+                seller_type TEXT NULL,
+                cipher TEXT NULL,
+                shop_cipher TEXT NULL,
+                raw_response JSONB NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        ");
+
         foreach ([
             'stock_master' => [
                 'shopee_product_id TEXT NULL',
@@ -438,6 +544,37 @@ class StbMappingSyncService
                 'is_active BOOLEAN DEFAULT TRUE',
                 'created_at TIMESTAMP DEFAULT NOW()',
             ],
+            'shopee_tokens' => [
+                'account_key TEXT NULL',
+                'account_name TEXT NULL',
+                'access_token_expire_at TIMESTAMP NULL',
+                'refresh_token_expire_at TIMESTAMP NULL',
+                'is_active BOOLEAN DEFAULT TRUE',
+                'created_at TIMESTAMP DEFAULT NOW()',
+                'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
+            'tiktok_tokens' => [
+                'account_key TEXT NULL',
+                'account_name TEXT NULL',
+                'expire_in INTEGER NULL',
+                'access_token_expire_at TIMESTAMP NULL',
+                'refresh_token_expire_at TIMESTAMP NULL',
+                'granted_scopes JSONB NULL',
+                'shop_id TEXT NULL',
+                'request_id TEXT NULL',
+                'message TEXT NULL',
+                'raw_response JSONB NULL',
+                'is_active BOOLEAN DEFAULT TRUE',
+                'created_at TIMESTAMP DEFAULT NOW()',
+                'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
+            'tiktok_shops' => [
+                'shop_id TEXT NULL',
+                'raw_response JSONB NULL',
+                'shop_cipher TEXT NULL',
+                'created_at TIMESTAMP DEFAULT NOW()',
+                'updated_at TIMESTAMP DEFAULT NOW()',
+            ],
         ] as $table => $definitions) {
             foreach ($definitions as $definition) {
                 DB::statement('ALTER TABLE '.$table.' ADD COLUMN IF NOT EXISTS '.$definition);
@@ -447,5 +584,10 @@ class StbMappingSyncService
         DB::statement('CREATE INDEX IF NOT EXISTS sku_mappings_stock_master_id_idx ON sku_mappings (stock_master_id)');
         DB::statement('CREATE INDEX IF NOT EXISTS tiktok_products_product_sku_idx ON tiktok_products (product_id, sku_id)');
         DB::statement('CREATE INDEX IF NOT EXISTS shopee_product_image_lookup_idx ON shopee_product_image (item_id, model_id)');
+    }
+
+    private function tables(bool $includeTokens = false): array
+    {
+        return $includeTokens ? [...self::TABLES, ...self::TOKEN_TABLES] : self::TABLES;
     }
 }
