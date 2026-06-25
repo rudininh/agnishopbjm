@@ -82,8 +82,11 @@ Artisan::command('agnishop:runtime-status {--json}', function (): int {
     return ($status['db_status']['ok'] ?? false) ? 0 : 1;
 });
 
-Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output} {--with-tokens : Sertakan token marketplace aktif}', function (): int {
-    $snapshot = app(StbMappingSyncService::class)->snapshot((bool) $this->option('with-tokens'));
+Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output} {--with-tokens : Sertakan token marketplace aktif} {--only-tokens : Export token marketplace aktif saja} {--skip-images : Jangan sertakan cache URL gambar Shopee}', function (): int {
+    $service = app(StbMappingSyncService::class);
+    $onlyTables = (bool) $this->option('only-tokens') ? $service->tokenTableNames() : [];
+    $exceptTables = (bool) $this->option('skip-images') ? ['shopee_product_image'] : [];
+    $snapshot = $service->snapshot((bool) $this->option('with-tokens') || (bool) $this->option('only-tokens'), $onlyTables, $exceptTables);
     $output = trim((string) ($this->option('output') ?: base_path('../stb-mapping-snapshot.json')));
     file_put_contents($output, json_encode($snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 
@@ -98,7 +101,7 @@ Artisan::command('agnishop:export-stb-mapping {--output= : Path file JSON output
     return 0;
 });
 
-Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--token= : Token STB mapping sync} {--with-stock : Overwrite stok existing di STB} {--with-tokens : Sertakan token marketplace aktif untuk STB} {--dry-run : Validasi tanpa import permanen} {--chunk=500 : Jumlah row per request} {--timeout=90}', function (): int {
+Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--token= : Token STB mapping sync} {--with-stock : Overwrite stok existing di STB} {--with-tokens : Sertakan token marketplace aktif untuk STB} {--only-tokens : Kirim token marketplace aktif saja} {--skip-images : Jangan kirim tabel shopee_product_image} {--dry-run : Validasi tanpa import permanen} {--chunk=500 : Jumlah row per request} {--timeout=90}', function (): int {
     $service = app(StbMappingSyncService::class);
     $url = $service->endpointFromBase($this->option('url'));
     $token = trim((string) ($this->option('token') ?: config('stb.mapping_sync_token', '')));
@@ -113,10 +116,16 @@ Artisan::command('agnishop:push-stb-mapping {--url= : URL endpoint/base STB} {--
         return 1;
     }
 
-    $snapshot = $service->snapshot((bool) $this->option('with-tokens'));
+    $includeTokens = (bool) $this->option('with-tokens') || (bool) $this->option('only-tokens');
+    $onlyTables = (bool) $this->option('only-tokens') ? $service->tokenTableNames() : [];
+    $exceptTables = (bool) $this->option('skip-images') ? ['shopee_product_image'] : [];
+    $snapshot = $service->snapshot($includeTokens, $onlyTables, $exceptTables);
     $this->info('Mengirim snapshot mapping ke '.$url);
-    if ((bool) $this->option('with-tokens')) {
+    if ($includeTokens) {
         $this->warn('Mode token aktif: token marketplace ikut dikirim ke STB melalui endpoint internal.');
+    }
+    if ((bool) $this->option('skip-images')) {
+        $this->warn('Mode hemat: shopee_product_image tidak dikirim.');
     }
     foreach ($snapshot['tables'] ?? [] as $table => $payload) {
         $this->line($table.': '.(int) ($payload['count'] ?? 0).' rows');

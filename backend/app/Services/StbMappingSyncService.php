@@ -29,12 +29,20 @@ class StbMappingSyncService
         'tiktok_products' => ['stock_qty'],
     ];
 
-    public function snapshot(bool $includeTokens = false): array
+    public function snapshot(bool $includeTokens = false, array $onlyTables = [], array $exceptTables = []): array
     {
         $this->ensureTables();
 
         $tables = [];
-        foreach (array_keys($this->tables($includeTokens)) as $table) {
+        $tableDefinitions = $this->tables($includeTokens);
+        if ($onlyTables !== []) {
+            $tableDefinitions = array_intersect_key($tableDefinitions, array_flip($onlyTables));
+        }
+        if ($exceptTables !== []) {
+            $tableDefinitions = array_diff_key($tableDefinitions, array_flip($exceptTables));
+        }
+
+        foreach (array_keys($tableDefinitions) as $table) {
             if (! Schema::hasTable($table)) {
                 continue;
             }
@@ -44,7 +52,7 @@ class StbMappingSyncService
             if (in_array($table, ['shopee_tokens', 'tiktok_tokens'], true) && in_array('is_active', $columns, true)) {
                 $query->whereRaw('COALESCE(is_active, true) = true');
             }
-            foreach ($this->tables($includeTokens)[$table] as $column) {
+            foreach ($tableDefinitions[$table] as $column) {
                 if (in_array($column, $columns, true)) {
                     $query->orderBy($column);
                 }
@@ -69,6 +77,11 @@ class StbMappingSyncService
             'includes_tokens' => $includeTokens,
             'tables' => $tables,
         ];
+    }
+
+    public function tokenTableNames(): array
+    {
+        return array_keys(self::TOKEN_TABLES);
     }
 
     public function importSnapshot(array $snapshot, bool $preserveStock = true, bool $dryRun = false): array
