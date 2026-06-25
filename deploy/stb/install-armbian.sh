@@ -95,13 +95,18 @@ if [ -f "$REPO_ROOT/deploy/stb/cron/agnishop-scheduler" ]; then
   $SUDO cp "$REPO_ROOT/deploy/stb/cron/agnishop-scheduler" /etc/cron.d/agnishop-scheduler
   $SUDO chmod 0644 /etc/cron.d/agnishop-scheduler
 fi
+$SUDO systemctl enable --now cron || true
 
-echo "==> Installing supervisor worker"
-if [ -f "$REPO_ROOT/deploy/stb/supervisor/agnishop-worker.conf" ]; then
-  $SUDO cp "$REPO_ROOT/deploy/stb/supervisor/agnishop-worker.conf" /etc/supervisor/conf.d/agnishop-worker.conf
+echo "==> Installing supervisor programs"
+$SUDO systemctl enable --now supervisor || true
+if compgen -G "$REPO_ROOT/deploy/stb/supervisor/*.conf" >/dev/null; then
+  for supervisor_conf in "$REPO_ROOT"/deploy/stb/supervisor/*.conf; do
+    $SUDO cp "$supervisor_conf" "/etc/supervisor/conf.d/$(basename "$supervisor_conf")"
+  done
   $SUDO supervisorctl reread || true
   $SUDO supervisorctl update || true
   $SUDO supervisorctl restart agnishop-worker || true
+  $SUDO supervisorctl restart agnishop-api || true
 fi
 
 echo "==> Done"

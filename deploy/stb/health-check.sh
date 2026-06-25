@@ -4,6 +4,8 @@ set -u
 APP_DIR="${APP_DIR:-/opt/agnishopbjm}"
 BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
 SUPERVISOR_PROGRAM="${STB_SUPERVISOR_PROGRAM:-agnishop-worker}"
+SUPERVISOR_PROGRAMS="${STB_SUPERVISOR_PROGRAMS:-$SUPERVISOR_PROGRAM agnishop-api}"
+STB_API_HEALTH_URL="${STB_API_HEALTH_URL:-http://127.0.0.1:8088/api/health}"
 EXIT_CODE=0
 
 ok() { printf "[OK] %s\n" "$1"; }
@@ -39,20 +41,46 @@ if [ -d "$BACKEND_DIR" ] && [ -f "$BACKEND_DIR/artisan" ]; then
 fi
 
 if command -v supervisorctl >/dev/null 2>&1; then
-  SUPERVISOR_STATUS="$(supervisorctl status "$SUPERVISOR_PROGRAM" 2>&1 || true)"
-  if printf "%s" "$SUPERVISOR_STATUS" | grep -q "RUNNING"; then
-    ok "Supervisor worker running: $SUPERVISOR_STATUS"
-  else
-    warn "Supervisor worker not running: $SUPERVISOR_STATUS"
-  fi
+  for PROGRAM in $SUPERVISOR_PROGRAMS; do
+    SUPERVISOR_STATUS="$(supervisorctl status "$PROGRAM" 2>&1 || true)"
+    if printf "%s" "$SUPERVISOR_STATUS" | grep -q "RUNNING"; then
+      ok "Supervisor program running: $SUPERVISOR_STATUS"
+    else
+      warn "Supervisor program not running: $SUPERVISOR_STATUS"
+    fi
+  done
 else
   warn "supervisorctl not available"
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-active --quiet cron; then
+    ok "cron service active"
+  else
+    warn "cron service not active"
+  fi
+
+  if systemctl is-active --quiet supervisor; then
+    ok "supervisor service active"
+  else
+    warn "supervisor service not active"
+  fi
 fi
 
 if [ -f /etc/cron.d/agnishop-scheduler ] && grep -q "schedule:run" /etc/cron.d/agnishop-scheduler; then
   ok "Cron scheduler installed"
 else
   warn "Cron scheduler not installed"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  if curl -fsS "$STB_API_HEALTH_URL" >/tmp/agnishop-api-health.json 2>/tmp/agnishop-api-health.err; then
+    ok "STB API health OK: $STB_API_HEALTH_URL"
+  else
+    warn "STB API health failed: $(cat /tmp/agnishop-api-health.err)"
+  fi
+else
+  warn "curl not available"
 fi
 
 if [ -d "$BACKEND_DIR/storage/logs" ]; then
