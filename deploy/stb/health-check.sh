@@ -41,6 +41,12 @@ if [ -d "$BACKEND_DIR" ] && [ -f "$BACKEND_DIR/artisan" ]; then
 fi
 
 if command -v supervisorctl >/dev/null 2>&1; then
+  if [ -d /var/log/supervisor ]; then
+    ok "Supervisor log directory exists"
+  else
+    warn "Supervisor log directory missing: /var/log/supervisor"
+  fi
+
   for PROGRAM in $SUPERVISOR_PROGRAMS; do
     SUPERVISOR_STATUS="$(supervisorctl status "$PROGRAM" 2>&1 || true)"
     if printf "%s" "$SUPERVISOR_STATUS" | grep -q "RUNNING"; then

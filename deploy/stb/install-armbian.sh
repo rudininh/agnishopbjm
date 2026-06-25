@@ -97,6 +97,12 @@ if [ -f "$REPO_ROOT/deploy/stb/cron/agnishop-scheduler" ]; then
 fi
 $SUDO systemctl enable --now cron || true
 
+echo "==> Installing supervisor tmpfiles"
+if [ -f "$REPO_ROOT/deploy/stb/tmpfiles/agnishop-supervisor.conf" ]; then
+  $SUDO cp "$REPO_ROOT/deploy/stb/tmpfiles/agnishop-supervisor.conf" /etc/tmpfiles.d/agnishop-supervisor.conf
+  $SUDO systemd-tmpfiles --create /etc/tmpfiles.d/agnishop-supervisor.conf || true
+fi
+
 echo "==> Installing supervisor programs"
 $SUDO systemctl enable --now supervisor || true
 if compgen -G "$REPO_ROOT/deploy/stb/supervisor/*.conf" >/dev/null; then
