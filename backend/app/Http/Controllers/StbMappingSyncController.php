@@ -32,11 +32,21 @@ class StbMappingSyncController extends Controller
             ], 422);
         }
 
-        $result = $this->mappingSyncService->importSnapshot(
-            $snapshot,
-            $request->boolean('preserve_stock', true),
-            $request->boolean('dry_run', false),
-        );
+        try {
+            $result = $this->mappingSyncService->importSnapshot(
+                $snapshot,
+                $request->boolean('preserve_stock', true),
+                $request->boolean('dry_run', false),
+            );
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Import mapping STB gagal: '.$exception->getMessage(),
+                'exception' => class_basename($exception),
+            ], 422);
+        }
 
         return response()->json($result, ($result['status'] ?? '') === 'error' ? 422 : 200);
     }

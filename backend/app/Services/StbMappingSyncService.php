@@ -190,6 +190,7 @@ class StbMappingSyncService
             if (in_array($table, ['shopee_tokens', 'tiktok_tokens'], true)) {
                 $data = $this->prepareTokenImportData($table, $data);
                 $condition = $this->conditionForRow($table, $data);
+                $exists = false;
             }
 
             if ($exists) {
@@ -245,7 +246,7 @@ class StbMappingSyncService
         if ($table === 'shopee_tokens') {
             $accountKey = trim((string) ($data['account_key'] ?? ''));
             $shopId = trim((string) ($data['shop_id'] ?? ''));
-            return $accountKey !== '' && $shopId !== '' ? ['account_key' => $accountKey, 'shop_id' => $shopId] : [];
+            return $accountKey !== '' && $shopId !== '' ? ['account_key' => $accountKey, 'shop_id' => (int) $shopId] : [];
         }
 
         if ($table === 'tiktok_tokens') {
@@ -296,6 +297,12 @@ class StbMappingSyncService
     private function prepareTokenImportData(string $table, array $data): array
     {
         unset($data['id']);
+
+        foreach (['partner_id', 'shop_id', 'merchant_id', 'supplier_id', 'user_id'] as $column) {
+            if (array_key_exists($column, $data) && $data[$column] !== null && $data[$column] !== '') {
+                $data[$column] = (int) $data[$column];
+            }
+        }
 
         $accountKey = trim((string) ($data['account_key'] ?? ''));
         if ($accountKey !== '') {
