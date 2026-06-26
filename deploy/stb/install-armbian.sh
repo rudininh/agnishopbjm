@@ -113,6 +113,7 @@ if compgen -G "$REPO_ROOT/deploy/stb/supervisor/*.conf" >/dev/null; then
   $SUDO supervisorctl update || true
   $SUDO supervisorctl restart agnishop-worker || true
   $SUDO supervisorctl restart agnishop-api || true
+  $SUDO supervisorctl restart agnishop-scheduler || true
 fi
 
 echo "==> Done"
