@@ -7505,7 +7505,7 @@ class OmnichannelController extends Controller
             }
 
             $row = ['quantity' => max(0, (int) $stock)];
-            $warehouseId = trim((string) env('TIKTOK_DEFAULT_WAREHOUSE_ID', ''));
+            $warehouseId = trim((string) config('tiktok.default_warehouse_id', ''));
             if ($warehouseId !== '') {
                 $row['warehouse_id'] = $warehouseId;
             }

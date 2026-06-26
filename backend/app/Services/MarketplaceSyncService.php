@@ -1479,7 +1479,7 @@ class MarketplaceSyncService
     {
         $productId = trim((string) ($mapping->tiktok_product_id ?? ''));
         $skuId = trim((string) ($mapping->tiktok_sku ?? ''));
-        $warehouseId = trim((string) env('TIKTOK_DEFAULT_WAREHOUSE_ID', ''));
+        $warehouseId = trim((string) config('tiktok.default_warehouse_id', ''));
         if ($warehouseId === '') {
             return ['status' => 'error', 'message' => 'Push TikTok gagal: warehouse_id belum lengkap.'];
         }
