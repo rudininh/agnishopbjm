@@ -1,6 +1,7 @@
 <template>
   <div>
     <Navbar />
+    <OrderSyncAnnouncementBar />
     <main>
       <RouterView />
     </main>
@@ -10,6 +11,7 @@
 <script setup>
 import { RouterView } from 'vue-router'
 import Navbar from '@/components/Navbar.vue'
+import OrderSyncAnnouncementBar from '@/components/OrderSyncAnnouncementBar.vue'
 </script>
 
 <style>
