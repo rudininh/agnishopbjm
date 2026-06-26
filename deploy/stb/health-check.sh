@@ -31,6 +31,13 @@ fi
 
 if [ -d "$BACKEND_DIR" ] && [ -f "$BACKEND_DIR/artisan" ]; then
   cd "$BACKEND_DIR" || exit 1
+  mkdir -p storage/framework/cache/data storage/logs bootstrap/cache 2>/dev/null || true
+  if [ -w storage/framework/cache/data ] && [ -w storage/logs ] && [ -w bootstrap/cache ]; then
+    ok "Laravel writable directories are writable"
+  else
+    warn "Laravel writable directories are not writable by $(id -un). Run deploy/stb/fix-permissions.sh"
+  fi
+
   if php artisan agnishop:runtime-status --json >/tmp/agnishop-stb-status.json 2>/tmp/agnishop-stb-status.err; then
     ok "Database connection and runtime status OK"
     LAST_ORDER_SYNC="$(php -r '$j=json_decode(file_get_contents("/tmp/agnishop-stb-status.json"), true); echo $j["last_order_sync_at"] ?? "-";')"

@@ -53,6 +53,13 @@ echo "==> Creating $APP_DIR"
 $SUDO mkdir -p "$APP_DIR"
 $SUDO chown -R "${USER:-www-data}:www-data" "$APP_DIR" || true
 
+fix_backend_permissions() {
+  if [ -f "$REPO_ROOT/deploy/stb/fix-permissions.sh" ]; then
+    APP_DIR="$APP_DIR" BACKEND_DIR="$BACKEND_DIR" RUN_USER=www-data RUN_GROUP=www-data \
+      $SUDO bash "$REPO_ROOT/deploy/stb/fix-permissions.sh" || true
+  fi
+}
+
 cat <<EOF
 
 Next manual steps:
@@ -76,6 +83,7 @@ EOF
 if [ -d "$BACKEND_DIR" ]; then
   echo "==> Backend directory found: $BACKEND_DIR"
   cd "$BACKEND_DIR"
+  fix_backend_permissions
 
   if [ -f composer.json ]; then
     composer install --no-dev --optimize-autoloader
@@ -88,6 +96,8 @@ if [ -d "$BACKEND_DIR" ]; then
   else
     echo "Skipping artisan cache commands because $BACKEND_DIR/.env is missing"
   fi
+
+  fix_backend_permissions
 fi
 
 echo "==> Installing scheduler cron"
