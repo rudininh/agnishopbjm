@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Schedule;
 
 $stbMode = (bool) config('stb.sync_worker', false);
 $stbCron = static fn (int $minutes): string => '*/'.max(1, min(60, $minutes)).' * * * *';
+$stbOverlapMinutes = static fn (int $minutes, int $min, int $max): int => max($min, min($max, $minutes * 3));
 
 Artisan::command('about:agnishop', function (): void {
     $this->info('AgniShop Banjarmasin API');
@@ -393,21 +394,26 @@ if (! $stbMode) {
 if ($stbMode) {
     Schedule::command('agnishop:stb-heartbeat')
         ->everyMinute()
-        ->withoutOverlapping();
+        ->withoutOverlapping(2);
 
     if ((bool) config('stb.features.order_sync', true)) {
+        $orderSyncMinutes = (int) config('stb.intervals.order_sync_minutes', 5);
+
         Schedule::command('agnishop:sync-orders --hours='.(int) config('stb.worker.hours', 24))
-            ->cron($stbCron((int) config('stb.intervals.order_sync_minutes', 5)))
-            ->withoutOverlapping();
+            ->cron($stbCron($orderSyncMinutes))
+            ->withoutOverlapping($stbOverlapMinutes($orderSyncMinutes, 3, 10));
     }
 
+    $safetyCheckMinutes = (int) config('stb.intervals.safety_check_minutes', 15);
     Schedule::command('agnishop:safety-check-lite')
-        ->cron($stbCron((int) config('stb.intervals.safety_check_minutes', 15)))
-        ->withoutOverlapping();
+        ->cron($stbCron($safetyCheckMinutes))
+        ->withoutOverlapping($stbOverlapMinutes($safetyCheckMinutes, 5, 30));
 
     if ((bool) config('stb.features.marketplace_sync', true)) {
+        $marketplaceLiteMinutes = (int) config('stb.intervals.marketplace_lite_minutes', 60);
+
         Schedule::command('agnishop:sync-marketplace-lite')
-            ->cron($stbCron((int) config('stb.intervals.marketplace_lite_minutes', 60)))
-            ->withoutOverlapping();
+            ->cron($stbCron($marketplaceLiteMinutes))
+            ->withoutOverlapping($stbOverlapMinutes($marketplaceLiteMinutes, 10, 120));
     }
 }
