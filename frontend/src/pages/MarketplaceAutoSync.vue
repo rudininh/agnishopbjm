@@ -221,9 +221,9 @@
     </section>
 
     <div class="tabs">
-      <button :class="{ active: activeTab === 'webhook' }" @click="activeTab = 'webhook'">Webhook Monitor</button>
       <button :class="{ active: activeTab === 'order' }" @click="setOrderTab('')">Order Sync</button>
       <button :class="{ active: activeTab === 'orderCancel' }" @click="setOrderTab('cancel')">Order Cancel</button>
+      <button :class="{ active: activeTab === 'webhook' }" @click="activeTab = 'webhook'">Webhook Monitor</button>
       <button :class="{ active: activeTab === 'sync' }" @click="activeTab = 'sync'">Sync Log</button>
       <button :class="{ active: activeTab === 'anomaly' }" @click="activeTab = 'anomaly'">Anomali Stok</button>
       <button :class="{ active: activeTab === 'skuHistory' }" @click="activeTab = 'skuHistory'">History SKU</button>
@@ -772,7 +772,7 @@ const browserAutoSyncLastRun = ref(null)
 const browserAutoSyncNextRun = ref(null)
 const browserAutoSyncCountdownSeconds = ref(0)
 const exportingOrderSync = ref(false)
-const activeTab = ref('webhook')
+const activeTab = ref('order')
 const notice = ref('')
 const noticeType = ref('success')
 const dashboard = ref({ statuses: {}, engine: {}, safety: {}, order_sync: {}, webhook_urls: {} })
