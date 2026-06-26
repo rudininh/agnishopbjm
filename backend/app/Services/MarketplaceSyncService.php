@@ -1202,12 +1202,32 @@ class MarketplaceSyncService
 
     public function currentStockForMarketplace(string $marketplace, object $mapping): ?int
     {
-        if ($marketplace === 'shopee' && $mapping->shopee_stock !== null) {
-            return (int) $mapping->shopee_stock;
+        if ($marketplace === 'shopee') {
+            return $this->firstStockValue($mapping, ['shopee_stock', 'stock_qty']);
         }
 
-        if ($marketplace === 'tiktok' && $mapping->tiktok_stock !== null) {
-            return (int) $mapping->tiktok_stock;
+        if ($marketplace === 'tiktok') {
+            return $this->firstStockValue($mapping, ['tiktok_stock', 'stock_qty']);
+        }
+
+        return null;
+    }
+
+    private function firstStockValue(object $mapping, array $keys): ?int
+    {
+        foreach ($keys as $key) {
+            if (! property_exists($mapping, $key)) {
+                continue;
+            }
+
+            $value = $mapping->{$key};
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            if (is_numeric($value)) {
+                return max(0, (int) $value);
+            }
         }
 
         return null;
