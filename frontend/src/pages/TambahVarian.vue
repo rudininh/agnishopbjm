@@ -19,6 +19,7 @@
     </header>
 
     <p v-if="loadError" class="notice error">{{ loadError }}</p>
+    <p v-else-if="copiedMessage" class="notice success">{{ copiedMessage }}</p>
     <p v-else-if="loading && !items.length" class="notice">Memuat data etalase uji...</p>
 
     <div class="control-band">
@@ -49,7 +50,10 @@
             <img v-if="activeGroup.image_url" :src="activeGroup.image_url" class="thumb large" :alt="activeGroup.name" />
             <div v-else class="thumb large fallback">{{ initials(activeGroup.name) }}</div>
             <div>
-              <strong>{{ activeGroup.name }}</strong>
+              <div class="copy-value copy-value-strong">
+                <strong>{{ activeGroup.name }}</strong>
+                <button type="button" class="copy-field-btn" @click.stop="copyField('Nama produk', activeGroup.name)">Copy</button>
+              </div>
               <small>Shopee: {{ activeGroup.shopee.present }} varian, stok {{ activeGroup.shopee.total_stock }}</small>
               <small>TikTok: {{ activeGroup.tiktok.present }} varian, stok {{ activeGroup.tiktok.total_stock }}</small>
               <div class="group-price-summary">
@@ -133,7 +137,10 @@
                       <img v-if="group.image_url" :src="group.image_url" class="thumb small" :alt="group.name" />
                       <div v-else class="thumb small fallback">{{ initials(group.name) }}</div>
                       <div class="group-copy">
-                        <strong>{{ group.name }}</strong>
+                        <div class="copy-value copy-value-strong">
+                          <strong>{{ group.name }}</strong>
+                          <button type="button" class="copy-field-btn" @click.stop="copyField('Nama produk', group.name)">Copy</button>
+                        </div>
                         <small>Shopee: {{ group.shopee.present }} varian, stok {{ group.shopee.total_stock }}</small>
                         <small>TikTok: {{ group.tiktok.present }} varian, stok {{ group.tiktok.total_stock }}</small>
                       </div>
@@ -163,8 +170,15 @@
                 >
                   <td>
                     <div class="variant-title">
-                      <strong>{{ resolveTargetVariantName(item) || item.variant_name || 'Tanpa Varian' }}</strong>
-                      <small>SKU internal: {{ item.internal_sku }} | Stock Master: {{ item.stock_qty }}</small>
+                      <div class="copy-value copy-value-strong">
+                        <strong>{{ resolveTargetVariantName(item) || item.variant_name || 'Tanpa Varian' }}</strong>
+                        <button type="button" class="copy-field-btn" @click.stop="copyField('Nama varian', resolveTargetVariantName(item) || item.variant_name || 'Tanpa Varian')">Copy</button>
+                      </div>
+                      <div class="copy-line">
+                        <small><b>SKU internal:</b> {{ item.internal_sku || '-' }}</small>
+                        <button type="button" class="copy-field-btn" :disabled="!item.internal_sku" @click.stop="copyField('SKU internal', item.internal_sku)">Copy SKU</button>
+                      </div>
+                      <small>Stock Master: {{ item.stock_qty }}</small>
                     </div>
                   </td>
                   <td>
@@ -174,7 +188,11 @@
                       <div>
                         <small>{{ shopeePresenceLabel(item, group) }}</small>
                         <small>Item/Model: {{ resolveContextShopeeItemId(item, group) || '-' }} / {{ item.shopee?.model_id || '-' }}</small>
-                        <small>Kode/Stok: {{ item.shopee?.seller_sku || item.seller_sku || '-' }} / {{ displayStock(item.shopee?.stock_qty) }}</small>
+                        <div class="copy-line">
+                          <small><b>SKU Shopee:</b> {{ item.shopee?.seller_sku || item.seller_sku || '-' }}</small>
+                          <button type="button" class="copy-field-btn" :disabled="!(item.shopee?.seller_sku || item.seller_sku)" @click.stop="copyField('SKU Shopee', item.shopee?.seller_sku || item.seller_sku)">Copy SKU</button>
+                        </div>
+                        <small>Stok: {{ displayStock(item.shopee?.stock_qty) }}</small>
                         <small v-if="hasPrice(item.shopee?.price ?? item.shopee_variant_price)">Harga: {{ displayPrice(item.shopee?.price ?? item.shopee_variant_price) }}</small>
                       </div>
                     </div>
@@ -185,7 +203,12 @@
                       <div v-else class="thumb fallback">TT</div>
                       <div>
                         <small>{{ tiktokPresenceLabel(item) }}</small>
-                        <small>Product/SKU: {{ hasTiktokActual(item) ? `${item.tiktok?.product_id || '-'} / ${item.tiktok?.sku_id || '-'}` : hasTiktokProductCandidate(item) ? `${item.tiktok?.product_id || '-'} / -` : '-' }} | Kode/Stok: {{ item.tiktok?.seller_sku || item.seller_sku || '-' }} / {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
+                        <small>Product/SKU ID: {{ hasTiktokActual(item) ? `${item.tiktok?.product_id || '-'} / ${item.tiktok?.sku_id || '-'}` : hasTiktokProductCandidate(item) ? `${item.tiktok?.product_id || '-'} / -` : '-' }}</small>
+                        <div class="copy-line">
+                          <small><b>SKU TikTok:</b> {{ item.tiktok?.seller_sku || item.seller_sku || '-' }}</small>
+                          <button type="button" class="copy-field-btn" :disabled="!(item.tiktok?.seller_sku || item.seller_sku)" @click.stop="copyField('SKU TikTok', item.tiktok?.seller_sku || item.seller_sku)">Copy SKU</button>
+                        </div>
+                        <small>Stok: {{ hasTiktokActual(item) ? displayStock(item.tiktok?.stock_qty) : '-' }}</small>
                         <small v-if="hasPrice(item.tiktok?.price)">Harga: {{ displayPrice(item.tiktok?.price) }}</small>
                       </div>
                     </div>
@@ -645,6 +668,7 @@ const pendingTiktokSubmitMeta = reactive({
   shop_cipher: ''
 })
 const loadError = ref('')
+const copiedMessage = ref('')
 const actionLog = ref('')
 const items = ref([])
 const pagination = reactive({
@@ -2546,6 +2570,29 @@ const copyTextToClipboard = async (value) => {
   }
 }
 
+const copyField = async (label, value) => {
+  const text = String(value ?? '').trim()
+  if (!text) {
+    loadError.value = `${label} kosong, tidak ada yang disalin.`
+    copiedMessage.value = ''
+    return
+  }
+
+  try {
+    await copyTextToClipboard(text)
+    loadError.value = ''
+    copiedMessage.value = `${label} disalin.`
+    window.setTimeout(() => {
+      if (copiedMessage.value === `${label} disalin.`) {
+        copiedMessage.value = ''
+      }
+    }, 1800)
+  } catch (error) {
+    copiedMessage.value = ''
+    loadError.value = error?.message || `${label} gagal disalin.`
+  }
+}
+
 const copyAddVariantRequest = async () => {
   try {
     await copyTextToClipboard(addVariantRequestPreview.value)
@@ -3218,6 +3265,7 @@ onMounted(async () => {
 .primary:disabled,.ghost:disabled { cursor:wait; opacity:.72; }
 .notice { color:#334155; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
 .notice.error { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
+.notice.success { color:#166534; background:#f0fdf4; border-color:#bbf7d0; font-weight:700; }
 .control-band { display:flex; gap:12px; align-items:end; margin-bottom:12px; padding:12px; background:#fff; border:1px solid #d9e2ec; border-radius:8px; }
 .control-band label { flex:1; }
 .control-band span { display:block; color:#64748b; font-size:12px; margin-bottom:6px; }
@@ -3350,6 +3398,27 @@ td small { color:#64748b; display:block; margin-top:2px; line-height:1.15; }
 .check-col input { width:18px; height:18px; accent-color:#0f5fc7; cursor:pointer; }
 .variant-title strong { display:block; margin-bottom:2px; font-size:12px; line-height:1.2; }
 .variant-title small { font-size:10px; }
+.copy-value { display:flex; align-items:flex-start; gap:8px; min-width:0; }
+.copy-value strong { min-width:0; overflow-wrap:anywhere; }
+.copy-value-strong { margin-bottom:4px; }
+.copy-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px; min-width:0; }
+.copy-line small { margin-top:0; min-width:0; overflow-wrap:anywhere; }
+.copy-line b { color:#0f172a; font-weight:800; }
+.copy-field-btn {
+  flex:0 0 auto;
+  border:1px solid #0f5fc7;
+  border-radius:6px;
+  background:#eff6ff;
+  color:#0f4fb0;
+  cursor:pointer;
+  font-size:12px;
+  font-weight:800;
+  line-height:1;
+  min-height:30px;
+  padding:8px 12px;
+}
+.copy-field-btn:hover:not(:disabled) { background:#dbeafe; border-color:#0b4aa0; color:#0b4aa0; }
+.copy-field-btn:disabled { cursor:not-allowed; opacity:.5; }
 .channel-cell { display:grid; grid-template-columns:44px minmax(0,1fr); gap:8px; align-items:start; min-width:0; }
 .channel-cell strong { display:block; line-height:1.2; margin-bottom:2px; font-size:12px; }
 .channel-cell small,.variant-title small { overflow-wrap:anywhere; }
