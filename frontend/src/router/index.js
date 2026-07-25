@@ -12,9 +12,11 @@ import AnomaliGambarVariant from '@/pages/AnomaliGambarVariant.vue'
 import DetailProdukMarketplace from '@/pages/DetailProdukMarketplace.vue'
 import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
 import ImportMarketplace from '@/pages/ImportMarketplace.vue'
+import ImportMarketplaceMobile from '@/pages/ImportMarketplaceMobile.vue'
 import StockAnomalies from '@/pages/StockAnomalies.vue'
 import ShippingLabels from '@/pages/ShippingLabels.vue'
 import POSOffline from '@/pages/POSOffline.vue'
+import MobileProductManagement from '@/pages/MobileProductManagement.vue'
 
 const routes = [
   {
@@ -93,6 +95,11 @@ const routes = [
     component: ImportMarketplace
   },
   {
+    path: '/marketplace/import-mobile',
+    name: 'marketplace-import-mobile',
+    component: ImportMarketplaceMobile
+  },
+  {
     path: '/marketplace/cetak-resi',
     name: 'marketplace-shipping-labels',
     component: ShippingLabels
@@ -106,6 +113,11 @@ const routes = [
     path: '/pos-offline',
     name: 'pos-offline',
     component: POSOffline
+  },
+  {
+    path: '/mobile/kelola-produk',
+    name: 'mobile-product-management',
+    component: MobileProductManagement
   },
   {
     path: '/:pathMatch(.*)*',

@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "PowerShell(*)",
+      "Read",
+      "Write(*)",
+      "Edit(*)",
+      "Glob",
+      "Grep",
+      "Monitor",
+      "WebFetch",
+      "WebSearch",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "ScheduleWakeup",
+      "SendMessage",
+      "TaskCreate",
+      "TaskGet",
+      "TaskList",
+      "TaskUpdate",
+      "TaskOutput",
+      "TaskStop",
+      "Workflow",
+      "Agent",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "EnterWorktree",
+      "ExitWorktree",
+      "NotebookEdit",
+      "DesignSync",
+      "PushNotification",
+      "MCP(*)"
+    ],
+    "defaultMode": "auto"
+  }
+}

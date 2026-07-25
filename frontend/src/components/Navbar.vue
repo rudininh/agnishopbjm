@@ -11,6 +11,7 @@
 
       <nav class="menu">
         <RouterLink to="/dashboard">Dashboard</RouterLink>
+        <RouterLink to="/mobile/kelola-produk" class="menu-mobile-highlight">Kelola Produk Mobile</RouterLink>
         <div class="menu-group">
           <button
             type="button"
@@ -22,6 +23,7 @@
             <strong>{{ produkOpen ? '-' : '+' }}</strong>
           </button>
           <div v-if="produkOpen" class="submenu">
+            <RouterLink to="/mobile/kelola-produk" class="menu-mobile-highlight">📱 Kelola Produk Mobile</RouterLink>
             <RouterLink to="/stok-shopee">Stok Shopee</RouterLink>
             <RouterLink to="/stok-tiktok">Stok TikTok</RouterLink>
             <RouterLink to="/stock-master">Stock Master</RouterLink>

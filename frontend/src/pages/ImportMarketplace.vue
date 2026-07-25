@@ -193,6 +193,65 @@
         </table>
       </div>
     </section>
+
+    <section class="download-panel lazada-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Download Mass Update Lazada</h2>
+          <p>Agni Shop Banjarmasin — Template Simplified</p>
+        </div>
+        <button
+          class="secondary lazada-btn"
+          type="button"
+          :disabled="downloadingLazada"
+          @click="downloadLazadaMassUpdate"
+        >
+          {{ downloadingLazada ? 'Menyiapkan...' : 'Download Template Lazada' }}
+        </button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Jenis</th>
+              <th>Format</th>
+              <th>Isi</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            
+            <tr>
+              <td>
+                <strong>Simplified Mass Update</strong>
+                <span>Siap</span>
+              </td>
+              <td>lazada_mass_update.xlsx</td>
+              <td>Nama produk, foto, harga, stok, SKU, varian, dan dimensi paket dari data Shopee / stock master.</td>
+              <td>
+                <button class="mini lazada-btn" type="button" :disabled="downloadingLazada" @click="downloadLazadaMassUpdate">
+                  Download Excel
+                </button>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>Advanced Publish (Creation)</strong>
+                <span>Siap</span>
+              </td>
+              <td>lazada_advanced_publish.xlsx</td>
+              <td>Template export format pembuatan produk lengkap untuk lazada.</td>
+              <td>
+                <button class="mini lazada-btn" type="button" :disabled="downloadingLazadaAdvanced" @click="downloadLazadaAdvancedUpdate">
+                  Download Excel
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -208,9 +267,39 @@ const stockSearch = ref('')
 const sourceMarketplace = ref('Lazada Agni Shop Banjarmasin')
 const loadingProducts = ref(false)
 const syncingStock = ref(false)
+
+const downloadingLazada = ref(false)
+const downloadingLazadaAdvanced = ref(false)
 const syncResults = ref([])
 const shopeeGitaMassUpdateUrl = '/api/marketplace/import/shopee-gita/mass-update'
 const shopeeGitaMassUpdateFileUrl = (type) => `${shopeeGitaMassUpdateUrl}/${type}`
+const lazadaMassUpdateUrl = '/api/marketplace/import/lazada/mass-update'
+const lazadaAdvancedUpdateUrl = '/api/marketplace/import/lazada/advanced-update'
+
+const downloadLazadaMassUpdate = () => {
+  downloadingLazada.value = true
+  notice.value = {
+    type: 'success',
+    message: 'Download Mass Update Lazada (Simplified) sedang disiapkan.'
+  }
+  downloadUrl(lazadaMassUpdateUrl)
+  window.setTimeout(() => {
+    downloadingLazada.value = false
+  }, 1200)
+}
+
+const downloadLazadaAdvancedUpdate = () => {
+  downloadingLazadaAdvanced.value = true
+  notice.value = {
+    type: 'success',
+    message: 'Download Advanced Publish Lazada sedang disiapkan.'
+  }
+  downloadUrl(lazadaAdvancedUpdateUrl)
+  window.setTimeout(() => {
+    downloadingLazadaAdvanced.value = false
+  }, 1200)
+}
+
 
 const marketplaces = [
   {
@@ -397,6 +486,11 @@ const downloadUrl = (url) => {
 }
 
 const downloadMassUpdate = (marketplace) => {
+  if (marketplace.key === 'lazada') {
+    downloadLazadaMassUpdate()
+    return
+  }
+
   if (marketplace.key !== 'shopee') {
     notice.value = {
       type: 'warning',

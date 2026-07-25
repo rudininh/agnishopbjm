@@ -13,7 +13,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://agnishopbjm-laravel.test',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '/api')
       }

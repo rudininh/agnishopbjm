@@ -1,0 +1,107 @@
+--- backend/app/Http/Controllers/MarketplaceImportController.php
++++ backend/app/Http/Controllers/MarketplaceImportController.php
+@@ -1813,6 +1813,101 @@
+         $this->replaceSheetDataRows($path, 5, $rows);
+     }
+ 
++    private function fillLazadaAdvancedUpdate(string $path): void
++    {
++        $variants = $this->variantRows();
++        $imagesByItem = $this->productImagesByItem();
++        $productsByItem = DB::table('shopee_product')
++            ->whereIn('item_id', $variants->pluck('item_id')->unique()->all())
++            ->get()
++            ->keyBy(fn ($product) => (string) $product->item_id);
++
++        // Group variants by product (item_id) for correct Group No assignment
++        $variantsByProduct = $variants->groupBy('item_id');
++
++        $rows = [];
++        $groupNo = 1;
++
++        foreach ($variantsByProduct as $itemId => $productVariants) {
++            $itemId = (string) $itemId;
++            $sourceProduct = $productsByItem->get($itemId);
++            $productName = (string) ($sourceProduct->name ?? $productVariants->first()->product_name ?? '');
++            $description = $this->sanitizeShopeeBasicText($sourceProduct->description ?? $productName);
++            $images = $imagesByItem[$itemId] ?? [];
++
++            foreach ($productVariants as $variantIndex => $variant) {
++                $row = [];
++
++                // A: Group No — same group for all variants of the same product
++                $row['A'] = (string) $groupNo;
++
++                // C: Nama Produk
++                $row['C'] = $this->sanitizeLazadaText($productName);
++
++                // E–L: Foto Produk 1–8 (only on first variant of group)
++                if ($variantIndex === 0) {
++                    foreach (array_slice($images, 0, 8) as $imgIdx => $imageUrl) {
++                        $col = $this->columnName(5 + $imgIdx); // E=5, F=6, ...
++                        $row[$col] = $imageUrl;
++                    }
++                }
++
++                // S: Merek
++                $row['S'] = 'No Brand';
++
++                // T: Bahan Pakaian
++                $row['T'] = '-'; // Isi dummy / opsional jika wajib. "-" biasanya lolos validasi.
++
++                // AC: Deskripsi Utama (only on first variant of group)
++                if ($variantIndex === 0) {
++                    $row['AC'] = $description;
++                }
++
++                // AH: Jenis Garansi
++                $row['AH'] = 'Tidak Ada Garansi';
++                
++                // AK: Ukuran
++                $row['AK'] = 'Int: One size'; // Default ukuran.
++
++                // AL: Warna (Variasi)
++                $variantName = trim((string) ($variant->variant_name ?? ''));
++                if ($variantName !== '' && $variantName !== 'Tanpa Varian') {
++                    $row['AL'] = $variantName;
++                } else {
++                    $row['AL'] = 'Default';
++                }
++
++                // AO-AV: Gambar varian (1-8), kita masukkan ke gambar 1 (AO=41)
++                $variantImageUrl = $variant->image_url ?? '';
++                if ($variantImageUrl !== '') {
++                    $row['AO'] = $variantImageUrl;
++                }
++
++                // AW: Package Height (cm), AX: Package Width (cm), AY: Package Length (cm), AZ: Berat paket (kg)
++                $row['AW'] = '10';
++                $row['AX'] = '10';
++                $row['AY'] = '10';
++                $row['AZ'] = '0.3';
++
++                // BA: Harga
++                $row['BA'] = (string) max(99, (int) ($variant->price ?? 0));
++
++                // BE: Seller SKU
++                $sellerSku = trim((string) ($variant->seller_sku ?? ''));
++                if ($sellerSku !== '') {
++                    $row['BE'] = $sellerSku;
++                }
++
++                // BF: Stok
++                $row['BF'] = (string) max(0, (int) ($variant->stock_qty ?? 0));
++
++                $rows[] = $row;
++            }
++
++            $groupNo++;
++        }
++
++        // Write data rows starting at row 5 (rows 1-4 are headers in Lazada template), on sheet 2 (Hijab)
++        $this->replaceSheetDataRows($path, 5, $rows, 'xl/worksheets/sheet2.xml');
++    }
++
+     private function sanitizeLazadaText(mixed $value): string
+     {
+         $text = str_replace(["\r\n", "\r"], "\n", (string) $value);

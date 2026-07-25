@@ -5,6 +5,26 @@
 
     RewriteEngine On
 
+    # Serve existing static files directly (JS, CSS, images, fonts)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteCond %{REQUEST_URI} \.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$ [NC]
+    RewriteRule ^ - [L]
+
+    # API routes go to Laravel
+    RewriteCond %{REQUEST_URI} ^/api/
+    RewriteRule ^ index.php [L]
+
+    # Cached marketplace images are served by Laravel from storage/app/public
+    RewriteCond %{REQUEST_URI} ^/cached-images/
+    RewriteRule ^ index.php [L]
+
+    # Serve index.html for frontend routes (Vue Router)
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_URI} !^/api/
+    RewriteRule ^ index.html [L]
+
+    # Fallback to Laravel for everything else
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]

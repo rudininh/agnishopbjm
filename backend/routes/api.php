@@ -6,6 +6,7 @@ use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\MarketplaceAutoSyncController;
 use App\Http\Controllers\MarketplaceImportController;
 use App\Http\Controllers\MarketplaceWebhookController;
+use App\Http\Controllers\MobileProductController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OmnichannelController;
 use App\Http\Controllers\PosController;
@@ -86,6 +87,8 @@ Route::get('marketplace/import/shopee-gita/mass-update', [MarketplaceImportContr
 Route::get('marketplace/import/shopee-gita/mass-update/{type}', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdateFile'])
     ->where('type', 'basic-info|sales-info|media-info|shipping-info|dts-info|republish-items');
 Route::post('marketplace/import/manual-stock-sync', [MarketplaceImportController::class, 'manualStockSync']);
+Route::get('marketplace/import/lazada/mass-update', [MarketplaceImportController::class, 'downloadLazadaMassUpdate']);
+Route::get('marketplace/import/lazada/advanced-update', [MarketplaceImportController::class, 'downloadLazadaAdvancedUpdate']);
 Route::post('webhooks/shopee', [MarketplaceWebhookController::class, 'shopee']);
 Route::post('webhooks/tiktok', [MarketplaceWebhookController::class, 'tiktok']);
 
@@ -111,3 +114,12 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 Route::get('pos/stock-master-products', [PosController::class, 'stockMasterProducts']);
 Route::post('pos/offline-orders', [PosController::class, 'checkout']);
+
+// Mobile Product Management Routes
+Route::prefix('mobile')->group(function () {
+    Route::get('products', [MobileProductController::class, 'index']);
+    Route::get('products/detail', [MobileProductController::class, 'show']);
+    Route::post('products/update-stock-price', [MobileProductController::class, 'updateStockPrice']);
+    Route::post('products/update-cost-price', [MobileProductController::class, 'updateCostPrice']);
+    Route::get('products/profit-calculation', [MobileProductController::class, 'profitCalculation']);
+});

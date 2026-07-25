@@ -18,6 +18,9 @@ class MarketplaceImportController extends Controller
     private const TEMPLATE_DIR = 'import-marketplace/shopee-gita';
     private const PROMO_TEMPLATE_DIR = 'import-marketplace/shopee-promo';
     private const PROMO_TEMPLATE_FILE = 'template-discount.xlsx';
+    private const LAZADA_TEMPLATE_DIR = 'import-marketplace/lazada';
+    private const LAZADA_TEMPLATE_FILE = 'lazada_mass_update_template.xlsx';
+    private const LAZADA_ADVANCED_TEMPLATE_FILE = 'lazada_advanced_publish_template.xlsx';
     private const SOURCE_PROMO_ACCOUNT = 'shopee-agnishopbjm';
     private const TARGET_PROMO_ACCOUNT = 'shopee-gitacollectionbjm';
 
@@ -81,6 +84,56 @@ class MarketplaceImportController extends Controller
 
         return response()
             ->download($target, $fileName, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+            ])
+            ->deleteFileAfterSend(true);
+    }
+
+    public function downloadLazadaMassUpdate(Request $request): BinaryFileResponse
+    {
+        set_time_limit(0);
+        $fileName = self::LAZADA_TEMPLATE_FILE;
+        $source = storage_path('app/'.self::LAZADA_TEMPLATE_DIR.'/'.$fileName);
+        abort_if(! File::exists($source), 422, 'Template Mass Update Lazada belum lengkap: '.$fileName);
+
+        $stamp = now()->format('Ymd_His');
+        $workDir = storage_path('app/import-marketplace/generated/lazada-'.$stamp.'-'.bin2hex(random_bytes(3)));
+        File::ensureDirectoryExists($workDir);
+
+        $target = $workDir.'/lazada_mass_update_'.$stamp.'.xlsx';
+        File::copy($source, $target);
+
+        $this->fillLazadaMassUpdate($target);
+
+        return response()
+            ->download($target, basename($target), [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+            ])
+            ->deleteFileAfterSend(true);
+    }
+
+    public function downloadLazadaAdvancedUpdate(Request $request): BinaryFileResponse
+    {
+        set_time_limit(0);
+        $fileName = self::LAZADA_ADVANCED_TEMPLATE_FILE;
+        $source = storage_path('app/'.self::LAZADA_TEMPLATE_DIR.'/'.$fileName);
+        abort_if(! File::exists($source), 422, 'Template Mass Update Lazada belum lengkap: '.$fileName);
+
+        $stamp = now()->format('Ymd_His');
+        $workDir = storage_path('app/import-marketplace/generated/lazada-'.$stamp.'-'.bin2hex(random_bytes(3)));
+        File::ensureDirectoryExists($workDir);
+
+        $target = $workDir.'/lazada_advanced_publish_'.$stamp.'.xlsx';
+        File::copy($source, $target);
+
+        $this->fillLazadaAdvancedUpdate($target);
+
+        return response()
+            ->download($target, basename($target), [
                 'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
                 'Pragma' => 'no-cache',
@@ -1213,9 +1266,9 @@ class MarketplaceImportController extends Controller
         return null;
     }
 
-    private function updateSheetRows(string $path, int $startRow, callable $resolver): void
+    private function updateSheetRows(string $path, int $startRow, callable $resolver, string $sheetFile = 'xl/worksheets/sheet1.xml'): void
     {
-        [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($path);
+        [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($path, $sheetFile);
         $dom = new \DOMDocument();
         $dom->preserveWhiteSpace = false;
         $dom->formatOutput = false;
@@ -1262,9 +1315,9 @@ class MarketplaceImportController extends Controller
         });
     }
 
-    private function replaceSheetDataRows(string $path, int $startRow, array $rows): void
+    private function replaceSheetDataRows(string $path, int $startRow, array $rows, string $sheetFile = 'xl/worksheets/sheet1.xml'): void
     {
-        [$zip, $sheetPath] = $this->openWorkbookSheet($path);
+        [$zip, $sheetPath] = $this->openWorkbookSheet($path, $sheetFile);
         $dom = new \DOMDocument();
         $dom->preserveWhiteSpace = false;
         $dom->formatOutput = false;
@@ -1314,12 +1367,12 @@ class MarketplaceImportController extends Controller
         $zip->close();
     }
 
-    private function openWorkbookSheet(string $path): array
+    private function openWorkbookSheet(string $path, string $sheetFile = 'xl/worksheets/sheet1.xml'): array
     {
         $zip = new ZipArchive();
         abort_if($zip->open($path) !== true, 500, 'File Excel tidak bisa dibuka: '.basename($path));
 
-        return [$zip, 'xl/worksheets/sheet1.xml', $this->sharedStrings($zip)];
+        return [$zip, $sheetFile, $this->sharedStrings($zip)];
     }
 
     private function sharedStrings(ZipArchive $zip): array
@@ -1472,6 +1525,237 @@ class MarketplaceImportController extends Controller
         $text = preg_replace("/\n{4,}/", "\n\n\n", $text) ?? $text;
 
         return trim($text);
+    }
+
+    /**
+     * Fill the Lazada simplified mass-update template with product data from stock_master / Shopee cache.
+     *
+     * Lazada Simplified template column mapping (0-indexed):
+     *  0  Group No
+     *  1  catId
+     *  2  Kategori
+     *  3  Nama Produk
+     *  4  Nama Produk dalam Bahasa Inggris
+     *  5  Foto Produk1
+     *  6  Foto Produk2
+     *  7  Foto Produk3
+     *  8  Foto Produk4
+     *  9  Foto Produk5
+     * 10  Foto Produk6
+     * 11  Foto Produk7
+     * 12  Foto Produk8
+     * 13  Merek
+     * 14  Deskripsi Utama
+     * 15  Bahan Berbahaya
+     * 16  Variation Name1
+     * 17  Option for Variation1
+     * 18  Image per Variation
+     * 19  Variation Name2
+     * 20  Option for Variation2
+     * 21  Package Height (cm)
+     * 22  Package Width (cm)
+     * 23  Package Length (cm)
+     * 24  Berat paket (kg)
+     * 25  Harga
+     * 26  Seller SKU
+     * 27  Stok (warehouse)
+     *
+     * Data rows start at row 5 (1-indexed, rows 1-4 are headers/instructions).
+     */
+    private function fillLazadaMassUpdate(string $path): void
+    {
+        $variants = $this->variantRows();
+        $imagesByItem = $this->productImagesByItem();
+        $productsByItem = DB::table('shopee_product')
+            ->whereIn('item_id', $variants->pluck('item_id')->unique()->all())
+            ->get()
+            ->keyBy(fn ($product) => (string) $product->item_id);
+
+        // Group variants by product (item_id) for correct Group No assignment
+        $variantsByProduct = $variants->groupBy('item_id');
+
+        $rows = [];
+        $groupNo = 1;
+
+        foreach ($variantsByProduct as $itemId => $productVariants) {
+            $itemId = (string) $itemId;
+            $sourceProduct = $productsByItem->get($itemId);
+            $productName = (string) ($sourceProduct->name ?? $productVariants->first()->product_name ?? '');
+            $description = $this->sanitizeShopeeBasicText($sourceProduct->description ?? $productName);
+            $images = $imagesByItem[$itemId] ?? [];
+
+            foreach ($productVariants as $variantIndex => $variant) {
+                $row = [];
+
+                // A: Group No — same group for all variants of the same product
+                $row['A'] = (string) $groupNo;
+
+                // D: Nama Produk
+                $row['D'] = $this->sanitizeLazadaText($productName);
+
+                // F–M: Foto Produk 1–8 (only on first variant of group)
+                if ($variantIndex === 0) {
+                    foreach (array_slice($images, 0, 8) as $imgIdx => $imageUrl) {
+                        $col = $this->columnName(6 + $imgIdx); // F=6, G=7, ...
+                        $row[$col] = $imageUrl;
+                    }
+                }
+
+                // N: Merek
+                $row['N'] = 'No Brand';
+
+                // O: Deskripsi Utama (only on first variant of group)
+                if ($variantIndex === 0) {
+                    $row['O'] = $description;
+                }
+
+                // Q: Variation Name1 (e.g. "Warna")
+                $variantName = trim((string) ($variant->variant_name ?? ''));
+                if ($variantName !== '' && $variantName !== 'Tanpa Varian') {
+                    $row['Q'] = 'Warna';
+                    $row['R'] = $variantName;
+                }
+
+                // S: Image per Variation
+                $variantImageUrl = $variant->image_url ?? '';
+                if ($variantImageUrl !== '') {
+                    $row['S'] = $variantImageUrl;
+                }
+
+                // V: Package Height (cm), W: Package Width (cm), X: Package Length (cm), Y: Berat paket (kg)
+                $row['V'] = '10';
+                $row['W'] = '10';
+                $row['X'] = '10';
+                $row['Y'] = '0.3';
+
+                // Z: Harga
+                $row['Z'] = (string) max(99, (int) ($variant->price ?? 0));
+
+                // AA: Seller SKU
+                $sellerSku = trim((string) ($variant->seller_sku ?? ''));
+                if ($sellerSku !== '') {
+                    $row['AA'] = $sellerSku;
+                }
+
+                // AB: Stok (warehouse column)
+                $row['AB'] = (string) max(0, (int) ($variant->stock_qty ?? 0));
+
+                $rows[] = $row;
+            }
+
+            $groupNo++;
+        }
+
+        // Write data rows starting at row 5 (rows 1-4 are headers in Lazada template)
+        $this->replaceSheetDataRows($path, 5, $rows);
+    }
+
+    private function fillLazadaAdvancedUpdate(string $path): void
+    {
+        $variants = $this->variantRows();
+        $imagesByItem = $this->productImagesByItem();
+        $productsByItem = DB::table('shopee_product')
+            ->whereIn('item_id', $variants->pluck('item_id')->unique()->all())
+            ->get()
+            ->keyBy(fn ($product) => (string) $product->item_id);
+
+        // Group variants by product (item_id) for correct Group No assignment
+        $variantsByProduct = $variants->groupBy('item_id');
+
+        $rows = [];
+        $groupNo = 1;
+
+        foreach ($variantsByProduct as $itemId => $productVariants) {
+            $itemId = (string) $itemId;
+            $sourceProduct = $productsByItem->get($itemId);
+            $productName = (string) ($sourceProduct->name ?? $productVariants->first()->product_name ?? '');
+            $description = $this->sanitizeShopeeBasicText($sourceProduct->description ?? $productName);
+            $images = $imagesByItem[$itemId] ?? [];
+
+            foreach ($productVariants as $variantIndex => $variant) {
+                $row = [];
+
+                // A: Group No
+                $row['A'] = (string) $groupNo;
+
+                // C: Nama Produk
+                $row['C'] = $this->sanitizeLazadaText($productName);
+
+                // E-L: Foto Produk 1-8 (only on first variant of group)
+                if ($variantIndex === 0) {
+                    foreach (array_slice($images, 0, 8) as $imgIdx => $imageUrl) {
+                        $col = $this->columnName(5 + $imgIdx); // E=5, F=6, ...
+                        $row[$col] = $imageUrl;
+                    }
+                }
+
+                // S: Merek
+                $row['S'] = 'No Brand';
+
+                // T: Bahan Pakaian
+                $row['T'] = '-'; // Isi dummy / opsional jika wajib.
+
+                // AC: Deskripsi Utama
+                if ($variantIndex === 0) {
+                    $row['AC'] = $description;
+                }
+
+                // AH: Jenis Garansi
+                $row['AH'] = 'Tidak Ada Garansi';
+
+                // AK: Ukuran
+                $row['AK'] = 'Int: One size'; // Default ukuran.
+
+                // AL: Warna (Variasi)
+                $variantName = trim((string) ($variant->variant_name ?? ''));
+                if ($variantName !== '' && $variantName !== 'Tanpa Varian') {
+                    $row['AL'] = $variantName;
+                } else {
+                    $row['AL'] = 'Default';
+                }
+
+                // AO-AV: Gambar varian (kita taruh di AO = Gambar1)
+                $variantImageUrl = $variant->image_url ?? '';
+                if ($variantImageUrl !== '') {
+                    $row['AO'] = $variantImageUrl;
+                }
+
+                // AW-AZ: Dimensi
+                $row['AW'] = '10';
+                $row['AX'] = '10';
+                $row['AY'] = '10';
+                $row['AZ'] = '0.3';
+
+                // BA: Harga
+                $row['BA'] = (string) max(99, (int) ($variant->price ?? 0));
+
+                // BE: Seller SKU
+                $sellerSku = trim((string) ($variant->seller_sku ?? ''));
+                if ($sellerSku !== '') {
+                    $row['BE'] = $sellerSku;
+                }
+
+                // BF: Stok
+                $row['BF'] = (string) max(0, (int) ($variant->stock_qty ?? 0));
+
+                $rows[] = $row;
+            }
+
+            $groupNo++;
+        }
+
+        // Write data rows starting at row 5 (rows 1-4 are headers), on sheet 2 (Hijab)
+        $this->replaceSheetDataRows($path, 5, $rows, 'xl/worksheets/sheet2.xml');
+    }
+
+    private function sanitizeLazadaText(mixed $value): string
+    {
+        $text = str_replace(["\r\n", "\r"], "\n", (string) $value);
+        $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text) ?? $text;
+        $text = preg_replace('/[\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{1F000}-\x{1FAFF}\x{FE0F}]/u', '', $text) ?? $text;
+        $text = preg_replace('/[\p{S}\x{FE0F}]/u', '', $text) ?? $text;
+
+        return mb_substr(trim($text), 0, 3000);
     }
 
     private function columnName(int $index): string
