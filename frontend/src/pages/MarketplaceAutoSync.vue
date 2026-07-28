@@ -185,7 +185,7 @@
           <strong :class="['badge', dashboard.engine?.status === 'active' ? 'success' : 'error']">{{ dashboard.engine?.status || 'inactive' }}</strong>
         </div>
         <dl>
-          <div><dt>Realtime Sync</dt><dd>{{ dashboard.engine?.realtime_sync ? 'Active' : 'Inactive' }}</dd></div>
+          <div><dt>Realtime Syncs</dt><dd>{{ dashboard.engine?.realtime_sync ? 'Active' : 'Inactive' }}</dd></div>
           <div><dt>Live Push</dt><dd>{{ dashboard.engine?.live_push ? 'Active' : 'Dry Run' }}</dd></div>
           <div><dt>Safety Check</dt><dd>{{ dashboard.engine?.safety_check ? dashboard.engine?.cron_interval : 'Inactive' }}</dd></div>
           <div><dt>Failure Notify</dt><dd>{{ failureNotificationLabel }}</dd></div>

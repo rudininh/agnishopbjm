@@ -1,5 +1,9 @@
 <template>
   <div class="mobile-product-page">
+    <!-- DEBUG: top banner -->
+    <div style="position: fixed; top: 0; left: 0; right: 0; height: 40px; background: yellow; color: black; display: flex; align-items: center; justify-content: center; z-index: 9999; font-weight: bold;">
+      DEBUG: MobileProductManagement rendered
+    </div>
     <!-- Header -->
     <header class="mobile-header">
       <h1>📱 Kelola Produk</h1>
@@ -220,12 +224,36 @@
     <div v-if="successMessage" class="toast success">
       ✅ {{ successMessage }}
     </div>
+
+    <!-- Mobile Access Guide -->
+    <div class="mobile-access-guide">
+      <div class="guide-header">
+        <h3>📱 Cara Akses di Mobile</h3>
+      </div>
+      <div class="guide-content">
+        <ol>
+          <li>Buka browser di smartphone Anda</li>
+          <li>Kunjungi <strong>agnishopbjm-laravel.test/mobile/kelola-produk</strong></li>
+          <li>Login dengan akun admin Anda</li>
+          <li>Kelola produk Shopee dan TikTok dengan mudah</li>
+        </ol>
+        <div class="guide-tip">
+          💡 Tip: Tambahkan ke layar utama untuk akses cepat!
+        </div>
+      </div>
+    </div>
+
+    <!-- DEBUG: Temporary visible box to test if element is rendering -->
+    <div style="position: fixed; top: 20px; left: 20px; background: red; color: white; padding: 10px; z-index: 9999;">
+      DEBUG ELEMENT - IF YOU SEE THIS, THE CONTAINER IS WORKING
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import api from '@/services/api'
+console.log('MobileProductManagement module loaded')
 
 // State
 const loading = ref(false)
@@ -428,6 +456,7 @@ const handleImageError = (e) => {
 
 // Lifecycle
 onMounted(() => {
+  console.log('MobileProductManagement mounted')
   loadProducts()
 })
 </script>
@@ -959,6 +988,84 @@ onMounted(() => {
 .toast.success {
   background: #27ae60;
   color: white;
+}
+
+/* Mobile Access Guide */
+.mobile-access-guide {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 280px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  z-index: 9999 !important;
+  font-size: 14px;
+  color: #333;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  outline: 5px solid #ff0 !important;
+  outline-offset: -5px;
+  background: #ff0 !important;
+  color: #000 !important;
+}
+
+.mobile-access-guide .guide-header h3 {
+  margin: 0 0 15px 0;
+  color: #667eea;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-access-guide .guide-content ol {
+  padding-left: 20px;
+  margin: 0 0 15px 0;
+}
+
+.mobile-access-guide .guide-content ol li {
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.mobile-access-guide .guide-content ol li strong {
+  color: #333;
+}
+
+.mobile-access-guide .guide-tip {
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 13px;
+  text-align: center;
+  color: #667eea;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-width: 480px) {
+  .mobile-access-guide {
+    width: 80%;
+    left: 10%;
+    right: 10%;
+    max-width: none;
+  }
+}
+
+@media (max-height: 600px) {
+  .mobile-access-guide {
+    max-height: 70vh;
+    font-size: 13px;
+  }
 }
 
 /* Responsive adjustments */
