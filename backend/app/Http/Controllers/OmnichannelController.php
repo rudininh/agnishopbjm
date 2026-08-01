@@ -6947,6 +6947,79 @@ class OmnichannelController extends Controller
         return response()->json($result);
     }
 
+    public function bulkUpdateShopeeEmptyVariantSkus(Request $request): JsonResponse
+    {
+        set_time_limit(0);
+        $this->ensureSkuMappingTables();
+        $this->autoRefreshMarketplaceTokens();
+
+        $candidates = $this->shopeeMissingSkuBulkCandidates(
+            DB::table('shopee_product_model')
+                ->select('item_id', 'model_id', 'name', 'model_sku')
+                ->orderBy('item_id')
+                ->orderBy('model_id')
+                ->get()
+        );
+
+        $updated = 0;
+        $skipped = 0;
+        $failed = 0;
+        $items = [];
+
+        foreach ($candidates as $candidate) {
+            $currentSku = trim((string) (DB::table('shopee_product_model')
+                ->where('item_id', $candidate['item_id'])
+                ->where('model_id', $candidate['model_id'])
+                ->value('model_sku') ?? ''));
+
+            if ($currentSku !== '') {
+                $skipped += 1;
+                $items[] = $candidate + [
+                    'status' => 'skipped',
+                    'message' => 'SKU Shopee sudah terisi sebelum diproses.',
+                ];
+                continue;
+            }
+
+            try {
+                $response = $this->updateMarketplaceVariantSku(Request::create('/api/sku-mapping/update-marketplace-variant-sku', 'POST', [
+                    'channel' => 'shopee',
+                    'item_id' => $candidate['item_id'],
+                    'model_id' => $candidate['model_id'],
+                    'seller_sku' => $candidate['seller_sku'],
+                ]));
+                $result = $response->getData(true);
+                $isUpdated = ($result['status'] ?? '') === 'ok';
+
+                if ($isUpdated) {
+                    $updated += 1;
+                } else {
+                    $failed += 1;
+                }
+
+                $items[] = $candidate + [
+                    'status' => $isUpdated ? 'updated' : 'failed',
+                    'message' => $result['message'] ?? data_get($result, 'response.message') ?? 'Update SKU Shopee gagal.',
+                ];
+            } catch (\Throwable $exception) {
+                $failed += 1;
+                $items[] = $candidate + [
+                    'status' => 'failed',
+                    'message' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'status' => $skipped > 0 || $failed > 0 ? 'warning' : 'success',
+            'message' => 'Bulk pengisian SKU Shopee selesai diproses.',
+            'total_candidates' => $candidates->count(),
+            'updated' => $updated,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'items' => $items,
+        ]);
+    }
     public function updateMarketplaceVariantSku(Request $request): JsonResponse
     {
         $this->ensureSkuMappingTables();

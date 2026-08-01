@@ -159,6 +159,15 @@ class OmnichannelControllerTest extends TestCase
         ], $candidates->all());
     }
 
+    public function test_shopee_bulk_empty_sku_route_is_registered(): void
+    {
+        $route = collect(app('router')->getRoutes()->getRoutes())
+            ->first(fn ($route) => in_array('POST', $route->methods(), true)
+                && $route->uri() === 'api/sku-mapping/bulk-update-empty-shopee-variant-skus');
+
+        $this->assertNotNull($route);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkUpdateShopeeEmptyVariantSkus', $route->getActionName());
+    }
     private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
     {
         $controller = new OmnichannelController();

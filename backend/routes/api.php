@@ -35,6 +35,7 @@ Route::post('sku-mapping', [OmnichannelController::class, 'saveSkuMapping']);
 Route::post('sku-mapping/sync-marketplaces', [OmnichannelController::class, 'syncMarketplaceCaches']);
 Route::post('sku-mapping/update-marketplace-sku', [OmnichannelController::class, 'updateSkuMappingMarketplaceSku']);
 Route::post('sku-mapping/update-marketplace-variant-sku', [OmnichannelController::class, 'updateMarketplaceVariantSku']);
+Route::post('sku-mapping/bulk-update-empty-shopee-variant-skus', [OmnichannelController::class, 'bulkUpdateShopeeEmptyVariantSkus']);
 Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
 Route::post('tiktok-variant/action', [OmnichannelController::class, 'tiktokVariantAction']);
 Route::post('tiktok/delete-variant', [OmnichannelController::class, 'tiktokDeleteVariant']);
