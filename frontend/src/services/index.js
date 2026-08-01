@@ -153,6 +153,10 @@ export const omnichannelService = {
     return api.post('/sku-mapping/update-marketplace-variant-sku', data)
   },
 
+
+  bulkUpdateShopeeEmptyVariantSkus() {
+    return api.post('/sku-mapping/bulk-update-empty-shopee-variant-skus')
+  },
   prepareMissingVariant(data) {
     return api.post('/sku-mapping/prepare-missing-variant', data)
   },

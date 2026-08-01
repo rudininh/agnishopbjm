@@ -7,7 +7,15 @@
       </div>
       <div class="header-actions">
         <button class="ghost" @click="resetFilters">Reset Filter</button>
-        <button class="primary shopee" @click="syncAndLoad" :disabled="loading">
+        <button
+          class="bulk-sku-action"
+          type="button"
+          :disabled="loading || bulkSkuUpdating || missingSkuVariantCount === 0"
+          @click="openBulkSkuModal"
+        >
+          {{ bulkSkuUpdating ? 'Mengisi SKU...' : `Isi SKU Kosong (${missingSkuVariantCount})` }}
+        </button>
+        <button class="primary shopee" @click="syncAndLoad" :disabled="loading || bulkSkuUpdating">
           {{ loading ? 'Memuat...' : 'Ambil Produk' }}
         </button>
       </div>
@@ -182,6 +190,7 @@
                       <span class="variant-code">
                         <small>SKU Real</small>
                         <strong>{{ shopeeRealSku(model) || 'Tidak ada SKU' }}</strong>
+                        <span v-if="missingShopeeSku(model)" class="missing-sku-badge">SKU Shopee Kosong</span>
                         <small>SKU Template</small>
                         <span class="copy-line">
                           <code>{{ templateSku(item, model) }}</code>
@@ -242,6 +251,19 @@
       </div>
     </div>
 
+    <div v-if="bulkSkuModal.open" class="modal-backdrop" @click.self="closeBulkSkuModal">
+      <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-sku-title">
+        <h2 id="bulk-sku-title">Isi semua SKU Shopee kosong?</h2>
+        <p class="bulk-sku-copy">{{ missingSkuVariantCount }} varian akan memakai SKU template internal. SKU Shopee yang sudah terisi tidak akan diubah.</p>
+        <div class="modal-actions">
+          <button type="button" class="ghost" @click="closeBulkSkuModal" :disabled="bulkSkuUpdating">Batal</button>
+          <button type="button" class="bulk-sku-action" @click="confirmBulkSkuUpdate" :disabled="bulkSkuUpdating">
+            {{ bulkSkuUpdating ? 'Mengisi SKU...' : 'Isi Semua SKU' }}
+          </button>
+        </div>
+      </section>
+    </div>
+
     <div v-if="deleteModal.open" class="modal-backdrop" @click.self="closeDeleteVariantModal">
       <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-variant-title">
         <h2 id="delete-variant-title">Hapus Varian Shopee</h2>
@@ -294,6 +316,7 @@ const expanded = ref({})
 const loading = ref(false)
 const syncingItemId = ref('')
 const updatingSkuKey = ref('')
+const bulkSkuUpdating = ref(false)
 const deletingVariantKey = ref('')
 const manualSkuDrafts = reactive({})
 const activeTab = ref('live')
@@ -303,6 +326,7 @@ const brokenImages = ref({})
 const syncMessage = ref('')
 const syncTone = ref('info')
 const copyTimer = ref(null)
+const bulkSkuModal = reactive({ open: false })
 const deleteModal = reactive({
   open: false,
   itemId: '',
@@ -375,6 +399,9 @@ const filteredItems = computed(() => {
       return String(shopeeSearchHaystack(item) || '').toLowerCase().includes(query)
     })
     .sort((a, b) => {
+      const missingGroupDifference = Number(itemHasMissingSku(b)) - Number(itemHasMissingSku(a))
+      if (missingGroupDifference !== 0) return missingGroupDifference
+
       if (filters.sort === 'stock_desc') return totalStock(b.models) - totalStock(a.models)
       if (filters.sort === 'sales_desc') return Number(b.sales || 0) - Number(a.sales || 0)
       if (filters.sort === 'name_asc') return String(a.nama || '').localeCompare(String(b.nama || ''))
@@ -435,6 +462,10 @@ const shopeeRealSku = (model) => marketplaceSku(model?.model_sku)
 const firstRealSku = (rows, key) => (rows || []).map((row) => marketplaceSku(row?.[key])).find(Boolean) || ''
 const missingShopeeSku = (model) => !shopeeRealSku(model)
 const itemHasMissingSku = (item) => (item?.models || []).some((model) => missingShopeeSku(model))
+const missingSkuVariantCount = computed(() => items.value.reduce(
+  (count, item) => count + (item.models || []).filter(missingShopeeSku).length,
+  0
+))
 const templateSku = (item, model) => {
   const modelSku = String(model?.model_sku || '').trim()
   if (modelSku.toUpperCase().startsWith('INT-')) return modelSku
@@ -660,6 +691,41 @@ const resetFilters = () => {
   page.value = 1
 }
 
+const openBulkSkuModal = () => {
+  if (loading.value || bulkSkuUpdating.value || missingSkuVariantCount.value === 0) return
+  bulkSkuModal.open = true
+}
+
+const closeBulkSkuModal = () => {
+  if (!bulkSkuUpdating.value) bulkSkuModal.open = false
+}
+
+const confirmBulkSkuUpdate = async () => {
+  bulkSkuUpdating.value = true
+  syncMessage.value = ''
+
+  try {
+    const { data } = await omnichannelService.bulkUpdateShopeeEmptyVariantSkus()
+    const summary = [
+      data.message || 'Pengisian SKU Shopee selesai.',
+      `Kandidat: ${data.total_candidates || 0}`,
+      `Berhasil: ${data.updated || 0}`,
+      `Dilewati: ${data.skipped || 0}`,
+      `Gagal: ${data.failed || 0}`
+    ].join(' | ')
+
+    await loadData(false)
+    syncMessage.value = summary
+    syncTone.value = data.status === 'success' ? 'success' : 'warning'
+    bulkSkuModal.open = false
+  } catch (error) {
+    syncMessage.value = error.response?.data?.message || 'Pengisian SKU Shopee gagal.'
+    syncTone.value = 'error'
+  } finally {
+    bulkSkuUpdating.value = false
+  }
+}
+
 const loadData = async (syncMode = false) => {
   loading.value = true
   syncMessage.value = ''
@@ -716,6 +782,8 @@ button { border: 0; border-radius: 6px; padding: 9px 12px; cursor: pointer; }
 .primary { color: #fff; }
 .primary:disabled { opacity: .65; cursor: wait; }
 .shopee { background: #ee4d2d; }
+.bulk-sku-action { color: #fff; background: #1d4ed8; }
+.bulk-sku-action:disabled { cursor: not-allowed; opacity: .55; }
 .ghost { color: #334155; background: #fff; border: 1px solid #d7dde8; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .metric { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 14px; }
@@ -746,8 +814,8 @@ th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vert
 thead th { position: sticky; top: 0; background: #f8fafc; color: #0f172a; z-index: 2; }
 .check-col { width: 34px; text-align: center; }
 .product-row:hover { background: #fbfdff; }
-.product-row.missing-sku-row { background: #fffbeb; }
-.product-row.missing-sku-row:hover { background: #fef3c7; }
+.product-row.missing-sku-row { background: #dbeafe; box-shadow: inset 4px 0 0 #2563eb; }
+.product-row.missing-sku-row:hover { background: #bfdbfe; }
 .product-cell { display: grid; grid-template-columns: 72px 1fr; gap: 10px; min-width: 380px; }
 .product-cell img, .thumb-fallback { width: 72px; height: 72px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .thumb-fallback { display: grid; place-items: center; color: #64748b; font-weight: 800; }
@@ -769,12 +837,13 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .variant-row td { background: #fafafa; padding-top: 0; }
 .variant-list { border-top: 1px dashed #d7dde8; padding-top: 8px; display: grid; gap: 6px; }
 .variant-item { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, .65fr) minmax(0, .35fr) minmax(132px, .48fr); gap: 10px; padding: 8px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; }
-.variant-item.missing-sku-row { background: #fffbeb; border-color: #facc15; }
+.variant-item.missing-sku-row { background: #dbeafe; border-color: #2563eb; box-shadow: inset 4px 0 0 #2563eb; }
 .variant-name { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center; }
 .variant-name img, .variant-thumb-fallback { width: 42px; height: 42px; border-radius: 6px; object-fit: cover; background: #eef2f7; }
 .variant-thumb-fallback { display: grid; place-items: center; color: #64748b; font-size: 11px; font-weight: 800; }
 .variant-code { display: grid; gap: 3px; min-width: 0; align-content: start; }
 .variant-code code { color: #0f172a; font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.missing-sku-badge { display: inline-flex; width: max-content; align-items: center; border-radius: 4px; padding: 3px 6px; color: #fff; background: #2563eb; font-size: 10px; font-weight: 800; line-height: 1.3; }
 .variant-code small { color: #64748b; font-size: 11px; line-height: 1.25; }
 .variant-code strong { font-size: 12px; overflow-wrap: anywhere; }
 .copy-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -782,7 +851,7 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .variant-code button:disabled { cursor: not-allowed; opacity: .45; }
 .variant-actions { display: grid; gap: 6px; align-content: start; justify-items: stretch; }
 .manual-sku-input { width: 100%; min-width: 0; height: 30px; font-size: 12px; padding: 0 8px; }
-.update-sku-btn { border: 1px solid #f59e0b; background: #fef3c7; color: #92400e; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
+.update-sku-btn { border: 1px solid #2563eb; background: #dbeafe; color: #1d4ed8; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
 .update-sku-btn:disabled { cursor: not-allowed; opacity: .55; }
 .delete-variant-btn { border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 5px; padding: 6px 8px; font-size: 11px; font-weight: 800; }
 .delete-variant-btn:disabled { cursor: not-allowed; opacity: .5; }
@@ -794,6 +863,7 @@ small { display: block; color: #64748b; line-height: 1.55; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(15, 23, 42, .42); padding: 16px; }
 .confirm-modal { width: min(520px, 100%); background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 24px 70px rgba(15, 23, 42, .22); padding: 18px; }
 .confirm-modal h2 { color: #0f172a; font-size: 20px; letter-spacing: 0; margin: 0 0 8px; }
+.bulk-sku-copy { color: #1e3a8a; background: #dbeafe; border: 1px solid #93c5fd; border-radius: 6px; font-size: 13px; line-height: 1.45; margin: 0 0 12px; padding: 10px; }
 .danger-copy { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 13px; line-height: 1.45; margin: 0 0 12px; padding: 10px; }
 .delete-details { display: grid; gap: 8px; margin-bottom: 12px; }
 .delete-details div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: start; }
