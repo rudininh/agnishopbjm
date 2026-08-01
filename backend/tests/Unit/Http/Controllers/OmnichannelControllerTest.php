@@ -3,6 +3,7 @@
 namespace Tests\Unit\Http\Controllers;
 
 use App\Http\Controllers\OmnichannelController;
+use Illuminate\Support\Collection;
 use ReflectionClass;
 use Tests\TestCase;
 
@@ -141,6 +142,31 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('4', $payload['skus'][0]['sku_dimensions']['width']);
     }
 
+    public function test_shopee_bulk_candidates_include_only_blank_skus_and_use_internal_template(): void
+    {
+        $controller = new OmnichannelController();
+        $this->assertTrue(method_exists($controller, 'shopeeMissingSkuBulkCandidates'));
+
+        $candidates = $this->shopeeMissingSkuBulkCandidates(collect([
+            (object) ['item_id' => '100', 'model_id' => '1', 'name' => 'Merah / L', 'model_sku' => ''],
+            (object) ['item_id' => '100', 'model_id' => '2', 'name' => 'Biru', 'model_sku' => 'SKU-SUDAH-ADA'],
+            (object) ['item_id' => '101', 'model_id' => '3', 'name' => 'Hitam', 'model_sku' => '   '],
+        ]));
+
+        $this->assertSame([
+            ['item_id' => '100', 'model_id' => '1', 'model_name' => 'Merah / L', 'seller_sku' => 'INT-100-MERAH-L'],
+            ['item_id' => '101', 'model_id' => '3', 'model_name' => 'Hitam', 'seller_sku' => 'INT-101-HITAM'],
+        ], $candidates->all());
+    }
+
+    private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod('shopeeMissingSkuBulkCandidates');
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, $models);
+    }
     private function normalizePackageWeight(array $payload): array
     {
         $controller = new OmnichannelController();

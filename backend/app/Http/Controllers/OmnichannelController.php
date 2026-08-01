@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
@@ -2819,6 +2820,28 @@ class OmnichannelController extends Controller
         }
 
         return $this->buildShopeeTemplateSellerSku($itemId, (string) ($model->name ?? 'VARIAN'));
+    }
+
+    private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
+    {
+        return $models
+            ->filter(function (object $model): bool {
+                return trim((string) ($model->item_id ?? '')) !== ''
+                    && trim((string) ($model->model_id ?? '')) !== ''
+                    && trim((string) ($model->model_sku ?? '')) === '';
+            })
+            ->map(function (object $model): array {
+                $itemId = trim((string) $model->item_id);
+                $modelName = trim((string) ($model->name ?? ''));
+
+                return [
+                    'item_id' => $itemId,
+                    'model_id' => trim((string) $model->model_id),
+                    'model_name' => $modelName,
+                    'seller_sku' => $this->buildShopeeTemplateSellerSku($itemId, $modelName !== '' ? $modelName : 'VARIAN'),
+                ];
+            })
+            ->values();
     }
 
     private function tiktokSkuVariationCode(string $productId, object $sku): string
