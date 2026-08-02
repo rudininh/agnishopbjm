@@ -3,8 +3,11 @@
 namespace Tests\Unit\Http\Controllers;
 
 use App\Http\Controllers\OmnichannelController;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use ReflectionClass;
 use Tests\TestCase;
 
@@ -298,6 +301,133 @@ class OmnichannelControllerTest extends TestCase
             'manual_price' => 0,
         ])->assertUnprocessable()->assertJsonValidationErrors('manual_price');
     }
+
+    public function test_existing_tiktok_product_requires_readable_detail_before_mutation(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('canSubmitTiktokProductMutation'));
+
+        $canSubmit = $this->invokeControllerMethod('canSubmitTiktokProductMutation', [
+            ['product_id' => '123'],
+            null,
+        ]);
+
+        $this->assertFalse($canSubmit);
+    }
+
+    public function test_bulk_tiktok_audit_payload_redacts_signing_credentials(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('redactBulkTiktokAuditPayload'));
+
+        $payload = $this->invokeControllerMethod('redactBulkTiktokAuditPayload', [[
+            'request' => [
+                'query' => [
+                    'access_token' => 'secret',
+                    'sign' => 'signature',
+                    'shop_cipher' => 'cipher',
+                ],
+            ],
+            'response' => ['code' => 400, 'message' => 'invalid'],
+        ]]);
+
+        $this->assertArrayNotHasKey('access_token', $payload['request']['query']);
+        $this->assertArrayNotHasKey('sign', $payload['request']['query']);
+        $this->assertSame('invalid', $payload['response']['message']);
+    }
+
+    public function test_bulk_tiktok_outcome_keeps_sku_and_marks_unverified(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('bulkTiktokVariantOutcome'));
+
+        $outcome = $this->invokeControllerMethod('bulkTiktokVariantOutcome', [[
+            'seller_sku' => 'SKU-ROSE',
+        ], 'submitted_unverified', 48000, 'SKU belum muncul pada katalog TikTok terbaru.']);
+
+        $this->assertSame([
+            'seller_sku' => 'SKU-ROSE',
+            'price' => 48000,
+            'status' => 'submitted_unverified',
+            'reason' => 'SKU belum muncul pada katalog TikTok terbaru.',
+        ], $outcome);
+    }
+
+    public function test_bulk_tiktok_verification_requires_fresh_catalogue_sku(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('bulkTiktokVerificationOutcome'));
+
+        $missingSku = $this->invokeControllerMethod('bulkTiktokVerificationOutcome', [[
+            'status' => 'ok',
+            'message' => 'Produk TikTok dipilih berhasil disinkronkan: 5 varian aktif.',
+        ], false]);
+        $syncFailure = $this->invokeControllerMethod('bulkTiktokVerificationOutcome', [[
+            'status' => 'error',
+            'message' => 'Detail produk TikTok tidak berhasil diambil.',
+        ], false]);
+        $verified = $this->invokeControllerMethod('bulkTiktokVerificationOutcome', [[
+            'status' => 'ok',
+        ], true]);
+
+        $this->assertSame([
+            'status' => 'submitted_unverified',
+            'reason' => 'SKU belum muncul pada katalog TikTok terbaru.',
+        ], $missingSku);
+        $this->assertSame([
+            'status' => 'submitted_unverified',
+            'reason' => 'Detail produk TikTok tidak berhasil diambil.',
+        ], $syncFailure);
+        $this->assertSame(['status' => 'updated', 'reason' => null], $verified);
+    }
+
+    public function test_bulk_tiktok_action_is_persisted_with_redacted_payload(): void
+    {
+        Schema::dropIfExists('sku_variant_actions');
+        Schema::dropIfExists('stock_master');
+
+        try {
+            Schema::create('stock_master', function (Blueprint $table): void {
+                $table->id();
+                $table->string('internal_sku')->unique();
+                $table->string('shopee_product_id')->nullable();
+                $table->string('shopee_sku')->nullable();
+            });
+            Schema::create('sku_variant_actions', function (Blueprint $table): void {
+                $table->id();
+                $table->unsignedBigInteger('stock_master_id');
+                $table->string('target_channel');
+                $table->string('source_channel')->nullable();
+                $table->string('action_type');
+                $table->json('payload')->nullable();
+                $table->string('status');
+                $table->timestamps();
+                $table->unique(['stock_master_id', 'target_channel', 'action_type']);
+            });
+            DB::table('stock_master')->insert([
+                'internal_sku' => 'SKU-ROSE',
+                'shopee_product_id' => '55307930257',
+                'shopee_sku' => '267828680247',
+            ]);
+
+            $this->assertTrue($this->hasControllerMethod('recordBulkTiktokVariantAction'));
+            $this->invokeControllerMethod('recordBulkTiktokVariantAction', [[
+                'shopee_item_id' => '55307930257',
+                'shopee_model_id' => '267828680247',
+                'seller_sku' => 'SKU-ROSE',
+            ], 'failed', 48000, 'TikTok menolak varian.', [
+                'mutation' => [
+                    'request' => ['query' => ['access_token' => 'secret', 'sign' => 'signature']],
+                ],
+            ]]);
+
+            $action = DB::table('sku_variant_actions')->first();
+            $this->assertSame('failed', $action->status);
+            $this->assertSame('bulk_create_variant', $action->action_type);
+            $this->assertStringNotContainsString('secret', $action->payload);
+            $this->assertStringNotContainsString('signature', $action->payload);
+        } finally {
+            Schema::dropIfExists('sku_variant_actions');
+            Schema::dropIfExists('stock_master');
+        }
+    }
+
     private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
     {
         $controller = new OmnichannelController();
@@ -368,5 +498,19 @@ class OmnichannelControllerTest extends TestCase
         $method->setAccessible(true);
 
         return $method->invoke($controller, $payload);
+    }
+
+    private function hasControllerMethod(string $name): bool
+    {
+        return method_exists(OmnichannelController::class, $name);
+    }
+
+    private function invokeControllerMethod(string $name, array $arguments): mixed
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod($name);
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, ...$arguments);
     }
 }

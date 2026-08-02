@@ -4376,6 +4376,11 @@ class OmnichannelController extends Controller
     {
         $config = $this->tiktokConfig();
         $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
+        $hasExistingProduct = $existingProduct && ! empty($existingProduct['product_id']);
+        $method = $hasExistingProduct ? 'PUT' : 'POST';
+        $path = $method === 'PUT'
+            ? '/product/202309/products/'.(string) $existingProduct['product_id']
+            : '/product/202309/products';
 
         if ($shopCipher === '') {
             return [
@@ -4385,7 +4390,7 @@ class OmnichannelController extends Controller
         }
 
         $existingDetail = null;
-        if ($existingProduct && ! empty($existingProduct['product_id'])) {
+        if ($hasExistingProduct) {
             $existingDetail = $this->fetchTiktokProductDetail(
                 $config,
                 $accessToken,
@@ -4393,6 +4398,14 @@ class OmnichannelController extends Controller
                 (string) $existingProduct['product_id'],
                 $config['api_host'].'/product/202309/products/'
             );
+        }
+
+        if (! $this->canSubmitTiktokProductMutation($existingProduct, $existingDetail)) {
+            return [
+                'ok' => false,
+                'message' => 'Detail produk TikTok terbaru tidak dapat dibaca. Mutasi dibatalkan demi menjaga varian yang sudah ada.',
+                'request' => ['method' => $method, 'path' => $path],
+            ];
         }
 
         $mainImages = [];
@@ -4447,11 +4460,6 @@ class OmnichannelController extends Controller
             'main_images' => $mainImages,
             'skus' => $skuRows,
         ], fn ($value) => $value !== null && $value !== []);
-
-        $method = $existingProduct && ! empty($existingProduct['product_id']) ? 'PUT' : 'POST';
-        $path = $method === 'PUT'
-            ? '/product/202309/products/'.(string) $existingProduct['product_id']
-            : '/product/202309/products';
 
         $query = [
             'app_key' => $config['app_key'],
@@ -4522,6 +4530,149 @@ class OmnichannelController extends Controller
                 'body' => $body,
             ],
         ];
+    }
+
+    private function canSubmitTiktokProductMutation(?array $existingProduct, ?array $existingDetail): bool
+    {
+        return empty($existingProduct['product_id']) || is_array($existingDetail);
+    }
+
+    private function bulkTiktokVariantOutcome(array $variant, string $status, ?int $price = null, ?string $reason = null): array
+    {
+        return [
+            'seller_sku' => $this->normalizedMarketplaceSellerSku($variant['seller_sku'] ?? ''),
+            'price' => $price,
+            'status' => $status,
+            'reason' => $reason,
+        ];
+    }
+
+    private function bulkTiktokVerificationOutcome(array $sync, bool $sellerSkuExists): array
+    {
+        if (($sync['status'] ?? 'error') === 'ok' && $sellerSkuExists) {
+            return ['status' => 'updated', 'reason' => null];
+        }
+
+        if (($sync['status'] ?? 'error') === 'ok') {
+            return [
+                'status' => 'submitted_unverified',
+                'reason' => 'SKU belum muncul pada katalog TikTok terbaru.',
+            ];
+        }
+
+        return [
+            'status' => 'submitted_unverified',
+            'reason' => trim((string) ($sync['message'] ?? '')) ?: 'SKU belum muncul pada katalog TikTok terbaru.',
+        ];
+    }
+
+    private function redactBulkTiktokAuditPayload(array $payload): array
+    {
+        $sensitiveKeys = [
+            'access_token',
+            'sign',
+            'app_key',
+            'app_secret',
+            'authorization',
+            'x_tts_access_token',
+            'shop_cipher',
+        ];
+        $redact = function (mixed $value) use (&$redact, $sensitiveKeys): mixed {
+            if (! is_array($value)) {
+                return $value;
+            }
+
+            $result = [];
+            foreach ($value as $key => $item) {
+                $normalizedKey = is_string($key) ? strtolower(str_replace('-', '_', $key)) : '';
+                if (in_array($normalizedKey, $sensitiveKeys, true)) {
+                    continue;
+                }
+
+                $result[$key] = $redact($item);
+            }
+
+            return $result;
+        };
+
+        return $redact($payload);
+    }
+
+    private function recordBulkTiktokVariantAction(array $variant, string $status, ?int $price = null, ?string $reason = null, array $audit = []): void
+    {
+        if (! Schema::hasTable('stock_master') || ! Schema::hasTable('sku_variant_actions')) {
+            return;
+        }
+
+        $itemId = trim((string) ($variant['shopee_item_id'] ?? ''));
+        $modelId = trim((string) ($variant['shopee_model_id'] ?? ''));
+        if ($itemId === '' || $modelId === '') {
+            return;
+        }
+
+        $stock = DB::table('stock_master')
+            ->where('shopee_product_id', $itemId)
+            ->where('shopee_sku', $modelId)
+            ->first();
+        if (! $stock) {
+            return;
+        }
+
+        $payload = $this->redactBulkTiktokAuditPayload([
+            'outcome' => $this->bulkTiktokVariantOutcome($variant, $status, $price, $reason),
+            ...$audit,
+        ]);
+
+        DB::table('sku_variant_actions')->updateOrInsert(
+            [
+                'stock_master_id' => (int) $stock->id,
+                'target_channel' => 'tiktok',
+                'action_type' => 'bulk_create_variant',
+            ],
+            [
+                'source_channel' => 'shopee',
+                'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => $status,
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+    }
+
+    private function appendBulkTiktokVariantOutcome(array &$result, array $variant, string $status, ?int $price = null, ?string $reason = null, array $audit = []): void
+    {
+        $counter = match ($status) {
+            'updated' => 'updated',
+            'skipped' => 'skipped',
+            'submitted_unverified' => 'unverified',
+            default => 'failed',
+        };
+        $result[$counter] = (int) ($result[$counter] ?? 0) + 1;
+        $result['variants'][] = $this->bulkTiktokVariantOutcome($variant, $status, $price, $reason);
+        $this->recordBulkTiktokVariantAction($variant, $status, $price, $reason, $audit);
+    }
+
+    private function appendBulkTiktokVariantOutcomes(array &$result, iterable $variants, string $status, ?int $price = null, ?string $reason = null, array $audit = []): void
+    {
+        foreach ($variants as $variant) {
+            $this->appendBulkTiktokVariantOutcome($result, (array) $variant, $status, $price, $reason, $audit);
+        }
+    }
+
+    private function completeBulkTiktokVariantGroupResult(array $result): array
+    {
+        $hasUnverified = (int) ($result['unverified'] ?? 0) > 0;
+        $hasFailures = (int) ($result['failed'] ?? 0) > 0;
+        $hasUpdates = (int) ($result['updated'] ?? 0) > 0;
+
+        $result['status'] = $hasFailures || $hasUnverified
+            ? ($hasUpdates ? 'partial' : ($hasUnverified && ! $hasFailures ? 'submitted_unverified' : 'failed'))
+            : ($hasUpdates ? 'updated' : 'skipped');
+        $result['message'] = $hasUpdates
+            ? 'Varian TikTok terverifikasi setelah sinkronisasi katalog.'
+            : ($hasUnverified ? 'Varian TikTok dikirim tetapi belum terverifikasi pada katalog terbaru.' : 'Tidak ada varian TikTok yang ditambahkan.');
+
+        return $result;
     }
 
     private function uploadTiktokProductImage(object $shop, string $accessToken, string $sourceImageUrl, string $useCase = 'MAIN_IMAGE'): array
@@ -7183,15 +7334,17 @@ class OmnichannelController extends Controller
         $shop = (object) ['shop_id' => $shopId, 'shop_cipher' => $shopCipher, 'cipher' => $shopCipher];
         $items = $groups->map(fn (array $group): array => $this->submitBulkTiktokMissingVariantGroup($group, $data, $shop, $accessToken));
         $updated = $items->sum('updated');
+        $unverified = $items->sum('unverified');
         $skipped = $items->sum('skipped');
         $failed = $items->sum('failed');
 
         return response()->json([
-            'status' => $failed > 0 ? ($updated > 0 ? 'partial' : 'error') : 'success',
+            'status' => $failed > 0 || $unverified > 0 ? ($updated > 0 ? 'partial' : 'error') : 'success',
             'message' => 'Proses tambah varian TikTok selesai.',
             'total_products' => $items->count(),
-            'total_variants' => $items->sum(fn (array $item): int => $item['updated'] + $item['skipped'] + $item['failed']),
+            'total_variants' => $items->sum(fn (array $item): int => $item['updated'] + $item['unverified'] + $item['skipped'] + $item['failed']),
             'updated' => $updated,
+            'unverified' => $unverified,
             'skipped' => $skipped,
             'failed' => $failed,
             'items' => $items->values(),
@@ -7282,26 +7435,34 @@ class OmnichannelController extends Controller
     {
         $productId = trim((string) ($group['tiktok_product_id'] ?? ''));
         $shopeeItemId = trim((string) ($group['shopee_item_id'] ?? ''));
-        $result = ['product_id' => $productId, 'product_name' => $group['product_name'] ?? '', 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'variants' => []];
+        $result = ['product_id' => $productId, 'product_name' => $group['product_name'] ?? '', 'updated' => 0, 'unverified' => 0, 'skipped' => 0, 'failed' => 0, 'variants' => []];
         if ($productId === '' || ! ctype_digit($shopeeItemId)) {
-            return $result + ['status' => 'skipped', 'message' => 'Koneksi produk TikTok atau Item ID Shopee belum lengkap.', 'skipped' => $group['variants']->count()];
+            $this->appendBulkTiktokVariantOutcomes($result, $group['variants'], 'skipped', null, 'Koneksi produk TikTok atau Item ID Shopee belum lengkap.');
+
+            return $this->completeBulkTiktokVariantGroupResult($result);
         }
 
         $sync = $this->syncShopeeProductToDatabase((int) $shopeeItemId, true);
         if (($sync['status'] ?? 'error') !== 'ok') {
-            return $result + ['status' => 'failed', 'message' => $sync['message'] ?? 'Gambar Shopee terbaru gagal disinkronkan.', 'failed' => $group['variants']->count()];
+            $this->appendBulkTiktokVariantOutcomes($result, $group['variants'], 'failed', null, $sync['message'] ?? 'Gambar Shopee terbaru gagal disinkronkan.', ['shopee_sync' => $sync]);
+
+            return $this->completeBulkTiktokVariantGroupResult($result);
         }
 
         $freshGroup = $this->tiktokBulkCandidateGroups()->first(fn (array $candidate): bool => $candidate['tiktok_product_id'] === $productId);
         if (! $freshGroup || $freshGroup['variants']->isEmpty()) {
-            return $result + ['status' => 'skipped', 'message' => 'Tidak ada varian Shopee baru setelah sinkronisasi.', 'skipped' => $group['variants']->count()];
+            $this->appendBulkTiktokVariantOutcomes($result, $group['variants'], 'skipped', null, 'Tidak ada varian Shopee baru setelah sinkronisasi.', ['shopee_sync' => $sync]);
+
+            return $this->completeBulkTiktokVariantGroupResult($result);
         }
 
         $config = $this->tiktokConfig();
         $detail = $this->fetchTiktokProductDetail($config, $accessToken, $shop, $productId, $config['api_host'].'/product/202309/products/');
         $detail = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
         if (! is_array($detail)) {
-            return $result + ['status' => 'failed', 'message' => 'Detail TikTok terbaru tidak dapat dibaca.', 'failed' => $freshGroup['variants']->count()];
+            $this->appendBulkTiktokVariantOutcomes($result, $freshGroup['variants'], 'failed', null, 'Detail TikTok terbaru tidak dapat dibaca.');
+
+            return $this->completeBulkTiktokVariantGroupResult($result);
         }
 
         $existingSkus = $this->normalizeTiktokSkuList($detail);
@@ -7310,14 +7471,15 @@ class OmnichannelController extends Controller
             ? ['price' => (int) $settings['manual_price'], 'reason' => null]
             : $this->tiktokMajorityPrice($existingSkus);
         if ($price['price'] === null) {
-            return $result + ['status' => 'skipped', 'message' => $price['reason'], 'skipped' => $freshGroup['variants']->count()];
+            $this->appendBulkTiktokVariantOutcomes($result, $freshGroup['variants'], 'skipped', null, $price['reason']);
+
+            return $this->completeBulkTiktokVariantGroupResult($result);
         }
 
         foreach ($freshGroup['variants'] as $variant) {
             $sellerSku = $this->normalizedMarketplaceSellerSku($variant['seller_sku'] ?? '');
             if ($sellerSku === '' || isset($existingSellerSkus[$sellerSku])) {
-                $result['skipped']++;
-                $result['variants'][] = ['seller_sku' => $sellerSku, 'status' => 'skipped', 'reason' => 'SKU sudah ada di TikTok.'];
+                $this->appendBulkTiktokVariantOutcome($result, $variant, 'skipped', null, 'SKU sudah ada di TikTok.');
                 continue;
             }
 
@@ -7325,7 +7487,8 @@ class OmnichannelController extends Controller
                 $upload = $this->uploadTiktokProductImage($shop, $accessToken, (string) $variant['image_url'], 'SKU_IMAGE');
                 $imageUri = trim((string) ($upload['uri'] ?? $upload['image_uri'] ?? ''));
                 if ($imageUri === '') {
-                    throw new \RuntimeException('Gambar Shopee terbaru gagal diunggah ke TikTok.');
+                    $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], 'Gambar Shopee terbaru gagal diunggah ke TikTok.', ['upload' => $upload]);
+                    continue;
                 }
                 $stock = (object) ['variant_name' => $variant['variant_name'], 'product_name' => $group['product_name'], 'internal_sku' => $sellerSku, 'stock_qty' => 0];
                 $draft = [
@@ -7335,20 +7498,34 @@ class OmnichannelController extends Controller
                 ];
                 $mutation = $this->submitTiktokVariantMutation($stock, $draft, $shop, $accessToken, ['product_id' => $productId], ['uploaded_image_uri' => $imageUri]);
                 if (($mutation['ok'] ?? false) !== true) {
-                    throw new \RuntimeException((string) ($mutation['message'] ?? 'TikTok menolak varian baru.'));
+                    $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], (string) ($mutation['message'] ?? 'TikTok menolak varian baru.'), ['upload' => $upload, 'mutation' => $mutation]);
+                    continue;
                 }
-                $existingSellerSkus[$sellerSku] = true;
-                $result['updated']++;
-                $result['variants'][] = ['seller_sku' => $sellerSku, 'price' => $price['price'], 'status' => 'updated'];
+
+                $verificationSync = $this->syncTiktokProductToDatabase($productId);
+                $sellerSkuExists = DB::table('tiktok_products')
+                    ->where('product_id', $productId)
+                    ->whereRaw('COALESCE(is_active, true) = true')
+                    ->whereRaw("UPPER(TRIM(COALESCE(seller_sku, ''))) = ?", [$sellerSku])
+                    ->exists();
+                $verification = $this->bulkTiktokVerificationOutcome($verificationSync, $sellerSkuExists);
+                $this->appendBulkTiktokVariantOutcome(
+                    $result,
+                    $variant,
+                    $verification['status'],
+                    $price['price'],
+                    $verification['reason'],
+                    ['upload' => $upload, 'mutation' => $mutation, 'verification' => $verificationSync]
+                );
+                if ($verification['status'] === 'updated') {
+                    $existingSellerSkus[$sellerSku] = true;
+                }
             } catch (\Throwable $exception) {
-                $result['failed']++;
-                $result['variants'][] = ['seller_sku' => $sellerSku, 'price' => $price['price'], 'status' => 'failed', 'reason' => $exception->getMessage()];
+                $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], $exception->getMessage(), ['exception' => $exception->getMessage()]);
             }
         }
 
-        $result['status'] = $result['failed'] > 0 ? ($result['updated'] > 0 ? 'partial' : 'failed') : ($result['updated'] > 0 ? 'updated' : 'skipped');
-        $result['message'] = $result['updated'] > 0 ? 'Varian TikTok diproses.' : 'Tidak ada varian TikTok yang ditambahkan.';
-        return $result;
+        return $this->completeBulkTiktokVariantGroupResult($result);
     }
     public function bulkUpdateShopeeEmptyVariantSkus(Request $request): JsonResponse
     {
