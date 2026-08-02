@@ -218,6 +218,21 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('SH-BLUE', $match->seller_sku);
     }
 
+    public function test_tiktok_bulk_candidate_row_uses_suggested_tiktok_product_from_sku_mapping(): void
+    {
+        $row = $this->tiktokBulkCandidateRowFromSkuMapping([
+            'status' => 'tiktok_missing',
+            'product_name' => 'Produk Shopee',
+            'shopee' => ['item_id' => '100', 'model_id' => '1', 'seller_sku' => 'SH-RED', 'variant_name' => 'Merah', 'image_url' => '/cached/red.jpg'],
+            'tiktok' => ['product_id' => '900', 'product_name' => 'Produk TikTok', 'source' => 'suggested_product'],
+        ]);
+
+        $this->assertSame('900', $row->tiktok_product_id);
+        $this->assertSame('100', $row->shopee_item_id);
+        $this->assertSame('SH-RED', $row->shopee_model_sku);
+        $this->assertSame('/cached/red.jpg', $row->shopee_image_url);
+    }
+
     public function test_tiktok_majority_price_returns_the_most_frequent_price(): void
     {
         $result = $this->tiktokMajorityPrice([
@@ -300,6 +315,14 @@ class OmnichannelControllerTest extends TestCase
         return $method->invoke($controller, $rows);
     }
 
+    private function tiktokBulkCandidateRowFromSkuMapping(array $item): ?object
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod('tiktokBulkCandidateRowFromSkuMapping');
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, $item);
+    }
     private function linkedTiktokSellerSkuMatch(array $lookup, string $productId, string $sellerSku): ?object
     {
         $controller = new OmnichannelController();

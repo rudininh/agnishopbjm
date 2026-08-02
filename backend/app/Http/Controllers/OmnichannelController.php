@@ -7198,29 +7198,52 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    private function tiktokBulkCandidateRowFromSkuMapping(array $item): ?object
+    {
+        if (! in_array($item['status'] ?? null, ['tiktok_missing', 'tiktok_mapping_missing'], true)) {
+            return null;
+        }
+
+        $tiktokProductId = trim((string) data_get($item, 'tiktok.product_id'));
+        $shopeeItemId = trim((string) data_get($item, 'shopee.item_id'));
+        $shopeeModelId = trim((string) data_get($item, 'shopee.model_id'));
+        $shopeeSellerSku = trim((string) data_get($item, 'shopee.seller_sku'));
+
+        if ($tiktokProductId === '' || $shopeeItemId === '' || $shopeeModelId === '' || $shopeeSellerSku === '') {
+            return null;
+        }
+
+        return (object) [
+            'tiktok_product_id' => $tiktokProductId,
+            'product_name' => trim((string) (data_get($item, 'tiktok.product_name') ?: ($item['product_name'] ?? ''))),
+            'shopee_item_id' => $shopeeItemId,
+            'shopee_model_id' => $shopeeModelId,
+            'shopee_model_sku' => $shopeeSellerSku,
+            'shopee_variant_name' => trim((string) (data_get($item, 'shopee.variant_name') ?: ($item['variant_name'] ?? ''))),
+            'shopee_image_url' => trim((string) (data_get($item, 'shopee.image_url') ?: ($item['image_url'] ?? ''))),
+        ];
+    }
+
+    private function tiktokBulkCandidateSourceRows(): Collection
+    {
+        $response = $this->skuMapping(Request::create('/api/sku-mapping', 'GET', [
+            'flow' => 'shopee-to-tiktok',
+            'status' => 'all',
+            'sort' => 'updated_desc',
+            'page' => 1,
+            'per_page' => 5000,
+        ]));
+        $payload = $response->getData(true);
+
+        return collect($payload['items'] ?? [])
+            ->map(fn (array $item): ?object => $this->tiktokBulkCandidateRowFromSkuMapping($item))
+            ->filter()
+            ->values();
+    }
+
     private function tiktokBulkCandidateGroups(bool $includeMappingOnly = false): Collection
     {
-        $rows = DB::table('stock_master as sm')
-            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
-            ->join('shopee_product_model as spm', function ($join): void {
-                $join->on('spm.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
-                    ->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
-            })
-            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) AS image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join): void {
-                $join->on('spmi.item_id', '=', 'spm.item_id')->on('spmi.model_id', '=', 'spm.model_id');
-            })
-            ->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false')
-            ->whereRaw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, '')) IS NOT NULL")
-            ->selectRaw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, '')) AS tiktok_product_id")
-            ->addSelect([
-                'sm.product_name',
-                'spm.item_id as shopee_item_id',
-                'spm.model_id as shopee_model_id',
-                'spm.model_sku as shopee_model_sku',
-                'spm.name as shopee_variant_name',
-                'spmi.image_url as shopee_image_url',
-            ])
-            ->get();
+        $rows = $this->tiktokBulkCandidateSourceRows();
         $productIds = $rows->pluck('tiktok_product_id')->map(fn (mixed $id): string => trim((string) $id))->filter()->unique()->values();
         $tiktokSkus = DB::table('tiktok_products')
             ->whereIn('product_id', $productIds)
