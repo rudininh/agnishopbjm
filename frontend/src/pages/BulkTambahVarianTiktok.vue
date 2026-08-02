@@ -60,7 +60,7 @@
         </thead>
         <tbody>
           <tr v-if="loading"><td colspan="5" class="empty">Sedang memuat kandidat...</td></tr>
-          <tr v-else-if="!candidates.length"><td colspan="5" class="empty">Tidak ada varian Shopee yang belum ada di TikTok.</td></tr>
+          <tr v-else-if="!candidates.length"><td colspan="5" class="empty">{{ mappingOnlyCandidates.length ? 'Tidak ada SKU Shopee baru yang aman ditambahkan. SKU yang sudah ada di TikTok ditampilkan pada tabel rekonsiliasi di bawah.' : 'Tidak ada varian Shopee yang belum ada di TikTok.' }}</td></tr>
           <tr v-for="group in candidates" :key="group.tiktok_product_id">
             <td><input v-model="selectedProductIds" type="checkbox" :value="group.tiktok_product_id" :disabled="submitting" /></td>
             <td>
@@ -87,6 +87,46 @@
       </table>
     </section>
 
+    <section v-if="mappingOnlyCandidates.length" class="table-wrap reconciliation">
+      <div class="table-head">
+        <div>
+          <strong>SKU TikTok Sudah Ada, Mapping Belum Tersambung</strong>
+          <small>{{ `${mappingOnlyCandidates.length} produk | ${mappingOnlyVariantCount} varian tidak dapat ditambahkan ulang` }}</small>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Produk TikTok</th>
+            <th>Varian Shopee</th>
+            <th>SKU TikTok Terdeteksi</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="group in mappingOnlyCandidates" :key="`mapping-${group.tiktok_product_id}`">
+            <tr v-for="variant in group.mapping_only_variants" :key="`${group.tiktok_product_id}-${variant.shopee_model_id}`">
+              <td>
+                <strong>{{ group.product_name || '-' }}</strong>
+                <small>ID TikTok: {{ group.tiktok_product_id }}</small>
+              </td>
+              <td>
+                <strong>{{ variant.variant_name || 'Varian Shopee' }}</strong>
+                <small>{{ variant.seller_sku }}</small>
+              </td>
+              <td>
+                <strong>{{ variant.tiktok_sku_id || '-' }}</strong>
+                <small>{{ variant.tiktok_variant_name || 'Nama varian TikTok tidak tersedia' }}</small>
+              </td>
+              <td>
+                <span class="badge mapping">Tidak ditambahkan</span>
+                <small>{{ variant.reason }}</small>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
     <section v-if="results.length" class="table-wrap results">
       <div class="table-head"><div><strong>Hasil Proses</strong><small>{{ resultSummary }}</small></div></div>
       <table>
@@ -104,7 +144,6 @@
         </tbody>
       </table>
     </section>
-
     <div v-if="confirmationOpen" class="modal-backdrop" @click.self="!submitting && (confirmationOpen = false)">
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmation-title">
         <h2 id="confirmation-title">Tambahkan varian ke TikTok?</h2>
@@ -125,6 +164,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
 
 const candidates = ref([])
+const mappingOnlyCandidates = ref([])
 const results = ref([])
 const selectedProductIds = ref([])
 const loading = ref(false)
@@ -138,6 +178,7 @@ const selectedGroups = computed(() => candidates.value.filter((group) => selecte
 const targetGroups = computed(() => execution.scope === 'all' ? candidates.value : selectedGroups.value)
 const targetProductCount = computed(() => targetGroups.value.length)
 const targetVariantCount = computed(() => targetGroups.value.reduce((count, group) => count + (group.variants || []).length, 0))
+const mappingOnlyVariantCount = computed(() => mappingOnlyCandidates.value.reduce((count, group) => count + (group.mapping_only_variants || []).length, 0))
 const allSelected = computed(() => candidates.value.length > 0 && selectedProductIds.value.length === candidates.value.length)
 const canSubmit = computed(() => !loading.value && !submitting.value && targetVariantCount.value > 0
   && (execution.priceMode === 'majority' || Number(execution.manualPrice) > 0))
@@ -156,6 +197,7 @@ const loadPreview = async () => {
   try {
     const { data } = await omnichannelService.bulkTiktokMissingVariantsPreview()
     candidates.value = data.items || []
+    mappingOnlyCandidates.value = data.mapping_only_items || []
     selectedProductIds.value = selectedProductIds.value.filter((id) => candidates.value.some((group) => group.tiktok_product_id === id))
   } catch (error) {
     message.value = error.response?.data?.message || 'Preview varian TikTok gagal dimuat.'
@@ -214,7 +256,7 @@ fieldset { display:grid; gap:8px; padding:12px; } legend { padding:0 4px; color:
 .table-wrap { overflow:auto; margin-bottom:16px; } .table-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border-bottom:1px solid #d9e2ec; } .table-head strong { display:block; } .select-all { white-space:nowrap; }
 table { width:100%; min-width:860px; border-collapse:collapse; } th,td { padding:10px; border-bottom:1px solid #e5eaf0; text-align:left; vertical-align:top; font-size:13px; } th { color:#475569; background:#f8fafc; font-size:11px; text-transform:uppercase; } td:first-child,th:first-child { width:42px; text-align:center; } .empty { padding:30px; color:#64748b; text-align:center; }
 .variant-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; min-width:260px; } .variant-list li { display:grid; grid-template-columns:36px minmax(0,1fr); gap:8px; align-items:center; } .variant-list img,.image-fallback { width:36px; height:36px; object-fit:cover; border-radius:4px; background:#e2e8f0; } .image-fallback { display:grid; place-items:center; color:#64748b; } .variant-list strong { display:block; overflow-wrap:anywhere; }
-.badge { display:inline-flex; width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-weight:800; } .ready,.updated { color:#166534; background:#dcfce7; } .warning,.skipped { color:#92400e; background:#fef3c7; } .failed { color:#991b1b; background:#fee2e2; }
+.badge { display:inline-flex; width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-weight:800; } .ready,.updated { color:#166534; background:#dcfce7; } .warning,.skipped { color:#92400e; background:#fef3c7; } .mapping { color:#1d4ed8; background:#dbeafe; } .failed { color:#991b1b; background:#fee2e2; }
 .modal-backdrop { position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:18px; background:rgba(15,23,42,.45); } .modal { width:min(520px,100%); border-radius:6px; background:#fff; padding:20px; box-shadow:0 20px 45px rgba(15,23,42,.25); } .modal h2 { margin:0 0 12px; font-size:19px; } .modal p { margin:8px 0; color:#475569; line-height:1.5; } .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
 @media (max-width: 980px) { .page-shell { margin-left:0; padding:16px; } .controls { grid-template-columns:1fr; } .page-header { align-items:flex-start; flex-direction:column; } }
