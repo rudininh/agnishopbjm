@@ -239,6 +239,29 @@ class OmnichannelControllerTest extends TestCase
             @unlink($newPath);
         }
     }
+    public function test_bulk_tiktok_missing_variant_routes_are_registered(): void
+    {
+        $routes = collect(app('router')->getRoutes()->getRoutes());
+        $preview = $routes->first(fn ($route) => in_array('GET', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/bulk-missing-variants');
+        $submit = $routes->first(fn ($route) => in_array('POST', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/bulk-missing-variants/submit');
+
+        $this->assertNotNull($preview);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkTiktokMissingVariantsPreview', $preview->getActionName());
+        $this->assertNotNull($submit);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkSubmitTiktokMissingVariants', $submit->getActionName());
+    }
+
+    public function test_bulk_tiktok_missing_variant_manual_price_must_be_positive(): void
+    {
+        $this->postJson('/api/tiktok/bulk-missing-variants/submit', [
+            'scope' => 'selected',
+            'product_ids' => ['900'],
+            'price_mode' => 'manual',
+            'manual_price' => 0,
+        ])->assertUnprocessable()->assertJsonValidationErrors('manual_price');
+    }
     private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
     {
         $controller = new OmnichannelController();

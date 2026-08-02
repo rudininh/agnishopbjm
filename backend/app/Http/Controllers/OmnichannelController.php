@@ -2911,7 +2911,7 @@ class OmnichannelController extends Controller
     {
         $counts = collect($tiktokSkus)
             ->map(function (array $sku): int {
-                $value = $sku['sale_price'] ?? $sku['price'] ?? 0;
+                $value = $sku['sale_price'] ?? data_get($sku, 'price.sale_price', $sku['price'] ?? 0);
                 return is_numeric($value) ? (int) $value : 0;
             })
             ->filter(fn (int $price): bool => $price > 0)
@@ -3254,7 +3254,7 @@ class OmnichannelController extends Controller
         return $normalized ? 'true' : 'false';
     }
 
-    private function storeShopeeProductPayload(array $item, array $models, array $tierVariations, int $shopId): int
+    private function storeShopeeProductPayload(array $item, array $models, array $tierVariations, int $shopId, bool $forceImageRefresh = false): int
     {
         $itemId = (int) ($item['item_id'] ?? 0);
 
@@ -3292,7 +3292,7 @@ class OmnichannelController extends Controller
             ]
         );
 
-        $this->storeShopeeImages($itemId, null, data_get($item, 'image.image_url_list', []));
+        $this->storeShopeeImages($itemId, null, data_get($item, 'image.image_url_list', []), $forceImageRefresh);
 
         if ($models === []) {
             $models = [[
@@ -3306,13 +3306,13 @@ class OmnichannelController extends Controller
 
         foreach ($models as $model) {
             $this->storeShopeeModelPayload($itemId, (string) ($item['item_name'] ?? ''), $model);
-            $this->storeShopeeImages($itemId, (string) ($model['model_id'] ?? '0'), $this->shopeeModelImageUrls($model, $tierVariations));
+            $this->storeShopeeImages($itemId, (string) ($model['model_id'] ?? '0'), $this->shopeeModelImageUrls($model, $tierVariations), $forceImageRefresh);
         }
 
         return $this->deleteShopeeModelsMissingFromSync($itemId, $models);
     }
 
-    private function syncShopeeProductToDatabase(int $itemId): array
+    private function syncShopeeProductToDatabase(int $itemId, bool $forceImageRefresh = false): array
     {
         $this->ensureShopeeAuthColumns();
         $this->normalizeActiveMarketplaceTokens();
@@ -3373,7 +3373,8 @@ class OmnichannelController extends Controller
                 $baseItems[0],
                 $models,
                 data_get($modelPayload, 'tier_variation', []),
-                $shopId
+                $shopId,
+                $forceImageRefresh
             );
             $variantCount = max(1, count($models));
             $message = 'Produk Shopee dipilih berhasil disinkronkan: '.$variantCount.' varian aktif.';
@@ -3524,14 +3525,19 @@ class OmnichannelController extends Controller
             ]);
     }
 
-    private function storeShopeeImages(int $itemId, ?string $modelId, array $urls): void
+    private function storeShopeeImages(int $itemId, ?string $modelId, array $urls, bool $forceImageRefresh = false): void
     {
+        if ($forceImageRefresh) {
+            DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->delete();
+        }
         foreach ($urls as $url) {
             if (! is_string($url) || trim($url) === '') {
                 continue;
             }
 
-            $cachedUrl = $this->cacheMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'));
+            $cachedUrl = $forceImageRefresh
+                ? $this->refreshMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'))
+                : $this->cacheMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'));
 
             if (! DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->where('image_url', $cachedUrl)->exists()) {
                 DB::table('shopee_product_image')->insert([
@@ -7076,6 +7082,192 @@ class OmnichannelController extends Controller
         return response()->json($result);
     }
 
+    public function bulkTiktokMissingVariantsPreview(): JsonResponse
+    {
+        $this->ensureSkuMappingTables();
+
+        return response()->json([
+            'items' => $this->tiktokBulkCandidateGroups()->map(fn (array $group): array => [
+                ...$group,
+                'variant_count' => $group['variants']->count(),
+            ])->values(),
+        ]);
+    }
+
+    public function bulkSubmitTiktokMissingVariants(Request $request): JsonResponse
+    {
+        set_time_limit(0);
+
+        if ($request->input('price_mode') === 'manual' && (int) $request->input('manual_price', 0) < 1) {
+            return response()->json([
+                'message' => 'Harga manual wajib lebih dari nol.',
+                'errors' => ['manual_price' => ['Harga manual wajib lebih dari nol.']],
+            ], 422);
+        }
+
+        $data = $request->validate([
+            'scope' => ['required', 'in:selected,all'],
+            'product_ids' => ['required_if:scope,selected', 'array'],
+            'product_ids.*' => ['string'],
+            'price_mode' => ['required', 'in:majority,manual'],
+            'manual_price' => ['required_if:price_mode,manual', 'integer', 'min:1'],
+        ]);
+
+        $this->ensureSkuMappingTables();
+
+        $targetProductIds = collect($data['product_ids'] ?? [])->map(fn (mixed $id): string => trim((string) $id))->filter()->unique();
+        $groups = $this->tiktokBulkCandidateGroups()
+            ->when($data['scope'] === 'selected', fn (Collection $groups): Collection => $groups->filter(
+                fn (array $group): bool => $targetProductIds->contains($group['tiktok_product_id'])
+            ))
+            ->values();
+
+        $this->autoRefreshMarketplaceTokens();
+        $context = $this->resolveTiktokGetProductContext(['version' => '202509']);
+        $accessToken = trim((string) ($context['access_token'] ?? ''));
+        $shopId = trim((string) ($context['shop_id'] ?? ''));
+        $shopCipher = trim((string) ($context['shop_cipher'] ?? ''));
+        abort_if($accessToken === '' || $shopId === '' || $shopCipher === '', 422, 'Token atau shop TikTok belum aktif.');
+
+        $shop = (object) ['shop_id' => $shopId, 'shop_cipher' => $shopCipher, 'cipher' => $shopCipher];
+        $items = $groups->map(fn (array $group): array => $this->submitBulkTiktokMissingVariantGroup($group, $data, $shop, $accessToken));
+        $updated = $items->sum('updated');
+        $skipped = $items->sum('skipped');
+        $failed = $items->sum('failed');
+
+        return response()->json([
+            'status' => $failed > 0 ? ($updated > 0 ? 'partial' : 'error') : 'success',
+            'message' => 'Proses tambah varian TikTok selesai.',
+            'total_products' => $items->count(),
+            'total_variants' => $items->sum(fn (array $item): int => $item['updated'] + $item['skipped'] + $item['failed']),
+            'updated' => $updated,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'items' => $items->values(),
+        ]);
+    }
+
+    private function tiktokBulkCandidateGroups(): Collection
+    {
+        $rows = DB::table('stock_master as sm')
+            ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
+            ->join('shopee_product_model as spm', function ($join): void {
+                $join->on('spm.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+                    ->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
+            })
+            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) AS image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join): void {
+                $join->on('spmi.item_id', '=', 'spm.item_id')->on('spmi.model_id', '=', 'spm.model_id');
+            })
+            ->whereRaw('COALESCE(sm.is_hidden_from_mapping, false) = false')
+            ->whereRaw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, '')) IS NOT NULL")
+            ->selectRaw("COALESCE(NULLIF(map.tiktok_product_id, ''), NULLIF(sm.tiktok_product_id, '')) AS tiktok_product_id")
+            ->addSelect([
+                'sm.product_name',
+                'spm.item_id as shopee_item_id',
+                'spm.model_id as shopee_model_id',
+                'spm.model_sku as shopee_model_sku',
+                'spm.name as shopee_variant_name',
+                'spmi.image_url as shopee_image_url',
+            ])
+            ->get();
+        $productIds = $rows->pluck('tiktok_product_id')->map(fn (mixed $id): string => trim((string) $id))->filter()->unique()->values();
+        $tiktokSkus = DB::table('tiktok_products')
+            ->whereIn('product_id', $productIds)
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->select('product_id', 'seller_sku', 'price')
+            ->get()
+            ->groupBy('product_id');
+
+        $enrichedRows = $rows->map(function (object $row) use ($tiktokSkus): object {
+            $productSkus = $tiktokSkus->get((string) $row->tiktok_product_id, collect());
+            $row->tiktok_seller_skus = $productSkus->pluck('seller_sku')->all();
+            $row->tiktok_skus = $productSkus->map(fn (object $sku): array => ['sale_price' => $sku->price])->all();
+            return $row;
+        });
+
+        return $this->tiktokBulkMissingVariantCandidates($enrichedRows)
+            ->map(function (array $group) use ($tiktokSkus): array {
+                $group['majority_price'] = $this->tiktokMajorityPrice(
+                    $tiktokSkus->get($group['tiktok_product_id'], collect())
+                        ->map(fn (object $sku): array => ['sale_price' => $sku->price])
+                        ->all()
+                );
+                return $group;
+            });
+    }
+
+    private function submitBulkTiktokMissingVariantGroup(array $group, array $settings, object $shop, string $accessToken): array
+    {
+        $productId = trim((string) ($group['tiktok_product_id'] ?? ''));
+        $shopeeItemId = trim((string) ($group['shopee_item_id'] ?? ''));
+        $result = ['product_id' => $productId, 'product_name' => $group['product_name'] ?? '', 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'variants' => []];
+        if ($productId === '' || ! ctype_digit($shopeeItemId)) {
+            return $result + ['status' => 'skipped', 'message' => 'Koneksi produk TikTok atau Item ID Shopee belum lengkap.', 'skipped' => $group['variants']->count()];
+        }
+
+        $sync = $this->syncShopeeProductToDatabase((int) $shopeeItemId, true);
+        if (($sync['status'] ?? 'error') !== 'ok') {
+            return $result + ['status' => 'failed', 'message' => $sync['message'] ?? 'Gambar Shopee terbaru gagal disinkronkan.', 'failed' => $group['variants']->count()];
+        }
+
+        $freshGroup = $this->tiktokBulkCandidateGroups()->first(fn (array $candidate): bool => $candidate['tiktok_product_id'] === $productId);
+        if (! $freshGroup || $freshGroup['variants']->isEmpty()) {
+            return $result + ['status' => 'skipped', 'message' => 'Tidak ada varian Shopee baru setelah sinkronisasi.', 'skipped' => $group['variants']->count()];
+        }
+
+        $config = $this->tiktokConfig();
+        $detail = $this->fetchTiktokProductDetail($config, $accessToken, $shop, $productId, $config['api_host'].'/product/202309/products/');
+        $detail = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
+        if (! is_array($detail)) {
+            return $result + ['status' => 'failed', 'message' => 'Detail TikTok terbaru tidak dapat dibaca.', 'failed' => $freshGroup['variants']->count()];
+        }
+
+        $existingSkus = $this->normalizeTiktokSkuList($detail);
+        $existingSellerSkus = collect($existingSkus)->map(fn (array $sku): string => $this->normalizedMarketplaceSellerSku($this->extractTiktokSellerSku($sku)))->filter()->flip();
+        $price = $settings['price_mode'] === 'manual'
+            ? ['price' => (int) $settings['manual_price'], 'reason' => null]
+            : $this->tiktokMajorityPrice($existingSkus);
+        if ($price['price'] === null) {
+            return $result + ['status' => 'skipped', 'message' => $price['reason'], 'skipped' => $freshGroup['variants']->count()];
+        }
+
+        foreach ($freshGroup['variants'] as $variant) {
+            $sellerSku = $this->normalizedMarketplaceSellerSku($variant['seller_sku'] ?? '');
+            if ($sellerSku === '' || isset($existingSellerSkus[$sellerSku])) {
+                $result['skipped']++;
+                $result['variants'][] = ['seller_sku' => $sellerSku, 'status' => 'skipped', 'reason' => 'SKU sudah ada di TikTok.'];
+                continue;
+            }
+
+            try {
+                $upload = $this->uploadTiktokProductImage($shop, $accessToken, (string) $variant['image_url'], 'SKU_IMAGE');
+                $imageUri = trim((string) ($upload['uri'] ?? $upload['image_uri'] ?? ''));
+                if ($imageUri === '') {
+                    throw new \RuntimeException('Gambar Shopee terbaru gagal diunggah ke TikTok.');
+                }
+                $stock = (object) ['variant_name' => $variant['variant_name'], 'product_name' => $group['product_name'], 'internal_sku' => $sellerSku, 'stock_qty' => 0];
+                $draft = [
+                    'product_name' => $group['product_name'],
+                    'source' => ['price' => $price['price'], 'image_url' => $variant['image_url']],
+                    'target' => ['variant_name' => $variant['variant_name'], 'seller_sku' => $sellerSku, 'image_url' => $variant['image_url'], 'stock_qty' => 0],
+                ];
+                $mutation = $this->submitTiktokVariantMutation($stock, $draft, $shop, $accessToken, ['product_id' => $productId], ['uploaded_image_uri' => $imageUri]);
+                if (($mutation['ok'] ?? false) !== true) {
+                    throw new \RuntimeException((string) ($mutation['message'] ?? 'TikTok menolak varian baru.'));
+                }
+                $existingSellerSkus[$sellerSku] = true;
+                $result['updated']++;
+                $result['variants'][] = ['seller_sku' => $sellerSku, 'price' => $price['price'], 'status' => 'updated'];
+            } catch (\Throwable $exception) {
+                $result['failed']++;
+                $result['variants'][] = ['seller_sku' => $sellerSku, 'price' => $price['price'], 'status' => 'failed', 'reason' => $exception->getMessage()];
+            }
+        }
+
+        $result['status'] = $result['failed'] > 0 ? ($result['updated'] > 0 ? 'partial' : 'failed') : ($result['updated'] > 0 ? 'updated' : 'skipped');
+        $result['message'] = $result['updated'] > 0 ? 'Varian TikTok diproses.' : 'Tidak ada varian TikTok yang ditambahkan.';
+        return $result;
+    }
     public function bulkUpdateShopeeEmptyVariantSkus(Request $request): JsonResponse
     {
         set_time_limit(0);
