@@ -440,6 +440,21 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame($expectedPrice, $rows[1]['price']);
     }
 
+    public function test_tiktok_mutation_description_preserves_existing_detail_only(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('tiktokMutationDescription'));
+
+        $description = $this->invokeControllerMethod('tiktokMutationDescription', [[
+            'description' => '  Deskripsi TikTok asli.  ',
+        ]]);
+        $blank = $this->invokeControllerMethod('tiktokMutationDescription', [[
+            'description' => '   ',
+        ]]);
+
+        $this->assertSame('Deskripsi TikTok asli.', $description);
+        $this->assertSame('', $blank);
+    }
+
     public function test_bulk_tiktok_action_is_persisted_with_redacted_payload(): void
     {
         Schema::dropIfExists('sku_variant_actions');

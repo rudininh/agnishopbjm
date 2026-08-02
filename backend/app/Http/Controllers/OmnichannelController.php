@@ -4408,6 +4408,15 @@ class OmnichannelController extends Controller
             ];
         }
 
+        $description = $this->tiktokMutationDescription(is_array($existingDetail) ? $existingDetail : []);
+        if ($hasExistingProduct && $description === '') {
+            return [
+                'ok' => false,
+                'message' => 'Detail produk TikTok terbaru tidak memiliki deskripsi. Mutasi dibatalkan demi menjaga produk yang sudah ada.',
+                'request' => ['method' => $method, 'path' => $path],
+            ];
+        }
+
         $uploadedImageUri = trim((string) ($options['uploaded_image_uri'] ?? ''));
         $mainImages = $this->normalizeTiktokMainImagesForMutation(
             is_array($existingDetail) ? $existingDetail : []
@@ -4428,6 +4437,7 @@ class OmnichannelController extends Controller
 
         $body = array_filter([
             'title' => (string) ($existingDetail['title'] ?? $draftPayload['product_name'] ?? $stock->product_name ?? 'TikTok Product'),
+            'description' => $description,
             'main_images' => $mainImages,
             'skus' => $skuRows,
         ], fn ($value) => $value !== null && $value !== []);
@@ -4569,6 +4579,11 @@ class OmnichannelController extends Controller
         ], fn ($value) => $value !== null && $value !== '');
 
         return $rows;
+    }
+
+    private function tiktokMutationDescription(array $existingDetail): string
+    {
+        return trim((string) data_get($existingDetail, 'description', ''));
     }
 
     private function redactBulkTiktokAuditPayload(array $payload): array
