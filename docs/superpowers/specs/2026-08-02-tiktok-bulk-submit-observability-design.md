@@ -12,8 +12,10 @@ TikTok product mutation stopped the run.
 ## Goal
 
 Make every bulk TikTok variant attempt observable and keep its final result
-visible after the candidate preview refreshes. A user can retry an explicitly
-selected SKU after seeing the recorded result; previewing never mutates TikTok.
+visible after the candidate preview refreshes. TikTok is the source of truth:
+the application must not mark a SKU as added from the submit response alone.
+A user can retry an explicitly selected SKU after seeing the recorded result;
+previewing never mutates TikTok.
 
 ## Backend Design
 
@@ -30,6 +32,16 @@ selected SKU after seeing the recorded result; previewing never mutates TikTok.
 - Return a result row for every selected SKU. A product-level preflight failure
   becomes individual failed rows with the same specific reason, so the frontend
   has no invisible failures.
+- After a TikTok mutation returns success, fetch that TikTok product again with
+  `syncTiktokProductToDatabase()` and verify the normalized seller SKU exists
+  in the freshly returned catalogue before marking the row `updated`.
+- Do not insert a TikTok SKU, mapping, or local success state directly from the
+  mutation response. Only `storeTiktokProductPayload()` fed by the fresh TikTok
+  GET response may update the local TikTok cache.
+- When the mutation response is successful but the forced TikTok GET fails or
+  does not contain the seller SKU, record and return
+  `submitted_unverified`. This state is not a success, does not remove the
+  candidate, and retains the real response for follow-up.
 - Preserve the existing sequential product processing, live duplicate recheck,
   price choice, image refresh, and no-overwrite behavior for existing TikTok
   variants.
@@ -40,16 +52,19 @@ selected SKU after seeing the recorded result; previewing never mutates TikTok.
   submit.
 - Do not clear the final submit message during that refresh.
 - Replace the generic completion copy with a persistent summary containing the
-  exact counts: `Berhasil`, `Gagal`, and `Dilewati`.
-- Render per-SKU failure reasons in the existing result table. Successful and
-  skipped items remain visible in that same table for the latest run.
+  exact counts: `Berhasil`, `Belum terverifikasi`, `Gagal`, and `Dilewati`.
+- Render per-SKU reasons in the existing result table. Successful, unverified,
+  failed, and skipped items remain visible in that same table for the latest
+  run.
 - Do not automatically submit or retry a TikTok mutation after deployment.
   Retrying stays an explicit action through the confirmation modal.
 
 ## Verification
 
-- Add a controller regression test proving a failed bulk SKU produces a failed
-  result row and an audit record with no secret query values.
+- Add controller regression tests proving a failed bulk SKU produces a failed
+  result row and audit record with no secret query values, and a successful
+  submit is `submitted_unverified` until a fresh TikTok catalogue response
+  contains its seller SKU.
 - Add a frontend regression check for preserving the submit result message and
   result rows through the preview refresh.
 - Run targeted backend tests, the complete backend test suite, and the
@@ -57,4 +72,5 @@ selected SKU after seeing the recorded result; previewing never mutates TikTok.
 - Publish the built Vite assets and verify the local bulk page and API preview.
 - After the interface presents the result, run only the user-approved SKU
   `INT-55307930257-ROSE-GOLD` through the normal bulk endpoint, then verify its
-  recorded action and refreshed TikTok catalogue result.
+  recorded action and a forced fresh TikTok catalogue result. Treat it as
+  successful only when the fresh catalogue contains the SKU.
