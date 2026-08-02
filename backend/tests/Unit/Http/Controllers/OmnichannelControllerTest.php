@@ -377,6 +377,13 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame(['status' => 'updated', 'reason' => null], $verified);
     }
 
+    public function test_bulk_tiktok_variant_image_upload_uses_attribute_image(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('bulkTiktokVariantImageUseCase'));
+
+        $this->assertSame('ATTRIBUTE_IMAGE', $this->invokeControllerMethod('bulkTiktokVariantImageUseCase', []));
+    }
+
     public function test_bulk_tiktok_action_is_persisted_with_redacted_payload(): void
     {
         Schema::dropIfExists('sku_variant_actions');

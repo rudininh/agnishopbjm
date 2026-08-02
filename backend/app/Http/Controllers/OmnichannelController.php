@@ -4566,6 +4566,11 @@ class OmnichannelController extends Controller
         ];
     }
 
+    private function bulkTiktokVariantImageUseCase(): string
+    {
+        return 'ATTRIBUTE_IMAGE';
+    }
+
     private function redactBulkTiktokAuditPayload(array $payload): array
     {
         $sensitiveKeys = [
@@ -7484,7 +7489,7 @@ class OmnichannelController extends Controller
             }
 
             try {
-                $upload = $this->uploadTiktokProductImage($shop, $accessToken, (string) $variant['image_url'], 'SKU_IMAGE');
+                $upload = $this->uploadTiktokProductImage($shop, $accessToken, (string) $variant['image_url'], $this->bulkTiktokVariantImageUseCase());
                 $imageUri = trim((string) ($upload['uri'] ?? $upload['image_uri'] ?? ''));
                 if ($imageUri === '') {
                     $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], 'Gambar Shopee terbaru gagal diunggah ke TikTok.', ['upload' => $upload]);
