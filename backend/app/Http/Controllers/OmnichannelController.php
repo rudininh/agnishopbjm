@@ -4376,13 +4376,14 @@ class OmnichannelController extends Controller
     {
         $config = $this->tiktokConfig();
         $shopCipher = (string) ($shop->cipher ?? $shop->shop_cipher ?? '');
+        $shopId = (string) ($shop->shop_id ?? $shop->id ?? '');
         $hasExistingProduct = $existingProduct && ! empty($existingProduct['product_id']);
-        $method = $hasExistingProduct ? 'PUT' : 'POST';
-        $path = $method === 'PUT'
-            ? '/product/202309/products/'.(string) $existingProduct['product_id']
+        $method = 'POST';
+        $path = $hasExistingProduct
+            ? '/product/202509/products/'.(string) $existingProduct['product_id'].'/partial_edit'
             : '/product/202309/products';
 
-        if ($shopCipher === '') {
+        if ($shopCipher === '' || $shopId === '') {
             return [
                 'ok' => false,
                 'message' => 'Shop TikTok belum lengkap untuk mengirim request.',
@@ -4408,16 +4409,57 @@ class OmnichannelController extends Controller
             ];
         }
 
-        $description = $this->tiktokMutationDescription(is_array($existingDetail) ? $existingDetail : []);
-        if ($hasExistingProduct && $description === '') {
+        $uploadedImageUri = trim((string) ($options['uploaded_image_uri'] ?? ''));
+        if ($hasExistingProduct) {
+            try {
+                $partialEdit = $this->buildTiktokExistingProductPartialEditMutation(
+                    $existingProduct,
+                    $existingDetail,
+                    $draftPayload,
+                    $stock,
+                    $uploadedImageUri
+                );
+            } catch (\RuntimeException $exception) {
+                return [
+                    'ok' => false,
+                    'message' => $exception->getMessage(),
+                    'request' => ['method' => $method, 'path' => $path],
+                ];
+            }
+
+            $partialResponse = $this->submitTiktokPartialEditPayload($partialEdit['path'], $partialEdit['body'], [
+                'access_token' => $accessToken,
+                'shop_cipher' => $shopCipher,
+                'shop_id' => $shopId,
+            ]);
+            if ((int) ($partialResponse['code'] ?? -1) !== 0) {
+                return [
+                    'ok' => false,
+                    'message' => $partialResponse['message'] ?? 'TikTok menolak update varian.',
+                    'response' => $partialResponse,
+                    'request' => [
+                        'method' => $method,
+                        'path' => $partialEdit['path'],
+                        'body' => $partialEdit['body'],
+                    ],
+                ];
+            }
+
             return [
-                'ok' => false,
-                'message' => 'Detail produk TikTok terbaru tidak memiliki deskripsi. Mutasi dibatalkan demi menjaga produk yang sudah ada.',
-                'request' => ['method' => $method, 'path' => $path],
+                'ok' => true,
+                'message' => 'Varian TikTok berhasil dikirim melalui partial edit.',
+                'product_id' => (string) $existingProduct['product_id'],
+                'sku_id' => null,
+                'response' => $partialResponse,
+                'request' => [
+                    'method' => $method,
+                    'path' => $partialEdit['path'],
+                    'body' => $partialEdit['body'],
+                ],
             ];
         }
 
-        $uploadedImageUri = trim((string) ($options['uploaded_image_uri'] ?? ''));
+        $description = $this->tiktokMutationDescription(is_array($existingDetail) ? $existingDetail : []);
         $mainImages = $this->normalizeTiktokMainImagesForMutation(
             is_array($existingDetail) ? $existingDetail : []
         );
@@ -4498,9 +4540,7 @@ class OmnichannelController extends Controller
 
         return [
             'ok' => true,
-            'message' => $method === 'PUT'
-                ? 'Varian TikTok berhasil diperbarui.'
-                : 'Varian TikTok berhasil dibuat.',
+            'message' => 'Varian TikTok berhasil dibuat.',
             'product_id' => $returnedProductId !== '' ? $returnedProductId : ($existingProduct['product_id'] ?? null),
             'sku_id' => $returnedSkuId !== '' ? $returnedSkuId : null,
             'response' => $payload,
@@ -4579,6 +4619,161 @@ class OmnichannelController extends Controller
         ], fn ($value) => $value !== null && $value !== '');
 
         return $rows;
+    }
+
+    private function buildTiktokExistingProductPartialEditMutation(array $existingProduct, array $existingDetail, array $draftPayload, object $stock, string $uploadedImageUri): array
+    {
+        $productId = trim((string) ($existingProduct['product_id'] ?? $existingDetail['id'] ?? $existingDetail['product_id'] ?? ''));
+        if ($productId === '') {
+            throw new \RuntimeException('Product ID TikTok tidak tersedia untuk partial edit.');
+        }
+
+        $existingSkus = array_values(array_filter(
+            $this->normalizeTiktokSkuList($existingDetail),
+            fn (mixed $sku): bool => is_array($sku)
+        ));
+        if ($existingSkus === []) {
+            throw new \RuntimeException('Detail produk TikTok tidak memiliki SKU yang dapat dipertahankan.');
+        }
+
+        $rows = [];
+        foreach ($existingSkus as $sku) {
+            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
+            if ($skuId === '') {
+                throw new \RuntimeException('Detail SKU TikTok tidak memiliki ID. Mutasi dibatalkan.');
+            }
+
+            $row = $this->buildTiktokPartialEditSkuKeepRow($sku, null, $productId);
+            $salesAttributes = $this->sanitizeTiktokSalesAttributesForPartialEdit(
+                (array) data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []))
+            );
+            if ($salesAttributes === []) {
+                throw new \RuntimeException('Detail SKU TikTok tidak memiliki atribut varian yang dapat dipakai.');
+            }
+
+            $row['sales_attributes'] = $salesAttributes;
+            $row['sku_weight'] = $this->tiktokPartialEditSkuWeight($sku, $existingDetail);
+            $row['sku_dimensions'] = $this->tiktokPartialEditSkuDimensions($sku, $existingDetail);
+            $row['pre_sale'] = $this->tiktokPartialEditSkuPreSale($sku);
+            $rows[] = $row;
+        }
+
+        $template = $this->tiktokPartialEditNewSkuTemplate($existingSkus, $existingDetail, $productId);
+        $sellerSku = trim((string) data_get($draftPayload, 'target.seller_sku', $stock->internal_sku ?? ''));
+        $variantName = trim((string) data_get($draftPayload, 'target.variant_name', $stock->variant_name ?? ''));
+        $uploadedImageUri = $this->tiktokImageUriForMutation($uploadedImageUri);
+        $price = $this->buildTiktokPartialEditSkuPrice(['price' => data_get($draftPayload, 'source.price', null)]);
+
+        if ($sellerSku === '' || $variantName === '' || $uploadedImageUri === '' || $price === null) {
+            throw new \RuntimeException('SKU baru TikTok belum memiliki SKU penjual, nama varian, harga, atau URI gambar yang valid.');
+        }
+
+        $newSalesAttribute = $template['sales_attribute'];
+        unset($newSalesAttribute['value_id']);
+        $newSalesAttribute['value_name'] = $variantName;
+        $newSalesAttribute['sku_img'] = ['uri' => $uploadedImageUri];
+        $inventory = $template['inventory'];
+        $inventory[0]['quantity'] = max(0, (int) data_get($draftPayload, 'target.stock_qty', 0));
+
+        $rows[] = [
+            'seller_sku' => $sellerSku,
+            'sales_attributes' => [$newSalesAttribute],
+            'price' => $price,
+            'inventory' => $inventory,
+            'sku_weight' => $template['sku_weight'],
+            'sku_dimensions' => $template['sku_dimensions'],
+            'pre_sale' => $template['pre_sale'],
+        ];
+
+        return [
+            'path' => '/product/202509/products/'.$productId.'/partial_edit',
+            'body' => [
+                'save_mode' => 'LISTING',
+                'skus' => $rows,
+            ],
+        ];
+    }
+
+    private function tiktokPartialEditNewSkuTemplate(array $existingSkus, array $existingDetail, string $productId): array
+    {
+        $template = null;
+
+        foreach ($existingSkus as $sku) {
+            $salesAttributes = $this->sanitizeTiktokSalesAttributesForPartialEdit(
+                (array) data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []))
+            );
+            $inventory = $this->buildTiktokPartialEditSkuInventory($sku);
+            $price = $this->buildTiktokPartialEditSkuPrice($sku);
+            $salesAttributeId = trim((string) data_get($salesAttributes, '0.id', ''));
+            $salesAttributeName = trim((string) data_get($salesAttributes, '0.name', ''));
+            $warehouseId = trim((string) data_get($inventory, '0.warehouse_id', ''));
+
+            if (count($salesAttributes) !== 1 || $salesAttributeId === '' || $salesAttributeName === '') {
+                throw new \RuntimeException('Setiap SKU TikTok harus memiliki tepat satu atribut varian dengan ID dan nama yang valid.');
+            }
+
+            if (count($inventory) !== 1 || $warehouseId === '') {
+                throw new \RuntimeException('Setiap SKU TikTok harus memiliki tepat satu inventori dengan gudang yang valid.');
+            }
+
+            if ($price === null || (float) data_get($price, 'sale_price', 0) <= 0) {
+                throw new \RuntimeException('Detail SKU TikTok harus memiliki harga positif dari detail terbaru.');
+            }
+
+            if ($template === null) {
+                $template = [
+                    'sales_attribute' => $salesAttributes[0],
+                    'inventory' => $inventory,
+                    'sku_weight' => $this->tiktokPartialEditSkuWeight($sku, $existingDetail),
+                    'sku_dimensions' => $this->tiktokPartialEditSkuDimensions($sku, $existingDetail),
+                    'pre_sale' => $this->tiktokPartialEditSkuPreSale($sku),
+                ];
+
+                continue;
+            }
+
+            if (
+                (string) data_get($template, 'sales_attribute.id') !== $salesAttributeId
+                || (string) data_get($template, 'sales_attribute.name') !== $salesAttributeName
+            ) {
+                throw new \RuntimeException('Atribut varian antar-SKU TikTok tidak konsisten.');
+            }
+
+            if ((string) data_get($template, 'inventory.0.warehouse_id') !== $warehouseId) {
+                throw new \RuntimeException('Gudang antar-SKU TikTok tidak konsisten.');
+            }
+        }
+
+        if ($template === null) {
+            throw new \RuntimeException('Produk TikTok harus memiliki satu atribut varian dan satu gudang aktif untuk menambah varian otomatis.');
+        }
+
+        return $template;
+    }
+
+    private function tiktokPartialEditSkuWeight(array $sku, array $existingDetail): array
+    {
+        $weight = data_get($sku, 'sku_weight', data_get($existingDetail, 'package_weight'));
+        if (! is_array($weight) || trim((string) data_get($weight, 'value', '')) === '') {
+            throw new \RuntimeException('Detail SKU TikTok tidak memiliki berat yang valid.');
+        }
+
+        return $this->normalizedTiktokWeight($weight);
+    }
+
+    private function tiktokPartialEditSkuDimensions(array $sku, array $existingDetail): array
+    {
+        $dimensions = data_get($sku, 'sku_dimensions', data_get($existingDetail, 'package_dimensions'));
+        if (! is_array($dimensions)) {
+            throw new \RuntimeException('Detail SKU TikTok tidak memiliki dimensi yang valid.');
+        }
+
+        return $this->normalizedTiktokDimensions($dimensions);
+    }
+
+    private function tiktokPartialEditSkuPreSale(array $sku): array
+    {
+        return $this->resolveTiktokDefaultSkuPreSale([$sku]);
     }
 
     private function tiktokMutationDescription(array $existingDetail): string

@@ -455,6 +455,148 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('', $blank);
     }
 
+    public function test_tiktok_existing_product_partial_edit_mutation_preserves_sku_contract(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('buildTiktokExistingProductPartialEditMutation'));
+
+        $mutation = $this->invokeControllerMethod('buildTiktokExistingProductPartialEditMutation', [
+            ['product_id' => 'product-1'],
+            [
+                'id' => 'product-1',
+                'skus' => [[
+                    'id' => 'existing-1',
+                    'seller_sku' => 'EXISTING',
+                    'price' => [
+                        'currency' => 'IDR',
+                        'sale_price' => '48000',
+                        'tax_exclusive_price' => '48000',
+                    ],
+                    'inventory' => [[
+                        'quantity' => 3,
+                        'warehouse_id' => 'warehouse-1',
+                    ]],
+                    'sales_attributes' => [[
+                        'id' => '100000',
+                        'name' => 'Warna',
+                        'value_id' => 'black',
+                        'value_name' => 'Hitam',
+                        'sku_img' => ['uri' => 'tos-alisg-i-aphluv4xwc-sg/black'],
+                    ]],
+                    'sku_weight' => ['unit' => 'GRAM', 'value' => '100'],
+                    'sku_dimensions' => [
+                        'unit' => 'CENTIMETER',
+                        'height' => '1',
+                        'length' => '1',
+                        'width' => '1',
+                    ],
+                ]],
+            ],
+            [
+                'source' => ['price' => 48000],
+                'target' => [
+                    'variant_name' => 'Rose Gold',
+                    'seller_sku' => 'NEW',
+                    'stock_qty' => 2,
+                ],
+            ],
+            (object) ['variant_name' => 'Rose Gold', 'internal_sku' => 'NEW'],
+            'tos-alisg-i-aphluv4xwc-sg/rose-gold',
+        ]);
+
+        $this->assertSame('/product/202509/products/product-1/partial_edit', $mutation['path']);
+        $this->assertSame('LISTING', $mutation['body']['save_mode']);
+        $this->assertSame('existing-1', $mutation['body']['skus'][0]['id']);
+        $this->assertSame('Rose Gold', $mutation['body']['skus'][1]['sales_attributes'][0]['value_name']);
+        $this->assertSame('tos-alisg-i-aphluv4xwc-sg/rose-gold', $mutation['body']['skus'][1]['sales_attributes'][0]['sku_img']['uri']);
+        $this->assertSame('warehouse-1', $mutation['body']['skus'][1]['inventory'][0]['warehouse_id']);
+        $this->assertSame(['type' => 'NONE'], $mutation['body']['skus'][0]['pre_sale']);
+        $this->assertSame(['type' => 'NONE'], $mutation['body']['skus'][1]['pre_sale']);
+        $this->assertSame('48000', $mutation['body']['skus'][1]['price']['sale_price']);
+    }
+
+    public function test_tiktok_existing_product_partial_edit_mutation_rejects_variant_attribute_without_identity(): void
+    {
+        $invalidSku = $this->tiktokPartialEditFixtureSku([
+            'sales_attributes' => [[
+                'name' => 'Warna',
+                'value_name' => 'Hitam',
+                'sku_img' => ['uri' => 'tos-alisg-i-aphluv4xwc-sg/black'],
+            ]],
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->buildTiktokExistingProductPartialEditMutationForTest([$invalidSku]);
+    }
+
+    public function test_tiktok_existing_product_partial_edit_mutation_rejects_inconsistent_variant_attributes(): void
+    {
+        $firstSku = $this->tiktokPartialEditFixtureSku();
+        $secondSku = $this->tiktokPartialEditFixtureSku([
+            'id' => 'existing-2',
+            'seller_sku' => 'EXISTING-2',
+            'sales_attributes' => [[
+                'id' => '200000',
+                'name' => 'Ukuran',
+                'value_id' => 'large',
+                'value_name' => 'Large',
+                'sku_img' => ['uri' => 'tos-alisg-i-aphluv4xwc-sg/large'],
+            ]],
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->buildTiktokExistingProductPartialEditMutationForTest([$firstSku, $secondSku]);
+    }
+
+    public function test_tiktok_existing_product_partial_edit_mutation_rejects_inconsistent_warehouses(): void
+    {
+        $firstSku = $this->tiktokPartialEditFixtureSku();
+        $secondSku = $this->tiktokPartialEditFixtureSku([
+            'id' => 'existing-2',
+            'seller_sku' => 'EXISTING-2',
+            'inventory' => [[
+                'quantity' => 3,
+                'warehouse_id' => 'warehouse-2',
+            ]],
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->buildTiktokExistingProductPartialEditMutationForTest([$firstSku, $secondSku]);
+    }
+
+    /**
+     * @dataProvider incompleteTiktokPartialEditSkuProvider
+     */
+    public function test_tiktok_existing_product_partial_edit_mutation_rejects_incomplete_existing_sku(array $overrides): void
+    {
+        $firstSku = $this->tiktokPartialEditFixtureSku();
+        $secondSku = $this->tiktokPartialEditFixtureSku(array_merge([
+            'id' => 'existing-2',
+            'seller_sku' => 'EXISTING-2',
+        ], $overrides));
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->buildTiktokExistingProductPartialEditMutationForTest([$firstSku, $secondSku]);
+    }
+
+    public static function incompleteTiktokPartialEditSkuProvider(): array
+    {
+        return [
+            'missing price' => [['price' => []]],
+            'non-positive price' => [[
+                'price' => [
+                    'currency' => 'IDR',
+                    'sale_price' => '0',
+                    'tax_exclusive_price' => '0',
+                ],
+            ]],
+            'missing inventory' => [['inventory' => []]],
+        ];
+    }
+
     public function test_bulk_tiktok_action_is_persisted_with_redacted_payload(): void
     {
         Schema::dropIfExists('sku_variant_actions');
@@ -576,6 +718,55 @@ class OmnichannelControllerTest extends TestCase
         $method->setAccessible(true);
 
         return $method->invoke($controller, $payload);
+    }
+
+    private function buildTiktokExistingProductPartialEditMutationForTest(array $skus): array
+    {
+        return $this->invokeControllerMethod('buildTiktokExistingProductPartialEditMutation', [
+            ['product_id' => 'product-1'],
+            ['id' => 'product-1', 'skus' => $skus],
+            [
+                'source' => ['price' => 48000],
+                'target' => [
+                    'variant_name' => 'Rose Gold',
+                    'seller_sku' => 'NEW',
+                    'stock_qty' => 2,
+                ],
+            ],
+            (object) ['variant_name' => 'Rose Gold', 'internal_sku' => 'NEW'],
+            'tos-alisg-i-aphluv4xwc-sg/rose-gold',
+        ]);
+    }
+
+    private function tiktokPartialEditFixtureSku(array $overrides = []): array
+    {
+        return array_replace([
+            'id' => 'existing-1',
+            'seller_sku' => 'EXISTING',
+            'price' => [
+                'currency' => 'IDR',
+                'sale_price' => '48000',
+                'tax_exclusive_price' => '48000',
+            ],
+            'inventory' => [[
+                'quantity' => 3,
+                'warehouse_id' => 'warehouse-1',
+            ]],
+            'sales_attributes' => [[
+                'id' => '100000',
+                'name' => 'Warna',
+                'value_id' => 'black',
+                'value_name' => 'Hitam',
+                'sku_img' => ['uri' => 'tos-alisg-i-aphluv4xwc-sg/black'],
+            ]],
+            'sku_weight' => ['unit' => 'GRAM', 'value' => '100'],
+            'sku_dimensions' => [
+                'unit' => 'CENTIMETER',
+                'height' => '1',
+                'length' => '1',
+                'width' => '1',
+            ],
+        ], $overrides);
     }
 
     private function hasControllerMethod(string $name): bool
