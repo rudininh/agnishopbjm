@@ -70,7 +70,8 @@ previewing never mutates TikTok.
 - Run targeted backend tests, the complete backend test suite, and the
   production frontend build.
 - Publish the built Vite assets and verify the local bulk page and API preview.
-- After the interface presents the result, run only the user-approved SKU
-  `INT-55307930257-ROSE-GOLD` through the normal bulk endpoint, then verify its
-  recorded action and a forced fresh TikTok catalogue result. Treat it as
-  successful only when the fresh catalogue contains the SKU.
+- Automated verification does not send a live TikTok mutation. The current
+  endpoint selects a product group, and product `1735621806681065406` contains
+  both `INT-55307930257-SOFT-GREY` and
+  `INT-55307930257-ROSE-GOLD`; a later marketplace retry therefore remains an
+  explicit operator action through the confirmation modal.
