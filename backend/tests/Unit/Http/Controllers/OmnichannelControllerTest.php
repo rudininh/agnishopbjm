@@ -384,6 +384,25 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('ATTRIBUTE_IMAGE', $this->invokeControllerMethod('bulkTiktokVariantImageUseCase', []));
     }
 
+    public function test_tiktok_main_images_for_mutation_use_structured_tiktok_uris_only(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('normalizeTiktokMainImagesForMutation'));
+
+        $images = $this->invokeControllerMethod('normalizeTiktokMainImagesForMutation', [[
+            'main_images' => [
+                ['uri' => 'tos-alisg-i-aphluv4xwc-sg/existing-image'],
+                'https://p16-oec-sg.ibyteimg.com/tos-alisg-i-aphluv4xwc-sg/cdn-image~tplv-origin.jpeg?x=1',
+                '/cached-images/marketplace-images/shopee/invalid.jpg',
+                'tos-alisg-i-aphluv4xwc-sg/existing-image',
+            ],
+        ]]);
+
+        $this->assertSame([
+            ['uri' => 'tos-alisg-i-aphluv4xwc-sg/existing-image'],
+            ['uri' => 'tos-alisg-i-aphluv4xwc-sg/cdn-image'],
+        ], $images);
+    }
+
     public function test_bulk_tiktok_action_is_persisted_with_redacted_payload(): void
     {
         Schema::dropIfExists('sku_variant_actions');

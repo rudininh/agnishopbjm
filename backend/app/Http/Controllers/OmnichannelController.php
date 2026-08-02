@@ -4408,29 +4408,16 @@ class OmnichannelController extends Controller
             ];
         }
 
-        $mainImages = [];
-        foreach ((array) data_get($existingDetail, 'main_images', []) as $imageNode) {
-            $imageUrl = $this->extractTiktokImageNodeUrl($imageNode);
-            if (is_string($imageUrl) && trim($imageUrl) !== '') {
-                $mainImages[] = $imageUrl;
-            }
-        }
-
         $uploadedImageUri = trim((string) ($options['uploaded_image_uri'] ?? ''));
-        if ($uploadedImageUri !== '') {
-            $mainImages[] = $uploadedImageUri;
-        }
-
-        foreach ([
-            $draftPayload['source']['image_url'] ?? null,
-            $draftPayload['target']['image_url'] ?? null,
-        ] as $imageUrl) {
-            if (is_string($imageUrl) && trim($imageUrl) !== '') {
-                $mainImages[] = trim($imageUrl);
+        $mainImages = $this->normalizeTiktokMainImagesForMutation(
+            is_array($existingDetail) ? $existingDetail : []
+        );
+        if (! $hasExistingProduct) {
+            $uploadedMainImageUri = $this->tiktokImageUriForMutation($uploadedImageUri);
+            if ($uploadedMainImageUri !== '') {
+                $mainImages[] = ['uri' => $uploadedMainImageUri];
             }
         }
-
-        $mainImages = array_values(array_unique($mainImages));
 
         $skuRows = [];
         $existingSkus = $this->normalizeTiktokSkuList(is_array($existingDetail) ? $existingDetail : []);
@@ -5338,6 +5325,59 @@ class OmnichannelController extends Controller
         }
 
         return [];
+    }
+
+    private function normalizeTiktokMainImagesForMutation(array $existingDetail): array
+    {
+        $uris = [];
+        foreach ((array) data_get($existingDetail, 'main_images', []) as $image) {
+            $uri = $this->tiktokImageUriForMutation($image);
+            if ($uri !== '' && ! in_array($uri, $uris, true)) {
+                $uris[] = $uri;
+            }
+        }
+
+        return array_map(fn (string $uri): array => ['uri' => $uri], $uris);
+    }
+
+    private function tiktokImageUriForMutation(mixed $image): string
+    {
+        $candidates = [];
+        if (is_array($image)) {
+            foreach (['uri', 'image_uri'] as $key) {
+                $candidates[] = data_get($image, $key);
+            }
+
+            foreach (['urls', 'thumb_urls', 'url_list', 'image_url_list', 'image_urls'] as $key) {
+                $urls = data_get($image, $key, []);
+                foreach (is_array($urls) ? $urls : [$urls] as $url) {
+                    $candidates[] = $url;
+                }
+            }
+
+            foreach (['url', 'image_url', 'thumb_url'] as $key) {
+                $candidates[] = data_get($image, $key);
+            }
+        } else {
+            $candidates[] = $image;
+        }
+
+        foreach ($candidates as $candidate) {
+            if (! is_string($candidate) || trim($candidate) === '') {
+                continue;
+            }
+
+            if (preg_match('#^(tos-[^/]+/[^?~]+)#i', trim($candidate), $matches) === 1) {
+                return $matches[1];
+            }
+
+            $path = parse_url(trim($candidate), PHP_URL_PATH);
+            if (is_string($path) && preg_match('#/(tos-[^/]+/[^?~]+)#i', $path, $matches) === 1) {
+                return $matches[1];
+            }
+        }
+
+        return '';
     }
 
     private function extractTiktokImageNodeUrl(mixed $image): ?string
