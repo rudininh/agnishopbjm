@@ -4419,28 +4419,12 @@ class OmnichannelController extends Controller
             }
         }
 
-        $skuRows = [];
-        $existingSkus = $this->normalizeTiktokSkuList(is_array($existingDetail) ? $existingDetail : []);
-        foreach ($existingSkus as $sku) {
-            $skuRows[] = array_filter([
-                'id' => data_get($sku, 'id') ?? data_get($sku, 'sku_id'),
-                'sku_name' => $this->deriveTiktokSkuName($sku),
-                'seller_sku' => $this->extractTiktokSellerSku($sku),
-                'price' => data_get($sku, 'price.sale_price', data_get($sku, 'price', 0)),
-                'stock' => data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0)),
-                'sku_img' => $this->extractTiktokSkuImageUrl($sku),
-            ], fn ($value) => $value !== null && $value !== '');
-        }
-
-        $skuRows[] = array_filter([
-            'sku_name' => (string) ($draftPayload['target']['variant_name'] ?? $stock->variant_name ?? 'Default'),
-            'seller_sku' => (string) ($draftPayload['target']['seller_sku'] ?? $stock->internal_sku ?? ''),
-            'price' => (int) data_get($draftPayload, 'source.price', 0),
-            'stock' => (int) data_get($draftPayload, 'target.stock_qty', 0),
-            'sku_img' => $uploadedImageUri !== ''
-                ? $uploadedImageUri
-                : ($draftPayload['target']['image_url'] ?? $draftPayload['source']['image_url'] ?? null),
-        ], fn ($value) => $value !== null && $value !== '');
+        $skuRows = $this->buildTiktokVariantMutationSkuRows(
+            is_array($existingDetail) ? $existingDetail : [],
+            $draftPayload,
+            $stock,
+            $uploadedImageUri
+        );
 
         $body = array_filter([
             'title' => (string) ($existingDetail['title'] ?? $draftPayload['product_name'] ?? $stock->product_name ?? 'TikTok Product'),
@@ -4556,6 +4540,35 @@ class OmnichannelController extends Controller
     private function bulkTiktokVariantImageUseCase(): string
     {
         return 'ATTRIBUTE_IMAGE';
+    }
+
+    private function buildTiktokVariantMutationSkuRows(array $existingDetail, array $draftPayload, object $stock, string $uploadedImageUri): array
+    {
+        $rows = [];
+        foreach ($this->normalizeTiktokSkuList($existingDetail) as $sku) {
+            $rows[] = array_filter([
+                'id' => data_get($sku, 'id') ?? data_get($sku, 'sku_id'),
+                'sku_name' => $this->deriveTiktokSkuName($sku),
+                'seller_sku' => $this->extractTiktokSellerSku($sku),
+                'price' => $this->buildTiktokPartialEditSkuPrice($sku),
+                'stock' => data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0)),
+                'sku_img' => $this->extractTiktokSkuImageUrl($sku),
+            ], fn ($value) => $value !== null && $value !== '');
+        }
+
+        $rows[] = array_filter([
+            'sku_name' => (string) ($draftPayload['target']['variant_name'] ?? $stock->variant_name ?? 'Default'),
+            'seller_sku' => (string) ($draftPayload['target']['seller_sku'] ?? $stock->internal_sku ?? ''),
+            'price' => $this->buildTiktokPartialEditSkuPrice([
+                'price' => data_get($draftPayload, 'source.price', 0),
+            ]),
+            'stock' => (int) data_get($draftPayload, 'target.stock_qty', 0),
+            'sku_img' => $uploadedImageUri !== ''
+                ? $uploadedImageUri
+                : ($draftPayload['target']['image_url'] ?? $draftPayload['source']['image_url'] ?? null),
+        ], fn ($value) => $value !== null && $value !== '');
+
+        return $rows;
     }
 
     private function redactBulkTiktokAuditPayload(array $payload): array

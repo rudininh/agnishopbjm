@@ -403,6 +403,43 @@ class OmnichannelControllerTest extends TestCase
         ], $images);
     }
 
+    public function test_tiktok_variant_mutation_sku_rows_use_structured_prices(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('buildTiktokVariantMutationSkuRows'));
+
+        $rows = $this->invokeControllerMethod('buildTiktokVariantMutationSkuRows', [
+            [
+                'skus' => [[
+                    'id' => 'existing-1',
+                    'seller_sku' => 'EXISTING',
+                    'sku_name' => 'Hitam',
+                    'price' => '48000',
+                    'stock' => 3,
+                ]],
+            ],
+            [
+                'source' => ['price' => 48000],
+                'target' => [
+                    'variant_name' => 'Rose Gold',
+                    'seller_sku' => 'NEW',
+                    'stock_qty' => 0,
+                ],
+            ],
+            (object) ['variant_name' => 'Fallback', 'internal_sku' => 'FALLBACK'],
+            'tos-alisg-i-aphluv4xwc-sg/new-image',
+        ]);
+
+        $expectedPrice = [
+            'currency' => 'IDR',
+            'sale_price' => '48000',
+            'tax_exclusive_price' => '48000',
+            'amount' => '48000',
+        ];
+
+        $this->assertSame($expectedPrice, $rows[0]['price']);
+        $this->assertSame($expectedPrice, $rows[1]['price']);
+    }
+
     public function test_bulk_tiktok_action_is_persisted_with_redacted_payload(): void
     {
         Schema::dropIfExists('sku_variant_actions');
