@@ -4937,6 +4937,50 @@ class OmnichannelController extends Controller
         return null;
     }
 
+    private function refreshMarketplaceImageUrl(string $sourceUrl, string $channel, string $scope, string $variant): ?string
+    {
+        $sourceUrl = trim($sourceUrl);
+        if ($sourceUrl === '' || ! preg_match('#^https?://#i', $sourceUrl)) {
+            return null;
+        }
+
+        $cacheDir = storage_path('app/public/marketplace-images/'.$channel);
+        if (! is_dir($cacheDir) && ! @mkdir($cacheDir, 0775, true) && ! is_dir($cacheDir)) {
+            return null;
+        }
+
+        $identity = sha1($channel.'|'.$scope.'|'.$variant);
+        foreach (glob($cacheDir.DIRECTORY_SEPARATOR.$identity.'.*') ?: [] as $previousFile) {
+            @unlink($previousFile);
+        }
+
+        try {
+            $response = Http::timeout(30)
+                ->retry(2, 250)
+                ->accept('image/*')
+                ->get($sourceUrl);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $body = $response->successful() ? $response->body() : '';
+        if (! is_string($body) || $body === '') {
+            return null;
+        }
+
+        $extension = $this->guessImageExtensionFromContentType((string) $response->header('Content-Type', ''));
+        if ($extension === '' || $extension === '.bin') {
+            $extension = $this->guessImageExtensionFromUrl($sourceUrl);
+        }
+
+        $fileName = $identity.$extension;
+        $absolutePath = $cacheDir.DIRECTORY_SEPARATOR.$fileName;
+        if (@file_put_contents($absolutePath, $body) === false) {
+            return null;
+        }
+
+        return '/cached-images/marketplace-images/'.$channel.'/'.$fileName;
+    }
     private function cacheMarketplaceImageUrl(?string $sourceUrl, string $channel, string $scope, string $variant = 'image'): ?string
     {
         if (! is_string($sourceUrl)) {

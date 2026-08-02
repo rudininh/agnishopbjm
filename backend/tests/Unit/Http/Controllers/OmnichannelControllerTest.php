@@ -4,6 +4,7 @@ namespace Tests\Unit\Http\Controllers;
 
 use App\Http\Controllers\OmnichannelController;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use Tests\TestCase;
 
@@ -216,6 +217,28 @@ class OmnichannelControllerTest extends TestCase
 
         $this->assertSame(['price' => null, 'reason' => 'Harga TikTok mayoritas seri.'], $result);
     }
+    public function test_bulk_tiktok_image_refresh_replaces_the_identity_cache_file(): void
+    {
+        Http::fake([
+            'https://cdn.example/old.jpg' => Http::response('old-image', 200, ['Content-Type' => 'image/jpeg']),
+            'https://cdn.example/new.png' => Http::response('new-image', 200, ['Content-Type' => 'image/png']),
+        ]);
+
+        $oldCachedUrl = $this->refreshMarketplaceImageUrl('https://cdn.example/old.jpg', 'shopee', '100', '7');
+        $newCachedUrl = $this->refreshMarketplaceImageUrl('https://cdn.example/new.png', 'shopee', '100', '7');
+        $oldPath = $this->cachedImagePath($oldCachedUrl);
+        $newPath = $this->cachedImagePath($newCachedUrl);
+
+        try {
+            $this->assertNotSame($oldCachedUrl, $newCachedUrl);
+            $this->assertFileDoesNotExist($oldPath);
+            $this->assertSame('new-image', file_get_contents($newPath));
+            Http::assertSentCount(2);
+        } finally {
+            @unlink($oldPath);
+            @unlink($newPath);
+        }
+    }
     private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
     {
         $controller = new OmnichannelController();
@@ -240,6 +263,19 @@ class OmnichannelControllerTest extends TestCase
         $method->setAccessible(true);
 
         return $method->invoke($controller, $skus);
+    }
+    private function refreshMarketplaceImageUrl(string $sourceUrl, string $channel, string $scope, string $variant): ?string
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod('refreshMarketplaceImageUrl');
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, $sourceUrl, $channel, $scope, $variant);
+    }
+
+    private function cachedImagePath(?string $cachedUrl): string
+    {
+        return storage_path('app/public/'.ltrim(substr((string) $cachedUrl, strlen('/cached-images/')), '/'));
     }
     private function normalizePackageWeight(array $payload): array
     {
