@@ -42,6 +42,10 @@ previewing never mutates TikTok.
   does not contain the seller SKU, record and return
   `submitted_unverified`. This state is not a success, does not remove the
   candidate, and retains the real response for follow-up.
+- For an existing TikTok product, fail closed before the PUT request when its
+  current TikTok detail cannot be read. The request must never be constructed
+  without the existing SKU list, because it could otherwise omit and alter
+  existing marketplace variants.
 - Preserve the existing sequential product processing, live duplicate recheck,
   price choice, image refresh, and no-overwrite behavior for existing TikTok
   variants.
