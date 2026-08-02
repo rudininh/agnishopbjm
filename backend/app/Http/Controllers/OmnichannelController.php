@@ -2844,6 +2844,91 @@ class OmnichannelController extends Controller
             ->values();
     }
 
+    private function normalizedMarketplaceSellerSku(mixed $value): string
+    {
+        return strtoupper(trim((string) $value));
+    }
+
+    private function tiktokBulkMissingVariantCandidates(Collection $rows): Collection
+    {
+        return $rows
+            ->filter(fn (object $row): bool => trim((string) ($row->tiktok_product_id ?? '')) !== '')
+            ->groupBy(fn (object $row): string => trim((string) $row->tiktok_product_id))
+            ->map(function (Collection $group, string $tiktokProductId): array {
+                $first = $group->first();
+                $existingSellerSkus = $group
+                    ->flatMap(fn (object $row): array => (array) ($row->tiktok_seller_skus ?? []))
+                    ->map(fn (mixed $sku): string => $this->normalizedMarketplaceSellerSku($sku))
+                    ->filter()
+                    ->unique()
+                    ->values();
+                $skippedVariants = collect();
+                $variants = $group
+                    ->map(function (object $row) use ($existingSellerSkus, $skippedVariants): ?array {
+                        $sellerSku = $this->normalizedMarketplaceSellerSku($row->shopee_model_sku ?? '');
+                        $modelId = trim((string) ($row->shopee_model_id ?? ''));
+                        $imageUrl = trim((string) ($row->shopee_image_url ?? ''));
+
+                        if ($sellerSku === '') {
+                            $skippedVariants->push(['model_id' => $modelId, 'reason' => 'SKU real Shopee kosong.']);
+                            return null;
+                        }
+
+                        if ($existingSellerSkus->contains($sellerSku)) {
+                            $skippedVariants->push(['model_id' => $modelId, 'seller_sku' => $sellerSku, 'reason' => 'SKU sudah ada di TikTok.']);
+                            return null;
+                        }
+
+                        if ($modelId === '' || $imageUrl === '') {
+                            $skippedVariants->push(['model_id' => $modelId, 'seller_sku' => $sellerSku, 'reason' => 'Data varian atau gambar Shopee belum lengkap.']);
+                            return null;
+                        }
+
+                        return [
+                            'shopee_item_id' => trim((string) ($row->shopee_item_id ?? '')),
+                            'shopee_model_id' => $modelId,
+                            'variant_name' => trim((string) ($row->shopee_variant_name ?? '')),
+                            'seller_sku' => $sellerSku,
+                            'image_url' => $imageUrl,
+                        ];
+                    })
+                    ->filter()
+                    ->values();
+
+                return [
+                    'tiktok_product_id' => $tiktokProductId,
+                    'product_name' => trim((string) ($first->product_name ?? '')),
+                    'shopee_item_id' => trim((string) ($first->shopee_item_id ?? '')),
+                    'variants' => $variants,
+                    'skipped_variants' => $skippedVariants,
+                ];
+            })
+            ->filter(fn (array $group): bool => $group['variants']->isNotEmpty())
+            ->values();
+    }
+
+    private function tiktokMajorityPrice(array $tiktokSkus): array
+    {
+        $counts = collect($tiktokSkus)
+            ->map(function (array $sku): int {
+                $value = $sku['sale_price'] ?? $sku['price'] ?? 0;
+                return is_numeric($value) ? (int) $value : 0;
+            })
+            ->filter(fn (int $price): bool => $price > 0)
+            ->countBy();
+
+        if ($counts->isEmpty()) {
+            return ['price' => null, 'reason' => 'Harga TikTok belum tersedia.'];
+        }
+
+        $highestCount = $counts->max();
+        $winners = $counts->filter(fn (int $count): bool => $count === $highestCount);
+        if ($winners->count() !== 1) {
+            return ['price' => null, 'reason' => 'Harga TikTok mayoritas seri.'];
+        }
+
+        return ['price' => (int) $winners->keys()->first(), 'reason' => null];
+    }
     private function tiktokSkuVariationCode(string $productId, object $sku): string
     {
         $sellerSku = trim((string) ($sku->seller_sku ?? ''));

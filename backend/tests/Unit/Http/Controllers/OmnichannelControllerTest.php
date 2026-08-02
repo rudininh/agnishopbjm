@@ -168,6 +168,54 @@ class OmnichannelControllerTest extends TestCase
         $this->assertNotNull($route);
         $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkUpdateShopeeEmptyVariantSkus', $route->getActionName());
     }
+    public function test_tiktok_bulk_candidates_keep_only_shopee_skus_missing_from_tiktok(): void
+    {
+        $groups = $this->tiktokBulkMissingVariantCandidates(collect([
+            (object) [
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk A',
+                'shopee_item_id' => '100',
+                'shopee_model_id' => '1',
+                'shopee_model_sku' => 'SH-RED',
+                'shopee_variant_name' => 'Merah',
+                'shopee_image_url' => 'https://cdn.example/red.jpg',
+                'tiktok_seller_skus' => ['SH-BLUE'],
+            ],
+            (object) [
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk A',
+                'shopee_item_id' => '100',
+                'shopee_model_id' => '2',
+                'shopee_model_sku' => 'sh-blue',
+                'shopee_variant_name' => 'Biru',
+                'shopee_image_url' => 'https://cdn.example/blue.jpg',
+                'tiktok_seller_skus' => ['SH-BLUE'],
+            ],
+        ]));
+
+        $this->assertSame(['SH-RED'], $groups->first()['variants']->pluck('seller_sku')->all());
+    }
+
+    public function test_tiktok_majority_price_returns_the_most_frequent_price(): void
+    {
+        $result = $this->tiktokMajorityPrice([
+            ['sale_price' => '50000'],
+            ['sale_price' => '50000'],
+            ['sale_price' => '19000'],
+        ]);
+
+        $this->assertSame(['price' => 50000, 'reason' => null], $result);
+    }
+
+    public function test_tiktok_majority_price_rejects_a_tie(): void
+    {
+        $result = $this->tiktokMajorityPrice([
+            ['sale_price' => '50000'],
+            ['sale_price' => '19000'],
+        ]);
+
+        $this->assertSame(['price' => null, 'reason' => 'Harga TikTok mayoritas seri.'], $result);
+    }
     private function shopeeMissingSkuBulkCandidates(Collection $models): Collection
     {
         $controller = new OmnichannelController();
@@ -175,6 +223,23 @@ class OmnichannelControllerTest extends TestCase
         $method->setAccessible(true);
 
         return $method->invoke($controller, $models);
+    }
+    private function tiktokBulkMissingVariantCandidates(Collection $rows): Collection
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod('tiktokBulkMissingVariantCandidates');
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, $rows);
+    }
+
+    private function tiktokMajorityPrice(array $skus): array
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod('tiktokMajorityPrice');
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, $skus);
     }
     private function normalizePackageWeight(array $payload): array
     {
