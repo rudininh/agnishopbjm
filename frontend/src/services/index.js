@@ -157,6 +157,13 @@ export const omnichannelService = {
   bulkUpdateShopeeEmptyVariantSkus() {
     return api.post('/sku-mapping/bulk-update-empty-shopee-variant-skus')
   },
+  bulkTiktokMissingVariantsPreview() {
+    return api.get('/tiktok/bulk-missing-variants')
+  },
+
+  bulkSubmitTiktokMissingVariants(data) {
+    return api.post('/tiktok/bulk-missing-variants/submit', data)
+  },
   prepareMissingVariant(data) {
     return api.post('/sku-mapping/prepare-missing-variant', data)
   },

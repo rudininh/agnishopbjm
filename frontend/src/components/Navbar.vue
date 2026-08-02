@@ -29,6 +29,7 @@
             <RouterLink to="/stock-master">Stock Master</RouterLink>
             <RouterLink to="/sku-mapping">SKU Mapping</RouterLink>
             <RouterLink to="/tambah-varian-tiktok">Tambah Varian TikTok</RouterLink>
+            <RouterLink to="/tambah-semua-varian-tiktok">Tambah Semua Varian TikTok</RouterLink>
             <RouterLink to="/tambah-varian-shopee">Tambah Varian Shopee</RouterLink>
             <RouterLink to="/analisa-product-variant">Analisa Product & Variant</RouterLink>
             <RouterLink to="/anomali-gambar-variant">Anomali Gambar Variant</RouterLink>
