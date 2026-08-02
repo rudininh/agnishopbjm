@@ -313,6 +313,83 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame($template, $canonical);
     }
 
+    public function test_variant_reconciliation_preview_returns_only_selected_linked_product_rows(): void
+    {
+        $snapshot = $this->invokeControllerMethod('buildTiktokVariantReconciliationPreview', [[
+            'shopee_item_id' => '100',
+            'tiktok_product_id' => '900',
+            'shopee_models' => [['model_id' => '1', 'name' => 'Merah', 'model_sku' => 'INT-100-OLD', 'stock_qty' => 2, 'image_url' => '/cached-images/red.jpg']],
+            'tiktok_skus' => [['sku_id' => 'tt-1', 'seller_sku' => 'INT-100-OLD', 'sku_name' => 'Merah', 'stock_qty' => 1, 'image_url' => 'tos/red']],
+        ]]);
+
+        $this->assertSame('100', $snapshot['product']['shopee_item_id']);
+        $this->assertSame('900', $snapshot['product']['tiktok_product_id']);
+        $this->assertNotSame('', $snapshot['revision']);
+        $this->assertCount(1, $snapshot['rows']);
+    }
+
+    public function test_variant_reconciliation_products_returns_linked_stock_master_choices(): void
+    {
+        Schema::dropIfExists('sku_mappings');
+        Schema::dropIfExists('stock_master');
+        Schema::create('stock_master', function (Blueprint $table): void {
+            $table->id();
+            $table->string('product_name')->nullable();
+            $table->string('shopee_product_id')->nullable();
+            $table->string('tiktok_product_id')->nullable();
+        });
+        DB::table('stock_master')->insert([
+            'product_name' => 'Produk Merah',
+            'shopee_product_id' => '100',
+            'tiktok_product_id' => '900',
+        ]);
+
+        try {
+            $response = (new OmnichannelController())->tiktokVariantReconciliationProducts()->getData(true);
+
+            $this->assertSame([[
+                'shopee_item_id' => '100',
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk Merah',
+            ]], $response['items']);
+        } finally {
+            Schema::dropIfExists('stock_master');
+        }
+    }
+
+    public function test_variant_reconciliation_preview_rejects_unlinked_ids_before_refresh(): void
+    {
+        $controller = new class extends OmnichannelController {
+            public bool $refreshInvoked = false;
+
+            protected function tiktokVariantReconciliationLinkedProductChoice(string $shopeeItemId, string $tiktokProductId): ?array
+            {
+                return null;
+            }
+
+            protected function refreshTiktokVariantReconciliationShopeeItem(string $shopeeItemId): array
+            {
+                $this->refreshInvoked = true;
+
+                return ['status' => 'ok'];
+            }
+        };
+
+        try {
+            $controller->tiktokVariantReconciliationPreview(
+                \Illuminate\Http\Request::create('/api/tiktok/variant-reconciliation/preview', 'GET', [
+                    'shopee_item_id' => '100',
+                    'tiktok_product_id' => '900',
+                ])
+            );
+            $this->fail('Expected unlinked product IDs to be rejected.');
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $exception) {
+            $this->assertSame(422, $exception->getStatusCode());
+        }
+
+        $this->assertFalse($controller->refreshInvoked);
+    }
+
     public function test_variant_reconciliation_classifies_outdated_sku_and_tiktok_differences(): void
     {
         $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[

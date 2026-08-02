@@ -66,30 +66,272 @@ class OmnichannelController extends Controller
     public function tiktokVariantReconciliationProducts(): JsonResponse
     {
         return response()->json([
-            'items' => [],
+            'items' => $this->tiktokVariantReconciliationLinkedProducts(),
             'revision_source' => 'shopee',
         ]);
     }
 
     public function tiktokVariantReconciliationPreview(Request $request): JsonResponse
     {
-        $request->validate([
+        $data = $request->validate([
             'shopee_item_id' => ['required', 'string'],
             'tiktok_product_id' => ['required', 'string'],
         ]);
+        $shopeeItemId = trim((string) $data['shopee_item_id']);
+        $tiktokProductId = trim((string) $data['tiktok_product_id']);
+        $product = $this->tiktokVariantReconciliationLinkedProductChoice($shopeeItemId, $tiktokProductId);
+        abort_if(! $product, 422, 'Pasangan produk Shopee dan TikTok tidak terhubung.');
 
-        return response()->json([
-            'rows' => [],
-            'summary' => [
-                'total' => 0,
-                'manual_review' => 0,
-                'tiktok_orphan' => 0,
-                'no_change' => 0,
-                'shopee_sku_outdated' => 0,
-                'tiktok_variant_outdated' => 0,
-            ],
-            'revision_source' => 'shopee',
+        $sync = $this->refreshTiktokVariantReconciliationShopeeItem($shopeeItemId);
+        abort_if(($sync['status'] ?? 'error') !== 'ok', 422, $sync['message'] ?? 'Produk Shopee gagal disegarkan.');
+
+        $detail = $this->fetchTiktokVariantReconciliationProductDetail($tiktokProductId);
+        abort_if(! is_array($detail) || $detail === [], 422, 'Detail produk TikTok terbaru tidak dapat dibaca.');
+
+        return response()->json($this->buildTiktokVariantReconciliationPreview([
+            'shopee_item_id' => $shopeeItemId,
+            'tiktok_product_id' => $tiktokProductId,
+            'product_name' => $product['product_name'],
+            'shopee_models' => $this->tiktokVariantReconciliationShopeeModels($shopeeItemId),
+            'tiktok_skus' => $this->tiktokVariantReconciliationTiktokSkus($detail),
+            'mapping_by_model' => $this->tiktokVariantReconciliationMappingByModel($shopeeItemId, $tiktokProductId),
+        ]));
+    }
+
+    protected function tiktokVariantReconciliationLinkedProducts(): array
+    {
+        if (! Schema::hasTable('stock_master')
+            || ! Schema::hasColumn('stock_master', 'shopee_product_id')
+            || ! Schema::hasColumn('stock_master', 'tiktok_product_id')) {
+            return [];
+        }
+
+        $hasMappings = Schema::hasTable('sku_mappings');
+        $query = DB::table('stock_master as sm');
+        if ($hasMappings) {
+            $query->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id');
+        }
+
+        $rows = $query
+            ->select([
+                'sm.product_name',
+                'sm.shopee_product_id as stock_shopee_item_id',
+                'sm.tiktok_product_id as stock_tiktok_product_id',
+                ...($hasMappings ? [
+                    'map.shopee_item_id as mapped_shopee_item_id',
+                    'map.tiktok_product_id as mapped_tiktok_product_id',
+                ] : []),
+            ])
+            ->get();
+
+        $items = [];
+        foreach ($rows as $row) {
+            $shopeeItemId = trim((string) ($row->mapped_shopee_item_id ?? ''))
+                ?: trim((string) ($row->stock_shopee_item_id ?? ''));
+            $tiktokProductId = trim((string) ($row->mapped_tiktok_product_id ?? ''))
+                ?: trim((string) ($row->stock_tiktok_product_id ?? ''));
+            if ($shopeeItemId === '' || $tiktokProductId === '') {
+                continue;
+            }
+
+            $key = $shopeeItemId.'|'.$tiktokProductId;
+            $productName = trim((string) ($row->product_name ?? ''));
+            if (! isset($items[$key]) || ($items[$key]['product_name'] === '' && $productName !== '')) {
+                $items[$key] = [
+                    'shopee_item_id' => $shopeeItemId,
+                    'tiktok_product_id' => $tiktokProductId,
+                    'product_name' => $productName,
+                ];
+            }
+        }
+
+        $items = array_values($items);
+        usort($items, fn (array $left, array $right): int => [
+            $left['product_name'], $left['shopee_item_id'], $left['tiktok_product_id'],
+        ] <=> [
+            $right['product_name'], $right['shopee_item_id'], $right['tiktok_product_id'],
         ]);
+
+        return $items;
+    }
+
+    protected function tiktokVariantReconciliationLinkedProductChoice(string $shopeeItemId, string $tiktokProductId): ?array
+    {
+        foreach ($this->tiktokVariantReconciliationLinkedProducts() as $product) {
+            if ($product['shopee_item_id'] === $shopeeItemId && $product['tiktok_product_id'] === $tiktokProductId) {
+                return $product;
+            }
+        }
+
+        return null;
+    }
+
+    protected function refreshTiktokVariantReconciliationShopeeItem(string $shopeeItemId): array
+    {
+        if (! ctype_digit($shopeeItemId) || (int) $shopeeItemId <= 0) {
+            return ['status' => 'error', 'message' => 'Item ID Shopee tidak valid.'];
+        }
+
+        return $this->syncShopeeProductToDatabase((int) $shopeeItemId, true);
+    }
+
+    protected function fetchTiktokVariantReconciliationProductDetail(string $tiktokProductId): ?array
+    {
+        $accessToken = $this->activeTiktokAccessTokenForSync();
+        $shop = $this->latestTiktokShop();
+        if ($accessToken === '' || ! $shop) {
+            return null;
+        }
+
+        $config = $this->tiktokConfig();
+
+        return $this->fetchTiktokProductDetail(
+            $config,
+            $accessToken,
+            $shop,
+            $tiktokProductId,
+            rtrim((string) $config['api_host'], '/').'/product/202309/products/'
+        );
+    }
+
+    private function tiktokVariantReconciliationShopeeModels(string $shopeeItemId): array
+    {
+        if (! Schema::hasTable('shopee_product_model')) {
+            return [];
+        }
+
+        $imageUrls = [];
+        if (Schema::hasTable('shopee_product_image')) {
+            $imageUrls = DB::table('shopee_product_image')
+                ->where('item_id', $shopeeItemId)
+                ->whereNotNull('model_id')
+                ->orderBy('id')
+                ->get(['model_id', 'image_url'])
+                ->mapWithKeys(fn (object $row): array => [trim((string) $row->model_id) => trim((string) ($row->image_url ?? ''))])
+                ->all();
+        }
+
+        return DB::table('shopee_product_model')
+            ->where('item_id', $shopeeItemId)
+            ->orderBy('model_id')
+            ->get(['model_id', 'name', 'model_sku', 'stock'])
+            ->map(fn (object $model): array => [
+                'item_id' => $shopeeItemId,
+                'model_id' => trim((string) $model->model_id),
+                'name' => trim((string) ($model->name ?? '')),
+                'model_sku' => trim((string) ($model->model_sku ?? '')),
+                'stock_qty' => (int) ($model->stock ?? 0),
+                'image_url' => $imageUrls[trim((string) $model->model_id)] ?? '',
+            ])
+            ->all();
+    }
+
+    private function tiktokVariantReconciliationTiktokSkus(array $detail): array
+    {
+        $product = is_array($detail['product'] ?? null) ? $detail['product'] : $detail;
+        $productImageUrl = trim((string) ($this->extractTiktokImageUrl($product) ?? ''));
+
+        return collect($this->normalizeTiktokSkuList($product))
+            ->filter(fn (mixed $sku): bool => is_array($sku))
+            ->map(function (array $sku) use ($productImageUrl): array {
+                return [
+                    'sku_id' => trim((string) ($sku['id'] ?? $sku['sku_id'] ?? '')),
+                    'seller_sku' => trim((string) ($this->extractTiktokSellerSku($sku) ?? '')),
+                    'sku_name' => $this->deriveTiktokSkuName($sku),
+                    'stock_qty' => $this->tiktokVariantReconciliationTiktokStockQty($sku),
+                    'image_url' => trim((string) ($this->extractTiktokImageUrl($sku) ?? $productImageUrl)),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function tiktokVariantReconciliationTiktokStockQty(array $sku): int
+    {
+        foreach (['stock_qty', 'stock', 'quantity'] as $key) {
+            if (is_numeric($sku[$key] ?? null)) {
+                return (int) $sku[$key];
+            }
+        }
+
+        foreach ((array) ($sku['inventory'] ?? $sku['inventories'] ?? []) as $inventory) {
+            if (is_array($inventory) && is_numeric($inventory['quantity'] ?? null)) {
+                return (int) $inventory['quantity'];
+            }
+        }
+
+        return 0;
+    }
+
+    private function tiktokVariantReconciliationMappingByModel(string $shopeeItemId, string $tiktokProductId): array
+    {
+        if (! Schema::hasTable('sku_mappings')) {
+            return [];
+        }
+
+        return DB::table('sku_mappings')
+            ->where('shopee_item_id', $shopeeItemId)
+            ->where('tiktok_product_id', $tiktokProductId)
+            ->whereNotNull('shopee_model_id')
+            ->whereNotNull('tiktok_sku_id')
+            ->orderBy('id')
+            ->get(['shopee_model_id', 'tiktok_sku_id'])
+            ->mapWithKeys(fn (object $mapping): array => [
+                trim((string) $mapping->shopee_model_id) => [
+                    'tiktok_sku_id' => trim((string) $mapping->tiktok_sku_id),
+                ],
+            ])
+            ->all();
+    }
+
+    private function buildTiktokVariantReconciliationPreview(array $data): array
+    {
+        $shopeeItemId = trim((string) ($data['shopee_item_id'] ?? ''));
+        $tiktokProductId = trim((string) ($data['tiktok_product_id'] ?? ''));
+        $shopeeModels = array_values(array_filter((array) ($data['shopee_models'] ?? []), fn (mixed $model): bool => is_array($model)));
+        $tiktokSkus = array_values(array_filter((array) ($data['tiktok_skus'] ?? []), fn (mixed $sku): bool => is_array($sku)));
+        $classification = $this->classifyTiktokVariantReconciliation(
+            $shopeeModels,
+            $tiktokSkus,
+            $shopeeItemId,
+            (array) ($data['mapping_by_model'] ?? [])
+        );
+
+        return [
+            'product' => [
+                'shopee_item_id' => $shopeeItemId,
+                'tiktok_product_id' => $tiktokProductId,
+                'product_name' => trim((string) ($data['product_name'] ?? '')),
+            ],
+            'summary' => $classification['summary'],
+            'rows' => $classification['rows'],
+            'revision' => $this->tiktokVariantReconciliationRevision($shopeeItemId, $tiktokProductId, $shopeeModels, $tiktokSkus),
+            'revision_source' => $classification['revision_source'],
+        ];
+    }
+
+    private function tiktokVariantReconciliationRevision(string $shopeeItemId, string $tiktokProductId, array $shopeeModels, array $tiktokSkus): string
+    {
+        $normalize = static function (array $rows, array $keys): array {
+            $normalized = array_map(function (array $row) use ($keys): array {
+                $value = [];
+                foreach ($keys as $key) {
+                    $value[$key] = $row[$key] ?? null;
+                }
+
+                return $value;
+            }, $rows);
+            usort($normalized, fn (array $left, array $right): int => json_encode($left, JSON_UNESCAPED_SLASHES) <=> json_encode($right, JSON_UNESCAPED_SLASHES));
+
+            return $normalized;
+        };
+
+        return hash('sha256', json_encode([
+            'shopee_item_id' => $shopeeItemId,
+            'tiktok_product_id' => $tiktokProductId,
+            'shopee_models' => $normalize($shopeeModels, ['item_id', 'model_id', 'name', 'model_sku', 'stock_qty', 'image_url']),
+            'tiktok_skus' => $normalize($tiktokSkus, ['sku_id', 'seller_sku', 'sku_name', 'stock_qty', 'image_url']),
+        ], JSON_UNESCAPED_SLASHES));
     }
 
     public function submitTiktokVariantReconciliation(Request $request): JsonResponse
