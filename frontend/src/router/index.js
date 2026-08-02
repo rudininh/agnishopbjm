@@ -8,6 +8,7 @@ import SkuMapping from '@/pages/SkuMapping.vue'
 import TambahVarian from '@/pages/TambahVarian.vue'
 import TambahVarianShopee from '@/pages/TambahVarianShopee.vue'
 import BulkTambahVarianTiktok from '@/pages/BulkTambahVarianTiktok.vue'
+import VariantMarketplaceReconciliation from '@/pages/VariantMarketplaceReconciliation.vue'
 import ProductVariantAnalysis from '@/pages/ProductVariantAnalysis.vue'
 import AnomaliGambarVariant from '@/pages/AnomaliGambarVariant.vue'
 import DetailProdukMarketplace from '@/pages/DetailProdukMarketplace.vue'
@@ -68,6 +69,11 @@ const routes = [
     path: '/tambah-semua-varian-tiktok',
     name: 'tambah-semua-varian-tiktok',
     component: BulkTambahVarianTiktok
+  },
+  {
+    path: '/sinkronisasi-varian-marketplace',
+    name: 'sinkronisasi-varian-marketplace',
+    component: VariantMarketplaceReconciliation
   },
   {
     path: '/tambah-varian-shopee',

@@ -164,6 +164,9 @@ export const omnichannelService = {
   bulkSubmitTiktokMissingVariants(data) {
     return api.post('/tiktok/bulk-missing-variants/submit', data)
   },
+
+  tiktokVariantReconciliationProducts() { return api.get('/tiktok/variant-reconciliation/products') },
+  tiktokVariantReconciliationPreview(params) { return api.get('/tiktok/variant-reconciliation/preview', { params }) },
   prepareMissingVariant(data) {
     return api.post('/sku-mapping/prepare-missing-variant', data)
   },
@@ -381,4 +384,3 @@ export const omnichannelService = {
     return api.post(`/omnichannel/${action}`)
   }
 }
-

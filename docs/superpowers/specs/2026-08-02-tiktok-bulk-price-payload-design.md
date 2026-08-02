@@ -1,4 +1,4 @@
-# TikTok Bulk Price Payload Design
+ya# TikTok Bulk Price Payload Design
 
 ## Problem
 

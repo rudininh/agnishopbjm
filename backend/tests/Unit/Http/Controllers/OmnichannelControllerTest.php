@@ -205,6 +205,38 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('SKU sudah ada di TikTok; mapping belum tersambung.', $groups->first()['mapping_only_variants']->first()['reason']);
     }
 
+    public function test_tiktok_bulk_candidates_deduplicate_missing_shopee_seller_skus_per_tiktok_product(): void
+    {
+        $groups = $this->tiktokBulkMissingVariantCandidates(collect([
+            (object) [
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk A',
+                'shopee_item_id' => '100',
+                'shopee_model_id' => '1',
+                'shopee_model_sku' => 'SH-RED',
+                'shopee_variant_name' => 'Merah Pertama',
+                'shopee_image_url' => 'https://cdn.example/red-first.jpg',
+                'tiktok_seller_skus' => [],
+                'tiktok_skus' => [],
+            ],
+            (object) [
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk A',
+                'shopee_item_id' => '100',
+                'shopee_model_id' => '2',
+                'shopee_model_sku' => ' sh-red ',
+                'shopee_variant_name' => 'Merah Duplikat',
+                'shopee_image_url' => 'https://cdn.example/red-duplicate.jpg',
+                'tiktok_seller_skus' => [],
+                'tiktok_skus' => [],
+            ],
+        ]));
+
+        $this->assertCount(1, $groups->first()['variants']);
+        $this->assertSame(['SH-RED'], $groups->first()['variants']->pluck('seller_sku')->all());
+        $this->assertSame('1', $groups->first()['variants']->first()['shopee_model_id']);
+    }
+
     public function test_linked_tiktok_seller_sku_lookup_ignores_variant_name_mismatch(): void
     {
         $match = $this->linkedTiktokSellerSkuMatch([
@@ -258,9 +290,11 @@ class OmnichannelControllerTest extends TestCase
     }
     public function test_bulk_tiktok_image_refresh_replaces_the_identity_cache_file(): void
     {
+        $oldImage = base64_decode('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==');
+        $newImage = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL3pAAAAABJRU5ErkJggg==');
         Http::fake([
-            'https://cdn.example/old.jpg' => Http::response('old-image', 200, ['Content-Type' => 'image/jpeg']),
-            'https://cdn.example/new.png' => Http::response('new-image', 200, ['Content-Type' => 'image/png']),
+            'https://cdn.example/old.jpg' => Http::response($oldImage, 200, ['Content-Type' => 'image/gif']),
+            'https://cdn.example/new.png' => Http::response($newImage, 200, ['Content-Type' => 'image/png']),
         ]);
 
         $oldCachedUrl = $this->refreshMarketplaceImageUrl('https://cdn.example/old.jpg', 'shopee', '100', '7');
@@ -271,13 +305,196 @@ class OmnichannelControllerTest extends TestCase
         try {
             $this->assertNotSame($oldCachedUrl, $newCachedUrl);
             $this->assertFileDoesNotExist($oldPath);
-            $this->assertSame('new-image', file_get_contents($newPath));
+            $this->assertSame($newImage, file_get_contents($newPath));
             Http::assertSentCount(2);
         } finally {
             @unlink($oldPath);
             @unlink($newPath);
         }
     }
+
+    public function test_forced_shopee_image_refresh_keeps_existing_cache_when_download_fails(): void
+    {
+        Schema::dropIfExists('shopee_product_image');
+        Schema::create('shopee_product_image', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('item_id');
+            $table->string('model_id')->nullable();
+            $table->string('image_url');
+            $table->timestamps();
+        });
+        DB::table('shopee_product_image')->insert([
+            'item_id' => 100,
+            'model_id' => '1',
+            'image_url' => '/cached-images/marketplace-images/shopee/existing.jpg',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            'https://cdn.example/unavailable.jpg' => Http::response('', 503),
+        ]);
+
+        try {
+            $this->invokeControllerMethod('storeShopeeImages', [
+                100,
+                '1',
+                ['https://cdn.example/unavailable.jpg'],
+                true,
+            ]);
+
+            $this->assertSame([
+                '/cached-images/marketplace-images/shopee/existing.jpg',
+            ], DB::table('shopee_product_image')->orderBy('id')->pluck('image_url')->all());
+        } finally {
+            Schema::dropIfExists('shopee_product_image');
+        }
+    }
+
+    public function test_forced_shopee_image_refresh_rejects_invalid_image_body_and_keeps_existing_cache_file(): void
+    {
+        Schema::dropIfExists('shopee_product_image');
+        Schema::create('shopee_product_image', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('item_id');
+            $table->string('model_id')->nullable();
+            $table->string('image_url');
+            $table->timestamps();
+        });
+        $existingUrl = '/cached-images/marketplace-images/shopee/existing.jpg';
+        $existingPath = $this->cachedImagePath($existingUrl);
+        @mkdir(dirname($existingPath), 0775, true);
+        file_put_contents($existingPath, 'existing-image');
+        DB::table('shopee_product_image')->insert([
+            'item_id' => 100,
+            'model_id' => '1',
+            'image_url' => $existingUrl,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            'https://cdn.example/error-page.jpg' => Http::response('<html>gateway error</html>', 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        try {
+            $this->invokeControllerMethod('storeShopeeImages', [
+                100,
+                '1',
+                ['https://cdn.example/error-page.jpg'],
+                true,
+            ]);
+
+            $this->assertSame([$existingUrl], DB::table('shopee_product_image')->orderBy('id')->pluck('image_url')->all());
+            $this->assertSame('existing-image', file_get_contents($existingPath));
+        } finally {
+            @unlink($existingPath);
+            Schema::dropIfExists('shopee_product_image');
+        }
+    }
+
+    public function test_marketplace_image_cache_rejects_invalid_success_body(): void
+    {
+        $sourceUrl = 'https://cdn.example/not-an-image.jpg';
+        $cachedPath = storage_path('app/public/marketplace-images/shopee/'.sha1('shopee|100|1|'.$sourceUrl).'.jpg');
+        Http::fake([
+            $sourceUrl => Http::response('<html>gateway error</html>', 200, ['Content-Type' => 'image/jpeg']),
+        ]);
+
+        try {
+            $cachedUrl = $this->invokeControllerMethod('cacheMarketplaceImageUrl', [$sourceUrl, 'shopee', '100', '1']);
+
+            $this->assertNull($cachedUrl);
+            $this->assertFileDoesNotExist($cachedPath);
+        } finally {
+            @unlink($cachedPath);
+        }
+    }
+
+    public function test_forced_shopee_image_refresh_discards_staging_files_when_any_source_fails(): void
+    {
+        Schema::dropIfExists('shopee_product_image');
+        Schema::create('shopee_product_image', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('item_id');
+            $table->string('model_id')->nullable();
+            $table->string('image_url');
+            $table->timestamps();
+        });
+        $validSource = 'https://cdn.example/valid.png';
+        $existingUrl = '/cached-images/marketplace-images/shopee/'.sha1('shopee|100|1|'.$validSource).'.png';
+        $existingPath = $this->cachedImagePath($existingUrl);
+        @mkdir(dirname($existingPath), 0775, true);
+        file_put_contents($existingPath, 'existing-image');
+        DB::table('shopee_product_image')->insert([
+            'item_id' => 100,
+            'model_id' => '1',
+            'image_url' => $existingUrl,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            $validSource => Http::response(base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL3pAAAAABJRU5ErkJggg=='), 200, ['Content-Type' => 'image/png']),
+            'https://cdn.example/unavailable.jpg' => Http::response('', 503),
+        ]);
+
+        try {
+            $cacheFilesBefore = glob(dirname($existingPath).DIRECTORY_SEPARATOR.'*') ?: [];
+            $this->invokeControllerMethod('storeShopeeImages', [
+                100,
+                '1',
+                [$validSource, 'https://cdn.example/unavailable.jpg'],
+                true,
+            ]);
+
+            $this->assertSame([$existingUrl], DB::table('shopee_product_image')->orderBy('id')->pluck('image_url')->all());
+            $this->assertSame('existing-image', file_get_contents($existingPath));
+            $this->assertSame($cacheFilesBefore, glob(dirname($existingPath).DIRECTORY_SEPARATOR.'*') ?: []);
+        } finally {
+            @unlink($existingPath);
+            Schema::dropIfExists('shopee_product_image');
+        }
+    }
+
+    public function test_forced_shopee_image_refresh_preserves_existing_cache_when_database_swap_fails(): void
+    {
+        Schema::dropIfExists('shopee_product_image');
+        Schema::create('shopee_product_image', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('item_id');
+            $table->string('model_id')->nullable();
+            $table->string('image_url');
+            $table->string('write_guard');
+            $table->timestamps();
+        });
+        $validSource = 'https://cdn.example/valid.png';
+        $existingUrl = '/cached-images/marketplace-images/shopee/'.sha1('shopee|100|1|'.$validSource).'.png';
+        $existingPath = $this->cachedImagePath($existingUrl);
+        @mkdir(dirname($existingPath), 0775, true);
+        file_put_contents($existingPath, 'existing-image');
+        DB::table('shopee_product_image')->insert([
+            'item_id' => 100,
+            'model_id' => '1',
+            'image_url' => $existingUrl,
+            'write_guard' => 'present',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            $validSource => Http::response(base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL3pAAAAABJRU5ErkJggg=='), 200, ['Content-Type' => 'image/png']),
+        ]);
+
+        try {
+            $cacheFilesBefore = glob(dirname($existingPath).DIRECTORY_SEPARATOR.'*') ?: [];
+            $this->invokeControllerMethod('storeShopeeImages', [100, '1', [$validSource], true]);
+
+            $this->assertSame([$existingUrl], DB::table('shopee_product_image')->orderBy('id')->pluck('image_url')->all());
+            $this->assertSame('existing-image', file_get_contents($existingPath));
+            $this->assertSame($cacheFilesBefore, glob(dirname($existingPath).DIRECTORY_SEPARATOR.'*') ?: []);
+        } finally {
+            @unlink($existingPath);
+            Schema::dropIfExists('shopee_product_image');
+        }
+    }
+
     public function test_bulk_tiktok_missing_variant_routes_are_registered(): void
     {
         $routes = collect(app('router')->getRoutes()->getRoutes());
@@ -645,6 +862,118 @@ class OmnichannelControllerTest extends TestCase
 
         $this->assertSame('Deskripsi TikTok asli.', $description);
         $this->assertSame('', $blank);
+    }
+
+    public function test_tiktok_existing_product_partial_edit_batch_mutation_appends_all_new_skus(): void
+    {
+        $this->assertTrue($this->hasControllerMethod('buildTiktokExistingProductPartialEditBatchMutation'));
+
+        $mutation = $this->invokeControllerMethod('buildTiktokExistingProductPartialEditBatchMutation', [
+            ['product_id' => 'product-1'],
+            ['id' => 'product-1', 'skus' => [$this->tiktokPartialEditFixtureSku()]],
+            [
+                [
+                    'seller_sku' => 'NEW-RED',
+                    'variant_name' => 'Merah',
+                    'stock_qty' => 2,
+                    'price' => 48000,
+                    'uploaded_image_uri' => 'tos-alisg-i-aphluv4xwc-sg/red',
+                ],
+                [
+                    'seller_sku' => 'NEW-BLUE',
+                    'variant_name' => 'Biru',
+                    'stock_qty' => 3,
+                    'price' => 48000,
+                    'uploaded_image_uri' => 'tos-alisg-i-aphluv4xwc-sg/blue',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('/product/202509/products/product-1/partial_edit', $mutation['path']);
+        $this->assertSame('LISTING', $mutation['body']['save_mode']);
+        $this->assertCount(3, $mutation['body']['skus']);
+        $this->assertSame('EXISTING', $mutation['body']['skus'][0]['seller_sku']);
+        $this->assertSame('NEW-RED', $mutation['body']['skus'][1]['seller_sku']);
+        $this->assertSame('Merah', $mutation['body']['skus'][1]['sales_attributes'][0]['value_name']);
+        $this->assertSame('NEW-BLUE', $mutation['body']['skus'][2]['seller_sku']);
+        $this->assertSame('Biru', $mutation['body']['skus'][2]['sales_attributes'][0]['value_name']);
+        $this->assertSame(['type' => 'NONE'], $mutation['body']['skus'][2]['pre_sale']);
+    }
+
+    public function test_tiktok_existing_product_partial_edit_batch_mutation_rejects_duplicate_seller_sku(): void
+    {
+        $this->expectException(\RuntimeException::class);
+
+        $this->invokeControllerMethod('buildTiktokExistingProductPartialEditBatchMutation', [
+            ['product_id' => 'product-1'],
+            ['id' => 'product-1', 'skus' => [$this->tiktokPartialEditFixtureSku()]],
+            [
+                [
+                    'seller_sku' => 'NEW-DUPLICATE',
+                    'variant_name' => 'Merah',
+                    'stock_qty' => 2,
+                    'price' => 48000,
+                    'uploaded_image_uri' => 'tos-alisg-i-aphluv4xwc-sg/red',
+                ],
+                [
+                    'seller_sku' => 'NEW-DUPLICATE',
+                    'variant_name' => 'Biru',
+                    'stock_qty' => 3,
+                    'price' => 48000,
+                    'uploaded_image_uri' => 'tos-alisg-i-aphluv4xwc-sg/blue',
+                ],
+            ],
+        ]);
+    }
+
+    public function test_bulk_tiktok_batch_submission_sends_one_payload_and_verifies_all_prepared_skus(): void
+    {
+        $controller = new class extends OmnichannelController {
+            public array $submissions = [];
+            public array $verificationCalls = [];
+
+            protected function submitTiktokBulkPartialEditPayload(string $path, array $payload, array $context): array
+            {
+                $this->submissions[] = compact('path', 'payload', 'context');
+
+                return ['code' => 0, 'message' => 'Success'];
+            }
+
+            protected function verifyBulkTiktokVariantGroup(string $productId, array $sellerSkus): array
+            {
+                $this->verificationCalls[] = compact('productId', 'sellerSkus');
+
+                return [
+                    'sync' => ['status' => 'ok'],
+                    'found_seller_skus' => array_fill_keys($sellerSkus, true),
+                ];
+            }
+        };
+        $method = (new ReflectionClass($controller))->getMethod('submitPreparedBulkTiktokVariantBatch');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($controller, 'product-1', [
+            'id' => 'product-1',
+            'skus' => [$this->tiktokPartialEditFixtureSku()],
+        ], [
+            [
+                'seller_sku' => 'NEW-RED',
+                'uploaded_image_uri' => 'tos-alisg-i-aphluv4xwc-sg/red',
+                'variant' => ['variant_name' => 'Merah'],
+            ],
+            [
+                'seller_sku' => 'NEW-BLUE',
+                'uploaded_image_uri' => 'tos-alisg-i-aphluv4xwc-sg/blue',
+                'variant' => ['variant_name' => 'Biru'],
+            ],
+        ], 48000, (object) ['shop_id' => 'shop-1', 'shop_cipher' => 'cipher-1'], 'token-1');
+
+        $this->assertTrue($result['mutation']['ok']);
+        $this->assertCount(1, $controller->submissions);
+        $this->assertSame('/product/202509/products/product-1/partial_edit', $controller->submissions[0]['path']);
+        $this->assertSame(['EXISTING', 'NEW-RED', 'NEW-BLUE'], array_column($controller->submissions[0]['payload']['skus'], 'seller_sku'));
+        $this->assertSame(['NEW-RED', 'NEW-BLUE'], $controller->verificationCalls[0]['sellerSkus']);
+        $this->assertSame(['NEW-RED', 'NEW-BLUE'], array_keys($result['verification']['found_seller_skus']));
     }
 
     public function test_tiktok_existing_product_partial_edit_mutation_preserves_sku_contract(): void

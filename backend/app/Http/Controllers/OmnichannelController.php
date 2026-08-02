@@ -3556,6 +3556,7 @@ class OmnichannelController extends Controller
                         ];
                     })
                     ->filter()
+                    ->unique('seller_sku')
                     ->values();
 
                 return [
@@ -4190,26 +4191,79 @@ class OmnichannelController extends Controller
 
     private function storeShopeeImages(int $itemId, ?string $modelId, array $urls, bool $forceImageRefresh = false): void
     {
-        if ($forceImageRefresh) {
-            DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->delete();
-        }
+        $existingCachedUrls = $forceImageRefresh
+            ? DB::table('shopee_product_image')
+                ->where('item_id', $itemId)
+                ->where('model_id', $modelId)
+                ->pluck('image_url')
+                ->filter()
+                ->values()
+                ->all()
+            : [];
+        $refreshNonce = $forceImageRefresh ? bin2hex(random_bytes(16)) : '';
+        $cachedUrls = [];
+        $cacheFailed = false;
+
         foreach ($urls as $url) {
             if (! is_string($url) || trim($url) === '') {
                 continue;
             }
 
             $cachedUrl = $forceImageRefresh
-                ? $this->refreshMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'))
+                ? $this->refreshMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'), true, $refreshNonce)
                 : $this->cacheMarketplaceImageUrl($url, 'shopee', (string) $itemId, (string) ($modelId ?? 'product'));
 
-            if (! DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->where('image_url', $cachedUrl)->exists()) {
-                DB::table('shopee_product_image')->insert([
-                    'item_id' => $itemId,
-                    'model_id' => $modelId,
-                    'image_url' => $cachedUrl,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
+            if (! is_string($cachedUrl) || trim($cachedUrl) === '') {
+                $cacheFailed = true;
+                continue;
+            }
+
+            $cachedUrls[] = $cachedUrl;
+        }
+
+        $cachedUrls = array_values(array_unique($cachedUrls));
+        if ($forceImageRefresh && ($cachedUrls === [] || $cacheFailed)) {
+            foreach (array_diff($cachedUrls, $existingCachedUrls) as $cachedUrl) {
+                $this->deleteMarketplaceCachedImageUrl($cachedUrl);
+            }
+
+            return;
+        }
+
+        $storeCachedUrls = function () use ($itemId, $modelId, $cachedUrls): void {
+            foreach ($cachedUrls as $cachedUrl) {
+                if (! DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->where('image_url', $cachedUrl)->exists()) {
+                    DB::table('shopee_product_image')->insert([
+                        'item_id' => $itemId,
+                        'model_id' => $modelId,
+                        'image_url' => $cachedUrl,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
+        };
+
+        if ($forceImageRefresh) {
+            try {
+                DB::transaction(function () use ($itemId, $modelId, $storeCachedUrls): void {
+                    DB::table('shopee_product_image')->where('item_id', $itemId)->where('model_id', $modelId)->delete();
+                    $storeCachedUrls();
+                });
+            } catch (\Throwable) {
+                foreach (array_diff($cachedUrls, $existingCachedUrls) as $cachedUrl) {
+                    $this->deleteMarketplaceCachedImageUrl($cachedUrl);
+                }
+
+                return;
+            }
+        } else {
+            $storeCachedUrls();
+        }
+
+        if ($forceImageRefresh) {
+            foreach (array_diff($existingCachedUrls, $cachedUrls) as $cachedUrl) {
+                $this->deleteMarketplaceCachedImageUrl($cachedUrl);
             }
         }
     }
@@ -5221,6 +5275,39 @@ class OmnichannelController extends Controller
         ];
     }
 
+    protected function verifyBulkTiktokVariantGroup(string $productId, array $sellerSkus): array
+    {
+        $targetSellerSkus = collect($sellerSkus)
+            ->map(fn (mixed $sellerSku): string => $this->normalizedMarketplaceSellerSku($sellerSku))
+            ->filter()
+            ->flip()
+            ->all();
+        $sync = ['status' => 'error', 'message' => 'Sinkronisasi katalog TikTok belum dijalankan.'];
+        $foundSellerSkus = [];
+
+        for ($attempt = 0; $attempt < 6; $attempt++) {
+            if ($attempt > 0) {
+                usleep(2_000_000);
+            }
+
+            $sync = $this->syncTiktokProductToDatabase($productId);
+            $foundSellerSkus = DB::table('tiktok_products')
+                ->where('product_id', $productId)
+                ->whereRaw('COALESCE(is_active, true) = true')
+                ->pluck('seller_sku')
+                ->map(fn (mixed $sellerSku): string => $this->normalizedMarketplaceSellerSku($sellerSku))
+                ->filter()
+                ->flip()
+                ->all();
+
+            if (($sync['status'] ?? 'error') === 'ok' && array_diff_key($targetSellerSkus, $foundSellerSkus) === []) {
+                break;
+            }
+        }
+
+        return ['sync' => $sync, 'found_seller_skus' => $foundSellerSkus];
+    }
+
     private function bulkTiktokVariantImageUseCase(): string
     {
         return 'ATTRIBUTE_IMAGE';
@@ -5256,6 +5343,17 @@ class OmnichannelController extends Controller
     }
 
     private function buildTiktokExistingProductPartialEditMutation(array $existingProduct, array $existingDetail, array $draftPayload, object $stock, string $uploadedImageUri): array
+    {
+        return $this->buildTiktokExistingProductPartialEditBatchMutation($existingProduct, $existingDetail, [[
+            'seller_sku' => trim((string) data_get($draftPayload, 'target.seller_sku', $stock->internal_sku ?? '')),
+            'variant_name' => trim((string) data_get($draftPayload, 'target.variant_name', $stock->variant_name ?? '')),
+            'stock_qty' => (int) data_get($draftPayload, 'target.stock_qty', 0),
+            'price' => data_get($draftPayload, 'source.price', null),
+            'uploaded_image_uri' => $uploadedImageUri,
+        ]]);
+    }
+
+    private function buildTiktokExistingProductPartialEditBatchMutation(array $existingProduct, array $existingDetail, array $additions): array
     {
         $productId = trim((string) ($existingProduct['product_id'] ?? $existingDetail['id'] ?? $existingDetail['product_id'] ?? ''));
         if ($productId === '') {
@@ -5293,31 +5391,49 @@ class OmnichannelController extends Controller
         }
 
         $template = $this->tiktokPartialEditNewSkuTemplate($existingSkus, $existingDetail, $productId);
-        $sellerSku = trim((string) data_get($draftPayload, 'target.seller_sku', $stock->internal_sku ?? ''));
-        $variantName = trim((string) data_get($draftPayload, 'target.variant_name', $stock->variant_name ?? ''));
-        $uploadedImageUri = $this->tiktokImageUriForMutation($uploadedImageUri);
-        $price = $this->buildTiktokPartialEditSkuPrice(['price' => data_get($draftPayload, 'source.price', null)]);
-
-        if ($sellerSku === '' || $variantName === '' || $uploadedImageUri === '' || $price === null) {
-            throw new \RuntimeException('SKU baru TikTok belum memiliki SKU penjual, nama varian, harga, atau URI gambar yang valid.');
+        if ($additions === []) {
+            throw new \RuntimeException('Tidak ada varian baru TikTok yang dapat ditambahkan.');
         }
 
-        $newSalesAttribute = $template['sales_attribute'];
-        unset($newSalesAttribute['value_id']);
-        $newSalesAttribute['value_name'] = $variantName;
-        $newSalesAttribute['sku_img'] = ['uri' => $uploadedImageUri];
-        $inventory = $template['inventory'];
-        $inventory[0]['quantity'] = max(0, (int) data_get($draftPayload, 'target.stock_qty', 0));
+        $knownSellerSkus = collect($existingSkus)
+            ->map(fn (array $sku): string => $this->normalizedMarketplaceSellerSku($this->extractTiktokSellerSku($sku)))
+            ->filter()
+            ->flip()
+            ->all();
 
-        $rows[] = [
-            'seller_sku' => $sellerSku,
-            'sales_attributes' => [$newSalesAttribute],
-            'price' => $price,
-            'inventory' => $inventory,
-            'sku_weight' => $template['sku_weight'],
-            'sku_dimensions' => $template['sku_dimensions'],
-            'pre_sale' => $template['pre_sale'],
-        ];
+        foreach ($additions as $addition) {
+            $sellerSku = trim((string) data_get($addition, 'seller_sku', ''));
+            $variantName = trim((string) data_get($addition, 'variant_name', ''));
+            $uploadedImageUri = $this->tiktokImageUriForMutation((string) data_get($addition, 'uploaded_image_uri', ''));
+            $price = $this->buildTiktokPartialEditSkuPrice(['price' => data_get($addition, 'price', null)]);
+
+            if ($sellerSku === '' || $variantName === '' || $uploadedImageUri === '' || $price === null) {
+                throw new \RuntimeException('SKU baru TikTok belum memiliki SKU penjual, nama varian, harga, atau URI gambar yang valid.');
+            }
+
+            $sellerSkuKey = $this->normalizedMarketplaceSellerSku($sellerSku);
+            if (isset($knownSellerSkus[$sellerSkuKey])) {
+                throw new \RuntimeException('SKU penjual TikTok sudah ada atau duplikat dalam batch.');
+            }
+            $knownSellerSkus[$sellerSkuKey] = true;
+
+            $newSalesAttribute = $template['sales_attribute'];
+            unset($newSalesAttribute['value_id']);
+            $newSalesAttribute['value_name'] = $variantName;
+            $newSalesAttribute['sku_img'] = ['uri' => $uploadedImageUri];
+            $inventory = $template['inventory'];
+            $inventory[0]['quantity'] = max(0, (int) data_get($addition, 'stock_qty', 0));
+
+            $rows[] = [
+                'seller_sku' => $sellerSku,
+                'sales_attributes' => [$newSalesAttribute],
+                'price' => $price,
+                'inventory' => $inventory,
+                'sku_weight' => $template['sku_weight'],
+                'sku_dimensions' => $template['sku_dimensions'],
+                'pre_sale' => $template['pre_sale'],
+            ];
+        }
 
         return [
             'path' => '/product/202509/products/'.$productId.'/partial_edit',
@@ -5972,7 +6088,7 @@ class OmnichannelController extends Controller
         return null;
     }
 
-    private function refreshMarketplaceImageUrl(string $sourceUrl, string $channel, string $scope, string $variant): ?string
+    private function refreshMarketplaceImageUrl(string $sourceUrl, string $channel, string $scope, string $variant, bool $preserveExisting = false, string $refreshNonce = ''): ?string
     {
         $sourceUrl = trim($sourceUrl);
         if ($sourceUrl === '' || ! preg_match('#^https?://#i', $sourceUrl)) {
@@ -5984,10 +6100,7 @@ class OmnichannelController extends Controller
             return null;
         }
 
-        $identity = sha1($channel.'|'.$scope.'|'.$variant);
-        foreach (glob($cacheDir.DIRECTORY_SEPARATOR.$identity.'.*') ?: [] as $previousFile) {
-            @unlink($previousFile);
-        }
+        $identity = sha1($channel.'|'.$scope.'|'.$variant.($preserveExisting ? '|'.$sourceUrl.'|'.$refreshNonce : ''));
 
         try {
             $response = Http::timeout(30)
@@ -5999,7 +6112,7 @@ class OmnichannelController extends Controller
         }
 
         $body = $response->successful() ? $response->body() : '';
-        if (! is_string($body) || $body === '') {
+        if (! $this->isValidMarketplaceImageBody($body, (string) $response->header('Content-Type', ''))) {
             return null;
         }
 
@@ -6014,8 +6127,41 @@ class OmnichannelController extends Controller
             return null;
         }
 
+        if (! $preserveExisting) {
+            foreach (glob($cacheDir.DIRECTORY_SEPARATOR.$identity.'.*') ?: [] as $previousFile) {
+                if ($previousFile !== $absolutePath) {
+                    @unlink($previousFile);
+                }
+            }
+        }
+
         return '/cached-images/marketplace-images/'.$channel.'/'.$fileName;
     }
+
+    private function isValidMarketplaceImageBody(mixed $body, string $contentType): bool
+    {
+        if (! is_string($body) || $body === '') {
+            return false;
+        }
+
+        $mediaType = strtolower(trim(strtok($contentType, ';')));
+        if ($mediaType !== '' && ! str_starts_with($mediaType, 'image/')) {
+            return false;
+        }
+
+        return @getimagesizefromstring($body) !== false;
+    }
+
+    private function deleteMarketplaceCachedImageUrl(string $cachedUrl): void
+    {
+        $prefix = '/cached-images/';
+        if (! str_starts_with($cachedUrl, $prefix)) {
+            return;
+        }
+
+        @unlink(storage_path('app/public/'.ltrim(substr($cachedUrl, strlen($prefix)), '/')));
+    }
+
     private function cacheMarketplaceImageUrl(?string $sourceUrl, string $channel, string $scope, string $variant = 'image'): ?string
     {
         if (! is_string($sourceUrl)) {
@@ -6045,7 +6191,10 @@ class OmnichannelController extends Controller
         $fileName = $hash.$extension;
         $absolutePath = $cacheDir.DIRECTORY_SEPARATOR.$fileName;
 
-        if (! is_file($absolutePath)) {
+        $existingBody = is_file($absolutePath) ? @file_get_contents($absolutePath) : false;
+        if (! $this->isValidMarketplaceImageBody($existingBody, '')) {
+            @unlink($absolutePath);
+
             try {
                 $response = Http::timeout(30)
                     ->retry(2, 250)
@@ -6054,27 +6203,32 @@ class OmnichannelController extends Controller
 
                 if ($response->successful()) {
                     $body = $response->body();
-                    if (is_string($body) && $body !== '') {
-                        $contentType = strtolower((string) $response->header('Content-Type', ''));
-                        if ($extension === '' || $extension === '.bin') {
-                            $extension = $this->guessImageExtensionFromContentType($contentType);
-                            $fileName = $hash.$extension;
-                            $absolutePath = $cacheDir.DIRECTORY_SEPARATOR.$fileName;
-                        }
+                    $contentType = strtolower((string) $response->header('Content-Type', ''));
+                    if (! $this->isValidMarketplaceImageBody($body, $contentType)) {
+                        return null;
+                    }
 
-                        file_put_contents($absolutePath, $body);
+                    if ($extension === '' || $extension === '.bin') {
+                        $extension = $this->guessImageExtensionFromContentType($contentType);
+                        $fileName = $hash.$extension;
+                        $absolutePath = $cacheDir.DIRECTORY_SEPARATOR.$fileName;
+                    }
+
+                    if (@file_put_contents($absolutePath, $body) === false) {
+                        return null;
                     }
                 }
             } catch (\Throwable) {
-                return $sourceUrl;
+                return null;
             }
         }
 
-        if (is_file($absolutePath)) {
+        $cachedBody = is_file($absolutePath) ? @file_get_contents($absolutePath) : false;
+        if ($this->isValidMarketplaceImageBody($cachedBody, '')) {
             return '/cached-images/marketplace-images/'.$channel.'/'.$fileName;
         }
 
-        return $sourceUrl;
+        return null;
     }
 
     private function guessImageExtensionFromUrl(string $url): string
@@ -8333,6 +8487,45 @@ class OmnichannelController extends Controller
                 : $group['variants']->isNotEmpty())
             ->values();
     }
+
+    protected function submitTiktokBulkPartialEditPayload(string $path, array $payload, array $context): array
+    {
+        return $this->submitTiktokPartialEditPayload($path, $payload, $context);
+    }
+
+    protected function submitPreparedBulkTiktokVariantBatch(string $productId, array $submitDetail, array $batchVariants, int $price, object $shop, string $accessToken): array
+    {
+        $partialEdit = $this->buildTiktokExistingProductPartialEditBatchMutation(
+            ['product_id' => $productId],
+            $submitDetail,
+            array_map(fn (array $prepared): array => [
+                'seller_sku' => $prepared['seller_sku'],
+                'variant_name' => trim((string) ($prepared['variant']['variant_name'] ?? '')),
+                'stock_qty' => 0,
+                'price' => $price,
+                'uploaded_image_uri' => $prepared['uploaded_image_uri'],
+            ], $batchVariants)
+        );
+        $partialResponse = $this->submitTiktokBulkPartialEditPayload($partialEdit['path'], $partialEdit['body'], [
+            'access_token' => $accessToken,
+            'shop_cipher' => (string) ($shop->cipher ?? $shop->shop_cipher ?? ''),
+            'shop_id' => (string) ($shop->shop_id ?? $shop->id ?? ''),
+        ]);
+        $mutation = [
+            'ok' => (int) ($partialResponse['code'] ?? -1) === 0,
+            'message' => (string) ($partialResponse['message'] ?? 'TikTok menolak update varian batch.'),
+            'request' => ['method' => 'POST', 'path' => $partialEdit['path'], 'body' => $partialEdit['body']],
+            'response' => $partialResponse,
+        ];
+
+        return [
+            'mutation' => $mutation,
+            'verification' => $mutation['ok']
+                ? $this->verifyBulkTiktokVariantGroup($productId, array_column($batchVariants, 'seller_sku'))
+                : null,
+        ];
+    }
+
     private function submitBulkTiktokMissingVariantGroup(array $group, array $settings, object $shop, string $accessToken): array
     {
         $productId = trim((string) ($group['tiktok_product_id'] ?? ''));
@@ -8378,6 +8571,7 @@ class OmnichannelController extends Controller
             return $this->completeBulkTiktokVariantGroupResult($result);
         }
 
+        $preparedVariants = [];
         foreach ($freshGroup['variants'] as $variant) {
             $sellerSku = $this->normalizedMarketplaceSellerSku($variant['seller_sku'] ?? '');
             if ($sellerSku === '' || isset($existingSellerSkus[$sellerSku])) {
@@ -8392,38 +8586,93 @@ class OmnichannelController extends Controller
                     $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], 'Gambar Shopee terbaru gagal diunggah ke TikTok.', ['upload' => $upload]);
                     continue;
                 }
-                $stock = (object) ['variant_name' => $variant['variant_name'], 'product_name' => $group['product_name'], 'internal_sku' => $sellerSku, 'stock_qty' => 0];
-                $draft = [
-                    'product_name' => $group['product_name'],
-                    'source' => ['price' => $price['price'], 'image_url' => $variant['image_url']],
-                    'target' => ['variant_name' => $variant['variant_name'], 'seller_sku' => $sellerSku, 'image_url' => $variant['image_url'], 'stock_qty' => 0],
+                $preparedVariants[] = [
+                    'variant' => (array) $variant,
+                    'seller_sku' => $sellerSku,
+                    'uploaded_image_uri' => $imageUri,
+                    'upload' => $upload,
                 ];
-                $mutation = $this->submitTiktokVariantMutation($stock, $draft, $shop, $accessToken, ['product_id' => $productId], ['uploaded_image_uri' => $imageUri]);
-                if (($mutation['ok'] ?? false) !== true) {
-                    $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], (string) ($mutation['message'] ?? 'TikTok menolak varian baru.'), ['upload' => $upload, 'mutation' => $mutation]);
-                    continue;
-                }
-
-                $verificationSync = $this->syncTiktokProductToDatabase($productId);
-                $sellerSkuExists = DB::table('tiktok_products')
-                    ->where('product_id', $productId)
-                    ->whereRaw('COALESCE(is_active, true) = true')
-                    ->whereRaw("UPPER(TRIM(COALESCE(seller_sku, ''))) = ?", [$sellerSku])
-                    ->exists();
-                $verification = $this->bulkTiktokVerificationOutcome($verificationSync, $sellerSkuExists);
-                $this->appendBulkTiktokVariantOutcome(
-                    $result,
-                    $variant,
-                    $verification['status'],
-                    $price['price'],
-                    $verification['reason'],
-                    ['upload' => $upload, 'mutation' => $mutation, 'verification' => $verificationSync]
-                );
-                if ($verification['status'] === 'updated') {
-                    $existingSellerSkus[$sellerSku] = true;
-                }
             } catch (\Throwable $exception) {
                 $this->appendBulkTiktokVariantOutcome($result, $variant, 'failed', $price['price'], $exception->getMessage(), ['exception' => $exception->getMessage()]);
+            }
+        }
+
+        if ($preparedVariants === []) {
+            return $this->completeBulkTiktokVariantGroupResult($result);
+        }
+
+        $submitDetail = $this->fetchTiktokProductDetail($config, $accessToken, $shop, $productId, $config['api_host'].'/product/202309/products/');
+        $submitDetail = is_array($submitDetail['product'] ?? null) ? $submitDetail['product'] : $submitDetail;
+        if (! is_array($submitDetail)) {
+            foreach ($preparedVariants as $prepared) {
+                $this->appendBulkTiktokVariantOutcome(
+                    $result,
+                    $prepared['variant'],
+                    'failed',
+                    $price['price'],
+                    'Detail TikTok terbaru tidak dapat dibaca sebelum pengiriman batch.',
+                    ['upload' => $prepared['upload']]
+                );
+            }
+
+            return $this->completeBulkTiktokVariantGroupResult($result);
+        }
+
+        $submitExistingSellerSkus = collect($this->normalizeTiktokSkuList($submitDetail))
+            ->map(fn (array $sku): string => $this->normalizedMarketplaceSellerSku($this->extractTiktokSellerSku($sku)))
+            ->filter()
+            ->flip()
+            ->all();
+        $batchVariants = [];
+        foreach ($preparedVariants as $prepared) {
+            if (isset($submitExistingSellerSkus[$prepared['seller_sku']])) {
+                $this->appendBulkTiktokVariantOutcome($result, $prepared['variant'], 'skipped', null, 'SKU sudah ada di TikTok sebelum batch dikirim.', ['upload' => $prepared['upload']]);
+                continue;
+            }
+
+            $batchVariants[] = $prepared;
+        }
+
+        if ($batchVariants === []) {
+            return $this->completeBulkTiktokVariantGroupResult($result);
+        }
+
+        try {
+            $batchSubmission = $this->submitPreparedBulkTiktokVariantBatch(
+                $productId,
+                $submitDetail,
+                $batchVariants,
+                $price['price'],
+                $shop,
+                $accessToken
+            );
+            $mutation = $batchSubmission['mutation'];
+            if (! $mutation['ok']) {
+                foreach ($batchVariants as $prepared) {
+                    $this->appendBulkTiktokVariantOutcome($result, $prepared['variant'], 'failed', $price['price'], $mutation['message'], ['upload' => $prepared['upload'], 'mutation' => $mutation]);
+                }
+
+                return $this->completeBulkTiktokVariantGroupResult($result);
+            }
+
+            $verification = $batchSubmission['verification'];
+            foreach ($batchVariants as $prepared) {
+                $outcome = $this->bulkTiktokVerificationOutcome(
+                    $verification['sync'],
+                    isset($verification['found_seller_skus'][$prepared['seller_sku']])
+                );
+                $this->appendBulkTiktokVariantOutcome(
+                    $result,
+                    $prepared['variant'],
+                    $outcome['status'],
+                    $price['price'],
+                    $outcome['reason'],
+                    ['upload' => $prepared['upload'], 'mutation' => $mutation, 'verification' => $verification['sync']]
+                );
+            }
+        } catch (\Throwable $exception) {
+            foreach ($batchVariants as $prepared) {
+                $this->appendBulkTiktokVariantOutcome($result, $prepared['variant'], 'failed', $price['price'], $exception->getMessage(), ['upload' => $prepared['upload'], 'exception' => $exception->getMessage()]);
             }
         }
 
