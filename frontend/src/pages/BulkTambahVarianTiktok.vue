@@ -162,6 +162,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
+import { buildBulkSubmitFeedback, mergeBulkPreviewState } from './bulkTiktokSubmitState'
 
 const candidates = ref([])
 const mappingOnlyCandidates = ref([])
@@ -185,20 +186,28 @@ const canSubmit = computed(() => !loading.value && !submitting.value && targetVa
 const resultSummary = computed(() => {
   const totals = results.value.reduce((summary, item) => ({
     updated: summary.updated + Number(item.updated || 0),
+    unverified: summary.unverified + Number(item.unverified || 0),
     skipped: summary.skipped + Number(item.skipped || 0),
     failed: summary.failed + Number(item.failed || 0)
-  }), { updated: 0, skipped: 0, failed: 0 })
-  return `Berhasil ${totals.updated} | Dilewati ${totals.skipped} | Gagal ${totals.failed}`
+  }), { updated: 0, unverified: 0, skipped: 0, failed: 0 })
+  return `Berhasil ${totals.updated} | Belum terverifikasi ${totals.unverified} | Dilewati ${totals.skipped} | Gagal ${totals.failed}`
 })
 
-const loadPreview = async () => {
+const loadPreview = async ({ preserveFeedback = false } = {}) => {
   loading.value = true
-  message.value = ''
+  if (!preserveFeedback) message.value = ''
   try {
     const { data } = await omnichannelService.bulkTiktokMissingVariantsPreview()
-    candidates.value = data.items || []
-    mappingOnlyCandidates.value = data.mapping_only_items || []
-    selectedProductIds.value = selectedProductIds.value.filter((id) => candidates.value.some((group) => group.tiktok_product_id === id))
+    const next = mergeBulkPreviewState({
+      message: message.value,
+      messageTone: messageTone.value,
+      selectedProductIds: selectedProductIds.value
+    }, data, { preserveFeedback })
+    candidates.value = next.candidates
+    mappingOnlyCandidates.value = next.mappingOnlyCandidates
+    selectedProductIds.value = next.selectedProductIds
+    message.value = next.message
+    messageTone.value = next.messageTone
   } catch (error) {
     message.value = error.response?.data?.message || 'Preview varian TikTok gagal dimuat.'
     messageTone.value = 'error'
@@ -223,10 +232,10 @@ const submitBulk = async () => {
       manual_price: execution.priceMode === 'manual' ? Number(execution.manualPrice) : undefined
     })
     results.value = data.items || []
-    message.value = data.message || 'Proses varian TikTok selesai.'
-    messageTone.value = data.status === 'success' ? 'success' : data.status === 'partial' ? 'warning' : 'error'
+    message.value = buildBulkSubmitFeedback(data)
+    messageTone.value = data.status === 'success' ? 'success' : data.status === 'partial' || Number(data.unverified || 0) > 0 ? 'warning' : 'error'
     confirmationOpen.value = false
-    await loadPreview()
+    await loadPreview({ preserveFeedback: true })
   } catch (error) {
     message.value = error.response?.data?.message || 'Proses tambah varian TikTok gagal.'
     messageTone.value = 'error'
@@ -237,7 +246,7 @@ const submitBulk = async () => {
 
 watch(() => execution.scope, () => { confirmationOpen.value = false })
 const formatCurrency = (value) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value || 0))
-const statusLabel = (status) => ({ updated: 'Berhasil', skipped: 'Dilewati', failed: 'Gagal', partial: 'Sebagian' }[status] || status || '-')
+const statusLabel = (status) => ({ updated: 'Berhasil', submitted_unverified: 'Belum terverifikasi', skipped: 'Dilewati', failed: 'Gagal', partial: 'Sebagian' }[status] || status || '-')
 
 onMounted(loadPreview)
 </script>
@@ -256,7 +265,7 @@ fieldset { display:grid; gap:8px; padding:12px; } legend { padding:0 4px; color:
 .table-wrap { overflow:auto; margin-bottom:16px; } .table-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border-bottom:1px solid #d9e2ec; } .table-head strong { display:block; } .select-all { white-space:nowrap; }
 table { width:100%; min-width:860px; border-collapse:collapse; } th,td { padding:10px; border-bottom:1px solid #e5eaf0; text-align:left; vertical-align:top; font-size:13px; } th { color:#475569; background:#f8fafc; font-size:11px; text-transform:uppercase; } td:first-child,th:first-child { width:42px; text-align:center; } .empty { padding:30px; color:#64748b; text-align:center; }
 .variant-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; min-width:260px; } .variant-list li { display:grid; grid-template-columns:36px minmax(0,1fr); gap:8px; align-items:center; } .variant-list img,.image-fallback { width:36px; height:36px; object-fit:cover; border-radius:4px; background:#e2e8f0; } .image-fallback { display:grid; place-items:center; color:#64748b; } .variant-list strong { display:block; overflow-wrap:anywhere; }
-.badge { display:inline-flex; width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-weight:800; } .ready,.updated { color:#166534; background:#dcfce7; } .warning,.skipped { color:#92400e; background:#fef3c7; } .mapping { color:#1d4ed8; background:#dbeafe; } .failed { color:#991b1b; background:#fee2e2; }
+.badge { display:inline-flex; width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-weight:800; } .ready,.updated { color:#166534; background:#dcfce7; } .warning,.skipped,.submitted_unverified { color:#92400e; background:#fef3c7; } .mapping { color:#1d4ed8; background:#dbeafe; } .failed { color:#991b1b; background:#fee2e2; }
 .modal-backdrop { position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:18px; background:rgba(15,23,42,.45); } .modal { width:min(520px,100%); border-radius:6px; background:#fff; padding:20px; box-shadow:0 20px 45px rgba(15,23,42,.25); } .modal h2 { margin:0 0 12px; font-size:19px; } .modal p { margin:8px 0; color:#475569; line-height:1.5; } .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
 @media (max-width: 980px) { .page-shell { margin-left:0; padding:16px; } .controls { grid-template-columns:1fr; } .page-header { align-items:flex-start; flex-direction:column; } }
