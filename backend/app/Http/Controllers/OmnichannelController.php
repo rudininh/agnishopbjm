@@ -2856,15 +2856,34 @@ class OmnichannelController extends Controller
             ->groupBy(fn (object $row): string => trim((string) $row->tiktok_product_id))
             ->map(function (Collection $group, string $tiktokProductId): array {
                 $first = $group->first();
-                $existingSellerSkus = $group
-                    ->flatMap(fn (object $row): array => (array) ($row->tiktok_seller_skus ?? []))
-                    ->map(fn (mixed $sku): string => $this->normalizedMarketplaceSellerSku($sku))
+                $tiktokSkusBySellerSku = $group
+                    ->flatMap(fn (object $row): array => (array) ($row->tiktok_skus ?? []))
+                    ->map(function (mixed $sku): ?array {
+                        $sellerSku = $this->normalizedMarketplaceSellerSku(data_get($sku, 'seller_sku'));
+
+                        if ($sellerSku === '') {
+                            return null;
+                        }
+
+                        return [
+                            'seller_sku' => $sellerSku,
+                            'sku_id' => trim((string) data_get($sku, 'sku_id')) ?: null,
+                            'sku_name' => trim((string) data_get($sku, 'sku_name')) ?: null,
+                        ];
+                    })
                     ->filter()
+                    ->keyBy('seller_sku');
+                $existingSellerSkus = $tiktokSkusBySellerSku->keys()
+                    ->merge($group
+                        ->flatMap(fn (object $row): array => (array) ($row->tiktok_seller_skus ?? []))
+                        ->map(fn (mixed $sku): string => $this->normalizedMarketplaceSellerSku($sku))
+                        ->filter())
                     ->unique()
                     ->values();
                 $skippedVariants = collect();
+                $mappingOnlyVariants = collect();
                 $variants = $group
-                    ->map(function (object $row) use ($existingSellerSkus, $skippedVariants): ?array {
+                    ->map(function (object $row) use ($existingSellerSkus, $tiktokSkusBySellerSku, $skippedVariants, $mappingOnlyVariants): ?array {
                         $sellerSku = $this->normalizedMarketplaceSellerSku($row->shopee_model_sku ?? '');
                         $modelId = trim((string) ($row->shopee_model_id ?? ''));
                         $imageUrl = trim((string) ($row->shopee_image_url ?? ''));
@@ -2875,7 +2894,17 @@ class OmnichannelController extends Controller
                         }
 
                         if ($existingSellerSkus->contains($sellerSku)) {
-                            $skippedVariants->push(['model_id' => $modelId, 'seller_sku' => $sellerSku, 'reason' => 'SKU sudah ada di TikTok.']);
+                            $tiktokSku = $tiktokSkusBySellerSku->get($sellerSku, []);
+                            $mappingOnlyVariants->push([
+                                'shopee_item_id' => trim((string) ($row->shopee_item_id ?? '')),
+                                'shopee_model_id' => $modelId,
+                                'variant_name' => trim((string) ($row->shopee_variant_name ?? '')),
+                                'seller_sku' => $sellerSku,
+                                'image_url' => $imageUrl,
+                                'tiktok_sku_id' => $tiktokSku['sku_id'] ?? null,
+                                'tiktok_variant_name' => $tiktokSku['sku_name'] ?? null,
+                                'reason' => 'SKU sudah ada di TikTok; mapping belum tersambung.',
+                            ]);
                             return null;
                         }
 
@@ -2900,13 +2929,13 @@ class OmnichannelController extends Controller
                     'product_name' => trim((string) ($first->product_name ?? '')),
                     'shopee_item_id' => trim((string) ($first->shopee_item_id ?? '')),
                     'variants' => $variants,
+                    'mapping_only_variants' => $mappingOnlyVariants->values(),
                     'skipped_variants' => $skippedVariants,
                 ];
             })
-            ->filter(fn (array $group): bool => $group['variants']->isNotEmpty())
+            ->filter(fn (array $group): bool => $group['variants']->isNotEmpty() || $group['mapping_only_variants']->isNotEmpty())
             ->values();
     }
-
     private function tiktokMajorityPrice(array $tiktokSkus): array
     {
         $counts = collect($tiktokSkus)
@@ -5586,29 +5615,33 @@ class OmnichannelController extends Controller
             $hasTiktokActual = $tiktokMatchSource === 'suggested_product'
                 ? false
                 : $hasTiktokVariantIdentity;
+            $mappingOnlyTiktokMatch = $hasShopeeActual && ! $hasTiktokActual
+                ? $this->linkedTiktokSellerSkuMatch($tiktokLookup, $tiktokProductId ?: $matchedProductId, $shopeeSellerSku)
+                : null;
+            $hasTiktokMappingOnly = $mappingOnlyTiktokMatch !== null;
+            $displayTiktokMatch = $hasTiktokActual ? $tiktokMatch : ($mappingOnlyTiktokMatch ?: $tiktokMatch);
+            $hasDisplayTiktokVariant = $hasTiktokActual || $hasTiktokMappingOnly;
 
-            if ($hasTiktokActual) {
-                $tiktokProductId = $tiktokMatch->product_id ?? $tiktokProductId;
-                $tiktokSkuId = $tiktokMatch->sku_id ?? $tiktokSkuId;
-                $tiktokSkuName = $tiktokMatch->sku_name ?? $tiktokSkuName;
-                $tiktokSellerSku = trim((string) ($tiktokMatch->seller_sku ?? '')) ?: null;
+            if ($hasDisplayTiktokVariant) {
+                $tiktokProductId = $displayTiktokMatch->product_id ?? $tiktokProductId;
+                $tiktokSkuId = $displayTiktokMatch->sku_id ?? $tiktokSkuId;
+                $tiktokSkuName = $displayTiktokMatch->sku_name ?? $tiktokSkuName;
+                $tiktokSellerSku = trim((string) ($displayTiktokMatch->seller_sku ?? '')) ?: null;
             }
-
             $shopeeImageUrl = $row->shopee_model_image_url
                 ?: $row->internal_image_url
                 ?: $row->shopee_image_url
                 ?: $row->shopee_product_image_url
                 ?: ($matchedShopeeProduct['image_url'] ?? null);
             $tiktokImageUrl = $row->tiktok_image_url
-                ?: ($tiktokMatch->image_url ?? null)
-                ?: ($tiktokMatch->product_image_url ?? null);
+                ?: ($displayTiktokMatch->image_url ?? null)
+                ?: ($displayTiktokMatch->product_image_url ?? null);
 
-            if ($tiktokMatch) {
-                foreach ($this->tiktokVariantMatchKeys($tiktokMatch) as $matchKey) {
+            if ($displayTiktokMatch) {
+                foreach ($this->tiktokVariantMatchKeys($displayTiktokMatch) as $matchKey) {
                     $matchedTiktokVariantKeys[$matchKey] = true;
                 }
             }
-
             $items[] = [
                 'id' => $row->id,
                 'group_key' => $canonicalGroupKey,
@@ -5644,21 +5677,20 @@ class OmnichannelController extends Controller
                 ],
                 'shopee_variant_price' => isset($row->shopee_variant_price) ? (int) $row->shopee_variant_price : null,
                 'tiktok' => [
-                    'product_id' => $tiktokProductId ?: ($tiktokMatch->product_id ?? null),
-                    'sku_id' => $tiktokSkuId ?: ($tiktokMatch->sku_id ?? null),
-                    'sku_name' => $tiktokSkuName ?: ($tiktokMatch->sku_name ?? null),
-                    'seller_sku' => $tiktokSellerSku ?: ($tiktokMatch->seller_sku ?? null),
-                    'price' => $hasTiktokVariantIdentity && isset($tiktokMatch->price) ? (int) $tiktokMatch->price : null,
-                    'product_name' => $tiktokMatch->product_name ?? null,
-                    'variant_name' => $tiktokMatch->sku_name ?? $tiktokSkuName,
-                    'stock_qty' => $hasTiktokVariantIdentity ? (int) ($tiktokMatch->stock_qty ?? 0) : null,
+                    'product_id' => $tiktokProductId ?: ($displayTiktokMatch->product_id ?? null),
+                    'sku_id' => $tiktokSkuId ?: ($displayTiktokMatch->sku_id ?? null),
+                    'sku_name' => $tiktokSkuName ?: ($displayTiktokMatch->sku_name ?? null),
+                    'seller_sku' => $tiktokSellerSku ?: ($displayTiktokMatch->seller_sku ?? null),
+                    'price' => $hasDisplayTiktokVariant && isset($displayTiktokMatch->price) ? (int) $displayTiktokMatch->price : null,
+                    'product_name' => $displayTiktokMatch->product_name ?? null,
+                    'variant_name' => $displayTiktokMatch->sku_name ?? $tiktokSkuName,
+                    'stock_qty' => $hasDisplayTiktokVariant ? (int) ($displayTiktokMatch->stock_qty ?? 0) : null,
                     'image_url' => $tiktokImageUrl,
-                    'status' => $hasTiktokActual ? 'mapped' : ($tiktokMatch ? 'suggested' : 'unmapped'),
-                    'source' => $tiktokMatchSource,
+                    'status' => $hasTiktokActual ? 'mapped' : ($hasTiktokMappingOnly ? 'mapping_only' : ($tiktokMatch ? 'suggested' : 'unmapped')),
+                    'source' => $hasTiktokMappingOnly ? 'mapping_only' : $tiktokMatchSource,
                     'template_sku' => $templateSellerSku,
                 ],
-                'status' => $resolveItemStatus($hasShopeeActual, $hasTiktokActual),
-                'updated_at' => $row->updated_at,
+                'status' => $hasTiktokMappingOnly ? 'tiktok_mapping_missing' : $resolveItemStatus($hasShopeeActual, $hasTiktokActual),                'updated_at' => $row->updated_at,
             ];
         }
 
@@ -5745,12 +5777,10 @@ class OmnichannelController extends Controller
                 }
 
                 $matchesStatus = match ($status) {
-                    'ready_to_sync', 'shopee_missing', 'tiktok_missing', 'belum_ada_variant' => $item['status'] === $status,
-                    'tiktok_actual' => data_get($item, 'tiktok.status') === 'mapped'
+                    'ready_to_sync', 'shopee_missing', 'tiktok_missing', 'tiktok_mapping_missing', 'belum_ada_variant' => $item['status'] === $status,                    'tiktok_actual' => data_get($item, 'tiktok.status') === 'mapped'
                         && data_get($item, 'tiktok.source') !== 'suggested_product',
                     'all' => match ($flow) {
-                        'shopee-to-tiktok' => in_array($item['status'], ['ready_to_sync', 'tiktok_missing', 'shopee_missing'], true),
-                        'tiktok-to-shopee' => in_array($item['status'], ['ready_to_sync', 'shopee_missing'], true),
+                        'shopee-to-tiktok' => in_array($item['status'], ['ready_to_sync', 'tiktok_missing', 'tiktok_mapping_missing', 'shopee_missing'], true),                        'tiktok-to-shopee' => in_array($item['status'], ['ready_to_sync', 'shopee_missing'], true),
                         default => true,
                     },
                     default => true,
@@ -6689,6 +6719,18 @@ class OmnichannelController extends Controller
         return $productNameKey !== '' ? 'product:'.$productNameKey : 'stock:'.$row->id;
     }
 
+    private function linkedTiktokSellerSkuMatch(array $lookup, mixed $productId, mixed $sellerSku): ?object
+    {
+        $productId = trim((string) $productId);
+        $sellerSkuKey = $this->normalizeSkuMatchValue($sellerSku);
+
+        if ($productId === '' || $sellerSkuKey === '') {
+            return null;
+        }
+
+        return $lookup['product_groups'][$productId]['rows_by_seller_sku'][$sellerSkuKey] ?? null;
+    }
+
     private function normalizeSkuMatchValue(mixed $value): string
     {
         $value = strtolower(trim((string) ($value ?? '')));
@@ -6696,7 +6738,6 @@ class OmnichannelController extends Controller
 
         return trim(preg_replace('/\s+/', ' ', $value) ?? '');
     }
-
     private function tiktokVariantKey(object $row): string
     {
         $productId = trim((string) ($row->product_id ?? ''));
@@ -7085,15 +7126,25 @@ class OmnichannelController extends Controller
     public function bulkTiktokMissingVariantsPreview(): JsonResponse
     {
         $this->ensureSkuMappingTables();
+        $groups = $this->tiktokBulkCandidateGroups(true);
 
         return response()->json([
-            'items' => $this->tiktokBulkCandidateGroups()->map(fn (array $group): array => [
-                ...$group,
-                'variant_count' => $group['variants']->count(),
-            ])->values(),
+            'items' => $groups
+                ->filter(fn (array $group): bool => $group['variants']->isNotEmpty())
+                ->map(fn (array $group): array => [
+                    ...$group,
+                    'variant_count' => $group['variants']->count(),
+                ])
+                ->values(),
+            'mapping_only_items' => $groups
+                ->filter(fn (array $group): bool => $group['mapping_only_variants']->isNotEmpty())
+                ->map(fn (array $group): array => [
+                    ...$group,
+                    'mapping_only_variant_count' => $group['mapping_only_variants']->count(),
+                ])
+                ->values(),
         ]);
     }
-
     public function bulkSubmitTiktokMissingVariants(Request $request): JsonResponse
     {
         set_time_limit(0);
@@ -7147,7 +7198,7 @@ class OmnichannelController extends Controller
         ]);
     }
 
-    private function tiktokBulkCandidateGroups(): Collection
+    private function tiktokBulkCandidateGroups(bool $includeMappingOnly = false): Collection
     {
         $rows = DB::table('stock_master as sm')
             ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
@@ -7174,14 +7225,19 @@ class OmnichannelController extends Controller
         $tiktokSkus = DB::table('tiktok_products')
             ->whereIn('product_id', $productIds)
             ->whereRaw('COALESCE(is_active, true) = true')
-            ->select('product_id', 'seller_sku', 'price')
+            ->select('product_id', 'sku_id', 'sku_name', 'seller_sku', 'price')
             ->get()
             ->groupBy('product_id');
 
         $enrichedRows = $rows->map(function (object $row) use ($tiktokSkus): object {
             $productSkus = $tiktokSkus->get((string) $row->tiktok_product_id, collect());
             $row->tiktok_seller_skus = $productSkus->pluck('seller_sku')->all();
-            $row->tiktok_skus = $productSkus->map(fn (object $sku): array => ['sale_price' => $sku->price])->all();
+            $row->tiktok_skus = $productSkus->map(fn (object $sku): array => [
+                'seller_sku' => $sku->seller_sku,
+                'sku_id' => $sku->sku_id,
+                'sku_name' => $sku->sku_name,
+                'sale_price' => $sku->price,
+            ])->all();
             return $row;
         });
 
@@ -7193,9 +7249,12 @@ class OmnichannelController extends Controller
                         ->all()
                 );
                 return $group;
-            });
+            })
+            ->filter(fn (array $group): bool => $includeMappingOnly
+                ? ($group['variants']->isNotEmpty() || $group['mapping_only_variants']->isNotEmpty())
+                : $group['variants']->isNotEmpty())
+            ->values();
     }
-
     private function submitBulkTiktokMissingVariantGroup(array $group, array $settings, object $shop, string $accessToken): array
     {
         $productId = trim((string) ($group['tiktok_product_id'] ?? ''));

@@ -181,6 +181,7 @@ class OmnichannelControllerTest extends TestCase
                 'shopee_variant_name' => 'Merah',
                 'shopee_image_url' => 'https://cdn.example/red.jpg',
                 'tiktok_seller_skus' => ['SH-BLUE'],
+                'tiktok_skus' => [['seller_sku' => 'SH-BLUE', 'sku_id' => 'TT-2']],
             ],
             (object) [
                 'tiktok_product_id' => '900',
@@ -191,10 +192,30 @@ class OmnichannelControllerTest extends TestCase
                 'shopee_variant_name' => 'Biru',
                 'shopee_image_url' => 'https://cdn.example/blue.jpg',
                 'tiktok_seller_skus' => ['SH-BLUE'],
+                'tiktok_skus' => [['seller_sku' => 'SH-BLUE', 'sku_id' => 'TT-2']],
             ],
         ]));
 
         $this->assertSame(['SH-RED'], $groups->first()['variants']->pluck('seller_sku')->all());
+        $this->assertSame(['SH-BLUE'], $groups->first()['mapping_only_variants']->pluck('seller_sku')->all());
+        $this->assertSame('TT-2', $groups->first()['mapping_only_variants']->first()['tiktok_sku_id']);
+        $this->assertSame('SKU sudah ada di TikTok; mapping belum tersambung.', $groups->first()['mapping_only_variants']->first()['reason']);
+    }
+
+    public function test_linked_tiktok_seller_sku_lookup_ignores_variant_name_mismatch(): void
+    {
+        $match = $this->linkedTiktokSellerSkuMatch([
+            'product_groups' => [
+                '900' => [
+                    'rows_by_seller_sku' => [
+                        'sh blue' => (object) ['product_id' => '900', 'sku_id' => 'TT-2', 'sku_name' => 'Nama TikTok Lama', 'seller_sku' => 'SH-BLUE'],
+                    ],
+                ],
+            ],
+        ], '900', 'sh-blue');
+
+        $this->assertSame('TT-2', $match->sku_id);
+        $this->assertSame('SH-BLUE', $match->seller_sku);
     }
 
     public function test_tiktok_majority_price_returns_the_most_frequent_price(): void
@@ -279,6 +300,14 @@ class OmnichannelControllerTest extends TestCase
         return $method->invoke($controller, $rows);
     }
 
+    private function linkedTiktokSellerSkuMatch(array $lookup, string $productId, string $sellerSku): ?object
+    {
+        $controller = new OmnichannelController();
+        $method = (new ReflectionClass($controller))->getMethod('linkedTiktokSellerSkuMatch');
+        $method->setAccessible(true);
+
+        return $method->invoke($controller, $lookup, $productId, $sellerSku);
+    }
     private function tiktokMajorityPrice(array $skus): array
     {
         $controller = new OmnichannelController();
