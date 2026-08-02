@@ -63,6 +63,48 @@ class OmnichannelController extends Controller
         ]);
     }
 
+    public function tiktokVariantReconciliationProducts(): JsonResponse
+    {
+        return response()->json([
+            'items' => [],
+            'revision_source' => 'shopee',
+        ]);
+    }
+
+    public function tiktokVariantReconciliationPreview(Request $request): JsonResponse
+    {
+        $request->validate([
+            'shopee_item_id' => ['required', 'string'],
+            'tiktok_product_id' => ['required', 'string'],
+        ]);
+
+        return response()->json([
+            'rows' => [],
+            'summary' => [
+                'total' => 0,
+                'manual_review' => 0,
+                'tiktok_orphan' => 0,
+                'no_change' => 0,
+                'shopee_sku_outdated' => 0,
+                'tiktok_variant_outdated' => 0,
+            ],
+            'revision_source' => 'shopee',
+        ]);
+    }
+
+    public function submitTiktokVariantReconciliation(Request $request): JsonResponse
+    {
+        $request->validate([
+            'shopee_item_id' => ['required', 'string'],
+            'tiktok_product_id' => ['required', 'string'],
+        ]);
+
+        return response()->json([
+            'status' => 'manual_review',
+            'message' => 'Pengiriman rekonsiliasi varian belum tersedia.',
+        ], 501);
+    }
+
     public function productVariantAnalysis(Request $request): JsonResponse
     {
         $this->ensureProductVariantAnalysisTables();
@@ -2842,6 +2884,363 @@ class OmnichannelController extends Controller
                 ];
             })
             ->values();
+    }
+
+    private function skuTemplateFragment(string $variantName): string
+    {
+        $fragment = preg_replace('/[^A-Z0-9]+/', '-', strtoupper(trim($variantName))) ?? '';
+
+        return trim($fragment, '-');
+    }
+
+    private function canonicalShopeeVariantSellerSku(string $itemId, string $variantName): string
+    {
+        return 'INT-'.trim($itemId).'-'.$this->skuTemplateFragment($variantName);
+    }
+
+    private function isSelectedShopeeOwnedTiktokSku(string $sellerSku, string $itemId): bool
+    {
+        $itemId = trim($itemId);
+
+        return $itemId !== '' && str_starts_with(
+            $this->normalizedMarketplaceSellerSku($sellerSku),
+            'INT-'.$itemId.'-'
+        );
+    }
+
+    private function tiktokVariantReconciliationMappingSkuId(mixed $mapping): string
+    {
+        if (is_string($mapping) || is_int($mapping)) {
+            return trim((string) $mapping);
+        }
+
+        if (is_object($mapping)) {
+            $mapping = (array) $mapping;
+        }
+
+        if (! is_array($mapping) || array_key_exists('is_active', $mapping) && ! $mapping['is_active']) {
+            return '';
+        }
+
+        return trim((string) ($mapping['tiktok_sku_id'] ?? $mapping['sku_id'] ?? ''));
+    }
+
+    private function tiktokVariantReconciliationNameKey(mixed $value): string
+    {
+        return strtoupper(trim(preg_replace('/\s+/', ' ', (string) $value) ?? ''));
+    }
+
+    private function tiktokVariantReconciliationManualRow(
+        ?array $shopee,
+        ?array $tiktok,
+        ?array $target,
+        string $message
+    ): array {
+        return [
+            'shopee_model_id' => $shopee['model_id'] ?? null,
+            'tiktok_sku_id' => $tiktok['sku_id'] ?? null,
+            'current' => [
+                'shopee' => $shopee,
+                'tiktok' => $tiktok,
+            ],
+            'target' => $target,
+            'classification' => 'manual_review',
+            'actions' => ['manual_review'],
+            'message' => $message,
+        ];
+    }
+
+    private function classifyTiktokVariantReconciliation(
+        array $shopeeModels,
+        array $tiktokSkus,
+        string $itemId,
+        array $mappingByModel = []
+    ): array {
+        $itemId = trim($itemId);
+        $normalizedShopeeModels = [];
+        $canonicalCounts = [];
+        $shopeeNameCounts = [];
+
+        foreach ($shopeeModels as $index => $model) {
+            if (is_object($model)) {
+                $model = (array) $model;
+            }
+            if (! is_array($model)) {
+                $model = [];
+            }
+
+            $modelId = trim((string) ($model['model_id'] ?? $model['id'] ?? ''));
+            $name = trim((string) ($model['name'] ?? $model['variant_name'] ?? ''));
+            $modelSku = trim((string) ($model['model_sku'] ?? $model['seller_sku'] ?? ''));
+            $imageUrl = trim((string) ($model['image_url'] ?? ''));
+            $stockQty = (int) ($model['stock_qty'] ?? $model['stock'] ?? 0);
+            $sourceItemId = trim((string) ($model['item_id'] ?? $model['shopee_item_id'] ?? $itemId));
+            $canonicalSku = $this->canonicalShopeeVariantSellerSku($itemId, $name);
+            $nameKey = $this->tiktokVariantReconciliationNameKey($name);
+
+            $normalizedShopeeModels[] = [
+                'source_index' => $index,
+                'item_id' => $sourceItemId,
+                'model_id' => $modelId,
+                'name' => $name,
+                'model_sku' => $modelSku,
+                'image_url' => $imageUrl,
+                'stock_qty' => $stockQty,
+                'canonical_seller_sku' => $canonicalSku,
+                'name_key' => $nameKey,
+            ];
+            $canonicalCounts[$this->normalizedMarketplaceSellerSku($canonicalSku)] = ($canonicalCounts[$this->normalizedMarketplaceSellerSku($canonicalSku)] ?? 0) + 1;
+            if ($nameKey !== '') {
+                $shopeeNameCounts[$nameKey] = ($shopeeNameCounts[$nameKey] ?? 0) + 1;
+            }
+        }
+
+        $normalizedTiktokSkus = [];
+        $tiktokBySkuId = [];
+        $tiktokBySellerSku = [];
+        $tiktokByName = [];
+        foreach ($tiktokSkus as $index => $sku) {
+            if (is_object($sku)) {
+                $sku = (array) $sku;
+            }
+            if (! is_array($sku)) {
+                $sku = [];
+            }
+
+            $skuId = trim((string) ($sku['sku_id'] ?? $sku['id'] ?? ''));
+            $sellerSku = trim((string) ($sku['seller_sku'] ?? ''));
+            $skuName = trim((string) ($sku['sku_name'] ?? $sku['name'] ?? ''));
+            $tiktok = [
+                'source_index' => $index,
+                'sku_id' => $skuId,
+                'seller_sku' => $sellerSku,
+                'sku_name' => $skuName,
+                'image_url' => trim((string) ($sku['image_url'] ?? $sku['image_uri'] ?? '')),
+                'stock_qty' => (int) ($sku['stock_qty'] ?? $sku['stock'] ?? 0),
+            ];
+            $normalizedTiktokSkus[] = $tiktok;
+
+            if ($skuId !== '') {
+                $tiktokBySkuId[$skuId][] = $index;
+            }
+            $sellerSkuKey = $this->normalizedMarketplaceSellerSku($sellerSku);
+            if ($sellerSkuKey !== '') {
+                $tiktokBySellerSku[$sellerSkuKey][] = $index;
+            }
+            $nameKey = $this->tiktokVariantReconciliationNameKey($skuName);
+            if ($nameKey !== '') {
+                $tiktokByName[$nameKey][] = $index;
+            }
+        }
+
+        $rows = [];
+        $matchedTiktokIndexes = [];
+        $knownShopeeCanonicalSkus = [];
+        $hasUnsafeShopeeSource = false;
+
+        foreach ($normalizedShopeeModels as $shopee) {
+            $target = [
+                'seller_sku' => $shopee['canonical_seller_sku'],
+                'sku_name' => $shopee['name'],
+                'stock_qty' => $shopee['stock_qty'],
+                'image_url' => $shopee['image_url'],
+            ];
+            $canonicalKey = $this->normalizedMarketplaceSellerSku($shopee['canonical_seller_sku']);
+            $hasCanonicalIdentity = $itemId !== ''
+                && $shopee['item_id'] === $itemId
+                && $shopee['model_id'] !== ''
+                && $shopee['name'] !== ''
+                && $this->skuTemplateFragment($shopee['name']) !== '';
+            if ($hasCanonicalIdentity) {
+                $knownShopeeCanonicalSkus[$canonicalKey] = true;
+            }
+            $isInvalidSource = $itemId === ''
+                || $shopee['item_id'] !== $itemId
+                || $shopee['model_id'] === ''
+                || $shopee['name'] === ''
+                || $this->skuTemplateFragment($shopee['name']) === ''
+                || $shopee['image_url'] === '';
+            if ($isInvalidSource) {
+                $hasUnsafeShopeeSource = true;
+                $rows[] = $this->tiktokVariantReconciliationManualRow(
+                    $shopee,
+                    null,
+                    $target,
+                    'Data sumber Shopee belum lengkap atau tidak valid.'
+                );
+                continue;
+            }
+
+            if (($canonicalCounts[$canonicalKey] ?? 0) !== 1) {
+                $hasUnsafeShopeeSource = true;
+                $rows[] = $this->tiktokVariantReconciliationManualRow(
+                    $shopee,
+                    null,
+                    $target,
+                    'Template SKU Shopee duplikat.'
+                );
+                continue;
+            }
+
+            $candidateIndexes = [];
+            $mappingSkuId = $this->tiktokVariantReconciliationMappingSkuId($mappingByModel[$shopee['model_id']] ?? null);
+            if ($mappingSkuId !== '') {
+                $candidateIndexes = $tiktokBySkuId[$mappingSkuId] ?? [];
+                if (count($candidateIndexes) !== 1 || isset($matchedTiktokIndexes[$candidateIndexes[0]])) {
+                    $rows[] = $this->tiktokVariantReconciliationManualRow(
+                        $shopee,
+                        count($candidateIndexes) === 1 ? $normalizedTiktokSkus[$candidateIndexes[0]] : null,
+                        $target,
+                        'Mapping TikTok tidak dapat dipastikan aman.'
+                    );
+                    continue;
+                }
+            } else {
+                foreach ([$shopee['model_sku'], $shopee['canonical_seller_sku']] as $sellerSku) {
+                    $sellerSkuKey = $this->normalizedMarketplaceSellerSku($sellerSku);
+                    foreach ($tiktokBySellerSku[$sellerSkuKey] ?? [] as $candidateIndex) {
+                        if (! isset($matchedTiktokIndexes[$candidateIndex])) {
+                            $candidateIndexes[$candidateIndex] = $candidateIndex;
+                        }
+                    }
+                }
+                $candidateIndexes = array_values($candidateIndexes);
+
+                if ($candidateIndexes === []) {
+                    $nameCandidates = array_values(array_filter(
+                        $tiktokByName[$shopee['name_key']] ?? [],
+                        fn (int $candidateIndex): bool => ! isset($matchedTiktokIndexes[$candidateIndex])
+                    ));
+                    if (($shopeeNameCounts[$shopee['name_key']] ?? 0) !== 1 || count($nameCandidates) > 1) {
+                        $rows[] = $this->tiktokVariantReconciliationManualRow(
+                            $shopee,
+                            null,
+                            $target,
+                            'Pencocokan nama varian ambigu atau TikTok SKU tidak ditemukan.'
+                        );
+                        continue;
+                    }
+                    $candidateIndexes = $nameCandidates;
+                }
+
+                if (count($candidateIndexes) !== 1) {
+                    $rows[] = $this->tiktokVariantReconciliationManualRow(
+                        $shopee,
+                        null,
+                        $target,
+                        'TikTok SKU tidak dapat dicocokkan secara aman.'
+                    );
+                    continue;
+                }
+            }
+
+            $candidateIndex = $candidateIndexes[0];
+            $tiktok = $normalizedTiktokSkus[$candidateIndex];
+            if ($tiktok['sku_id'] === '') {
+                $rows[] = $this->tiktokVariantReconciliationManualRow(
+                    $shopee,
+                    $tiktok,
+                    $target,
+                    'TikTok SKU tidak memiliki ID yang valid.'
+                );
+                continue;
+            }
+
+            $matchedTiktokIndexes[$candidateIndex] = true;
+            $actions = [];
+            if ($this->normalizedMarketplaceSellerSku($shopee['model_sku']) !== $canonicalKey) {
+                $actions[] = 'shopee_sku_outdated';
+            }
+            if ($this->normalizedMarketplaceSellerSku($tiktok['seller_sku']) !== $canonicalKey
+                || $this->tiktokVariantReconciliationNameKey($tiktok['sku_name']) !== $shopee['name_key']
+                || $tiktok['stock_qty'] !== $shopee['stock_qty']
+                || trim($tiktok['image_url']) !== $shopee['image_url']) {
+                $actions[] = 'tiktok_variant_outdated';
+            }
+
+            $classification = $actions === []
+                ? 'no_change'
+                : (in_array('tiktok_variant_outdated', $actions, true) ? 'tiktok_variant_outdated' : 'shopee_sku_outdated');
+            $rows[] = [
+                'shopee_model_id' => $shopee['model_id'],
+                'tiktok_sku_id' => $tiktok['sku_id'],
+                'current' => [
+                    'shopee' => $shopee,
+                    'tiktok' => $tiktok,
+                ],
+                'target' => $target,
+                'classification' => $classification,
+                'actions' => $actions,
+                'message' => $actions === [] ? 'Data Shopee dan TikTok sudah sesuai.' : 'Perubahan aman dapat disiapkan dari data Shopee.',
+            ];
+        }
+
+        foreach ($normalizedTiktokSkus as $index => $tiktok) {
+            if (isset($matchedTiktokIndexes[$index])) {
+                continue;
+            }
+
+            $sellerSkuKey = $this->normalizedMarketplaceSellerSku($tiktok['seller_sku']);
+            if ($tiktok['sku_id'] === '' || $sellerSkuKey === '') {
+                $rows[] = $this->tiktokVariantReconciliationManualRow(
+                    null,
+                    $tiktok,
+                    null,
+                    'Data TikTok SKU belum lengkap atau tidak valid.'
+                );
+                continue;
+            }
+
+            if (! $this->isSelectedShopeeOwnedTiktokSku($tiktok['seller_sku'], $itemId)
+                || isset($knownShopeeCanonicalSkus[$sellerSkuKey])
+                || $hasUnsafeShopeeSource) {
+                $rows[] = $this->tiktokVariantReconciliationManualRow(
+                    null,
+                    $tiktok,
+                    null,
+                    'Kepemilikan TikTok SKU tidak aman untuk perubahan otomatis.'
+                );
+                continue;
+            }
+
+            $rows[] = [
+                'shopee_model_id' => null,
+                'tiktok_sku_id' => $tiktok['sku_id'],
+                'current' => [
+                    'shopee' => null,
+                    'tiktok' => $tiktok,
+                ],
+                'target' => null,
+                'classification' => 'tiktok_orphan',
+                'actions' => ['tiktok_orphan'],
+                'message' => 'TikTok SKU memiliki prefix item Shopee terpilih tetapi tidak memiliki model Shopee aktif.',
+            ];
+        }
+
+        $summary = [
+            'total' => count($rows),
+            'manual_review' => 0,
+            'tiktok_orphan' => 0,
+            'no_change' => 0,
+            'shopee_sku_outdated' => 0,
+            'tiktok_variant_outdated' => 0,
+        ];
+        foreach ($rows as $row) {
+            if (in_array($row['classification'], ['manual_review', 'tiktok_orphan', 'no_change'], true)) {
+                $summary[$row['classification']]++;
+            }
+            foreach ($row['actions'] as $action) {
+                if (in_array($action, ['shopee_sku_outdated', 'tiktok_variant_outdated'], true)) {
+                    $summary[$action]++;
+                }
+            }
+        }
+
+        return [
+            'rows' => $rows,
+            'summary' => $summary,
+            'revision_source' => 'shopee',
+        ];
     }
 
     private function normalizedMarketplaceSellerSku(mixed $value): string

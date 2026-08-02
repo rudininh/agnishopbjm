@@ -292,6 +292,112 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkSubmitTiktokMissingVariants', $submit->getActionName());
     }
 
+    public function test_tiktok_variant_reconciliation_routes_are_registered(): void
+    {
+        $routes = collect(app('router')->getRoutes()->getRoutes());
+
+        $this->assertNotNull($routes->first(fn ($route) => in_array('GET', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/variant-reconciliation/products'));
+        $this->assertNotNull($routes->first(fn ($route) => in_array('GET', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/variant-reconciliation/preview'));
+        $this->assertNotNull($routes->first(fn ($route) => in_array('POST', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/variant-reconciliation/submit'));
+    }
+
+    public function test_variant_reconciliation_classifies_outdated_sku_and_tiktok_differences(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[
+            ['model_id' => 'model-1', 'name' => 'Rose Gold', 'model_sku' => 'INT-100-OLD', 'stock_qty' => 5, 'image_url' => '/cached-images/rose.jpg'],
+        ], [
+            ['sku_id' => 'tt-1', 'seller_sku' => 'INT-100-OLD', 'sku_name' => 'Old', 'stock_qty' => 1, 'image_url' => 'tos/old'],
+        ], '100']);
+
+        $this->assertSame('INT-100-ROSE-GOLD', $result['rows'][0]['target']['seller_sku']);
+        $this->assertContains('shopee_sku_outdated', $result['rows'][0]['actions']);
+        $this->assertContains('tiktok_variant_outdated', $result['rows'][0]['actions']);
+    }
+
+    public function test_tiktok_variant_reconciliation_classifies_duplicate_templates_as_manual_review(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[
+            ['model_id' => 'model-1', 'name' => 'Rose Gold', 'model_sku' => 'LEGACY-1', 'stock_qty' => 5, 'image_url' => '/cached-images/rose.jpg'],
+            ['model_id' => 'model-2', 'name' => 'Rose / Gold', 'model_sku' => 'LEGACY-2', 'stock_qty' => 5, 'image_url' => '/cached-images/rose-two.jpg'],
+        ], [], '100']);
+
+        $this->assertSame(['manual_review', 'manual_review'], array_column($result['rows'], 'classification'));
+        $this->assertSame(['INT-100-ROSE-GOLD', 'INT-100-ROSE-GOLD'], array_column(array_column($result['rows'], 'target'), 'seller_sku'));
+    }
+
+    public function test_tiktok_variant_reconciliation_classifies_ambiguous_name_matches_as_manual_review(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[
+            ['model_id' => 'model-1', 'name' => 'Red', 'model_sku' => 'LEGACY-RED', 'stock_qty' => 5, 'image_url' => '/cached-images/red.jpg'],
+        ], [
+            ['sku_id' => 'tt-red-1', 'seller_sku' => 'OTHER-RED-1', 'sku_name' => 'Red', 'stock_qty' => 5, 'image_url' => 'tos/red-1'],
+            ['sku_id' => 'tt-red-2', 'seller_sku' => 'OTHER-RED-2', 'sku_name' => 'Red', 'stock_qty' => 5, 'image_url' => 'tos/red-2'],
+        ], '100']);
+
+        $this->assertSame('manual_review', $result['rows'][0]['classification']);
+        $this->assertSame(['manual_review'], $result['rows'][0]['actions']);
+    }
+
+    public function test_tiktok_variant_reconciliation_classifies_only_selected_prefix_orphans(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[], [
+            ['sku_id' => 'tt-owned', 'seller_sku' => 'INT-100-STALE', 'sku_name' => 'Stale', 'stock_qty' => 1, 'image_url' => 'tos/stale'],
+            ['sku_id' => 'tt-foreign', 'seller_sku' => 'INT-999-FOREIGN', 'sku_name' => 'Foreign', 'stock_qty' => 1, 'image_url' => 'tos/foreign'],
+        ], '100']);
+
+        $this->assertSame('tiktok_orphan', $result['rows'][0]['classification']);
+        $this->assertSame('manual_review', $result['rows'][1]['classification']);
+        $this->assertNotContains('tiktok_orphan', $result['rows'][1]['actions']);
+    }
+
+    public function test_tiktok_variant_reconciliation_does_not_orphan_a_tiktok_sku_for_image_missing_shopee_model(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[
+            ['model_id' => 'model-1', 'name' => 'Red', 'model_sku' => 'INT-100-RED', 'stock_qty' => 5, 'image_url' => ''],
+        ], [
+            ['sku_id' => 'tt-red', 'seller_sku' => 'INT-100-RED', 'sku_name' => 'Red', 'stock_qty' => 5, 'image_url' => 'tos/red'],
+        ], '100']);
+
+        $this->assertSame('manual_review', $result['rows'][0]['classification']);
+        $this->assertSame('manual_review', $result['rows'][1]['classification']);
+        $this->assertNotContains('tiktok_orphan', $result['rows'][1]['actions']);
+    }
+
+    public function test_tiktok_variant_reconciliation_treats_mismatched_shopee_product_as_manual_review(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[
+            ['item_id' => '999', 'model_id' => 'model-1', 'name' => 'Red', 'model_sku' => 'INT-100-RED', 'stock_qty' => 5, 'image_url' => '/cached-images/red.jpg'],
+        ], [
+            ['sku_id' => 'tt-red', 'seller_sku' => 'INT-100-RED', 'sku_name' => 'Red', 'stock_qty' => 5, 'image_url' => '/cached-images/red.jpg'],
+        ], '100']);
+
+        $this->assertSame('manual_review', $result['rows'][0]['classification']);
+        $this->assertSame('manual_review', $result['rows'][1]['classification']);
+        $this->assertNotContains('tiktok_orphan', $result['rows'][1]['actions']);
+    }
+
+    public function test_tiktok_variant_reconciliation_keeps_unsafe_associations_manual_review(): void
+    {
+        $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[
+            ['model_id' => 'model-1', 'name' => 'Red', 'model_sku' => 'LEGACY-RED', 'stock_qty' => 5, 'image_url' => ''],
+            ['model_id' => '', 'name' => 'Blue', 'model_sku' => 'LEGACY-BLUE', 'stock_qty' => 4, 'image_url' => '/cached-images/blue.jpg'],
+            ['model_id' => 'model-3', 'name' => 'Black', 'model_sku' => 'LEGACY-BLACK', 'stock_qty' => 3, 'image_url' => '/cached-images/black.jpg'],
+        ], [
+            ['sku_id' => 'tt-red-1', 'seller_sku' => 'OTHER-RED-1', 'sku_name' => 'Red', 'stock_qty' => 5, 'image_url' => 'tos/red-1'],
+            ['sku_id' => 'tt-red-2', 'seller_sku' => 'OTHER-RED-2', 'sku_name' => 'Red', 'stock_qty' => 5, 'image_url' => 'tos/red-2'],
+            ['sku_id' => 'tt-foreign', 'seller_sku' => 'INT-999-FOREIGN', 'sku_name' => 'Foreign', 'stock_qty' => 1, 'image_url' => 'tos/foreign'],
+        ], '100']);
+
+        $this->assertSame('manual_review', $result['rows'][0]['classification']);
+        $this->assertSame('manual_review', $result['rows'][1]['classification']);
+        $this->assertSame('manual_review', $result['rows'][2]['classification']);
+        $this->assertSame('manual_review', $result['rows'][3]['classification']);
+        $this->assertNotContains('tiktok_orphan', $result['rows'][3]['actions']);
+    }
+
     public function test_bulk_tiktok_missing_variant_manual_price_must_be_positive(): void
     {
         $this->postJson('/api/tiktok/bulk-missing-variants/submit', [
