@@ -304,6 +304,15 @@ class OmnichannelControllerTest extends TestCase
             && $route->uri() === 'api/tiktok/variant-reconciliation/submit'));
     }
 
+    public function test_tiktok_variant_reconciliation_canonical_sku_reuses_shopee_template_normalizer(): void
+    {
+        $canonical = $this->invokeControllerMethod('canonicalShopeeVariantSellerSku', ['100', 'Rose_Gold']);
+        $template = $this->invokeControllerMethod('buildShopeeTemplateSellerSku', ['100', 'Rose_Gold']);
+
+        $this->assertSame('INT-100-ROSE_GOLD', $canonical);
+        $this->assertSame($template, $canonical);
+    }
+
     public function test_variant_reconciliation_classifies_outdated_sku_and_tiktok_differences(): void
     {
         $result = $this->invokeControllerMethod('classifyTiktokVariantReconciliation', [[

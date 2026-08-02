@@ -2886,16 +2886,9 @@ class OmnichannelController extends Controller
             ->values();
     }
 
-    private function skuTemplateFragment(string $variantName): string
-    {
-        $fragment = preg_replace('/[^A-Z0-9]+/', '-', strtoupper(trim($variantName))) ?? '';
-
-        return trim($fragment, '-');
-    }
-
     private function canonicalShopeeVariantSellerSku(string $itemId, string $variantName): string
     {
-        return 'INT-'.trim($itemId).'-'.$this->skuTemplateFragment($variantName);
+        return $this->buildShopeeTemplateSellerSku($itemId, $variantName);
     }
 
     private function isSelectedShopeeOwnedTiktokSku(string $sellerSku, string $itemId): bool
@@ -3050,7 +3043,7 @@ class OmnichannelController extends Controller
                 && $shopee['item_id'] === $itemId
                 && $shopee['model_id'] !== ''
                 && $shopee['name'] !== ''
-                && $this->skuTemplateFragment($shopee['name']) !== '';
+                && $this->sanitizeSkuFragment($shopee['name']) !== '';
             if ($hasCanonicalIdentity) {
                 $knownShopeeCanonicalSkus[$canonicalKey] = true;
             }
@@ -3058,7 +3051,7 @@ class OmnichannelController extends Controller
                 || $shopee['item_id'] !== $itemId
                 || $shopee['model_id'] === ''
                 || $shopee['name'] === ''
-                || $this->skuTemplateFragment($shopee['name']) === ''
+                || $this->sanitizeSkuFragment($shopee['name']) === ''
                 || $shopee['image_url'] === '';
             if ($isInvalidSource) {
                 $hasUnsafeShopeeSource = true;
