@@ -613,6 +613,47 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('Produk Anomali', $controller->selectedReconciliationProduct('200', '800')['product_name']);
     }
 
+    public function test_tiktok_variant_reconciliation_maps_mapping_only_groups_to_anomaly_candidates(): void
+    {
+        $controller = new class extends OmnichannelController {
+            protected function tiktokVariantReconciliationDetectedAnomalyGroups(): Collection
+            {
+                return collect([
+                    [
+                        'shopee_item_id' => '54256579274',
+                        'tiktok_product_id' => '1734744416845662142',
+                        'product_name' => 'Kalisha',
+                        'mapping_only_variants' => [
+                            ['shopee_model_id' => '1'],
+                            ['shopee_model_id' => '2'],
+                        ],
+                    ],
+                    [
+                        'shopee_item_id' => '300',
+                        'tiktok_product_id' => '700',
+                        'product_name' => 'Tanpa Anomali',
+                        'mapping_only_variants' => [],
+                    ],
+                ]);
+            }
+
+            public function detectedAnomalyProducts(): array
+            {
+                return $this->tiktokVariantReconciliationDetectedAnomalyProducts();
+            }
+        };
+
+        $products = $controller->detectedAnomalyProducts();
+
+        $this->assertSame([[
+            'shopee_item_id' => '54256579274',
+            'tiktok_product_id' => '1734744416845662142',
+            'product_name' => 'Kalisha',
+            'anomaly_candidate' => true,
+            'detected_variant_count' => 2,
+        ]], $products);
+    }
+
     public function test_variant_reconciliation_preview_rejects_unlinked_ids_before_refresh(): void
     {
         $controller = new class extends OmnichannelController {

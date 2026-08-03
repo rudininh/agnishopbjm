@@ -222,14 +222,7 @@ class OmnichannelController extends Controller
 
     protected function tiktokVariantReconciliationDetectedAnomalyProducts(): array
     {
-        if (! Schema::hasTable('stock_master')
-            || ! Schema::hasTable('shopee_product')
-            || ! Schema::hasTable('shopee_product_model')
-            || ! Schema::hasTable('tiktok_products')) {
-            return [];
-        }
-
-        return $this->tiktokBulkCandidateGroups(true)
+        return $this->tiktokVariantReconciliationDetectedAnomalyGroups()
             ->filter(fn (array $group): bool => collect($group['mapping_only_variants'] ?? [])->isNotEmpty())
             ->map(fn (array $group): array => [
                 'shopee_item_id' => trim((string) ($group['shopee_item_id'] ?? '')),
@@ -239,6 +232,18 @@ class OmnichannelController extends Controller
                 'detected_variant_count' => collect($group['mapping_only_variants'] ?? [])->count(),
             ])
             ->all();
+    }
+
+    protected function tiktokVariantReconciliationDetectedAnomalyGroups(): Collection
+    {
+        if (! Schema::hasTable('stock_master')
+            || ! Schema::hasTable('shopee_product')
+            || ! Schema::hasTable('shopee_product_model')
+            || ! Schema::hasTable('tiktok_products')) {
+            return collect();
+        }
+
+        return $this->tiktokBulkCandidateGroups(true);
     }
 
     protected function refreshTiktokVariantReconciliationShopeeItem(string $shopeeItemId): array
