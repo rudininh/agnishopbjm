@@ -31,27 +31,27 @@
 - `tiktokVariantReconciliationProducts()` and `tiktokVariantReconciliationLinkedProductChoice()` consume `tiktokVariantReconciliationProductChoices()`.
 - Candidate row shape: `shopee_item_id`, `tiktok_product_id`, `product_name`, `anomaly_candidate: true`, `detected_variant_count: int`.
 
-- [ ] **Step 1: Write a failing controller test for a detected mapping-only pair**
+- [x] **Step 1: Write a failing controller test for a detected mapping-only pair**
 
 Add a test-only `OmnichannelController` subclass that returns one normal linked pair and one mapping-only candidate pair. Call `tiktokVariantReconciliationProducts()` and assert that the candidate is first, has `anomaly_candidate: true`, retains its detected count, and that the existing linked pair remains in the response.
 
-- [ ] **Step 2: Run the focused test to verify RED**
+- [x] **Step 2: Run the focused test to verify RED**
 
 Run: `php vendor\bin\phpunit --filter test_tiktok_variant_reconciliation_products_include_detected_anomaly_candidates`
 
 Expected: FAIL because candidate-only pairs are absent from the current products endpoint.
 
-- [ ] **Step 3: Implement the minimal protected discovery and merge helpers**
+- [x] **Step 3: Implement the minimal protected discovery and merge helpers**
 
 Map only non-empty `mapping_only_variants` groups into candidate product rows. Merge them with `tiktokVariantReconciliationLinkedProducts()`, preserve product names, de-duplicate by IDs, sort candidates before normal choices, and have the selected-pair validator read the merged list.
 
-- [ ] **Step 4: Run focused backend tests to verify GREEN**
+- [x] **Step 4: Run focused backend tests to verify GREEN**
 
 Run: `php vendor\bin\phpunit --filter tiktok_variant_reconciliation`
 
 Expected: the new candidate test and existing reconciliation tests pass.
 
-- [ ] **Step 5: Commit the backend discovery unit**
+- [x] **Step 5: Commit the backend discovery unit**
 
 Run `git diff --check`, then commit the controller and PHPUnit test with message `fix: discover unmapped marketplace anomaly pairs`.
 
@@ -65,25 +65,25 @@ Run `git diff --check`, then commit the controller and PHPUnit test with message
 - The option text displays a compact detected-count marker for candidate-only choices.
 - `loadPreview()` remains unchanged as the only detailed fresh source request.
 
-- [ ] **Step 1: Inspect the existing page's loading and error state**
+- [x] **Step 1: Inspect the existing page's loading and error state**
 
 Confirm that product choice load errors and preview errors share the existing `notice` state, and that `loading` prevents accidental duplicate requests.
 
-- [ ] **Step 2: Implement the smallest UI behavior change**
+- [x] **Step 2: Implement the smallest UI behavior change**
 
 Sort candidates before existing linked products, add a marker such as `Anomali terdeteksi: N varian` to their product option, then select and analyze only the first candidate after the list is loaded. Preserve manual selection and `Analisis Ulang` behavior.
 
-- [ ] **Step 3: Build the frontend**
+- [x] **Step 3: Build the frontend**
 
 Run: `npm run build`
 
 Expected: Vite finishes with exit code 0.
 
-- [ ] **Step 4: Publish the built assets**
+- [x] **Step 4: Publish the built assets**
 
 Copy the generated `frontend/dist/index.html` and `frontend/dist/assets/*` into `backend/public` using the established PowerShell copy pattern.
 
-- [ ] **Step 5: Commit the UI and published assets**
+- [x] **Step 5: Commit the UI and published assets**
 
 Run `git diff --check`, then commit the Vue page and generated `backend/public` files with message `feat: auto-load marketplace anomaly candidates`.
 
@@ -92,7 +92,7 @@ Run `git diff --check`, then commit the Vue page and generated `backend/public` 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-03-marketplace-reconciliation-anomaly-discovery.md`
 
-- [ ] **Step 1: Run the full backend suite**
+- [x] **Step 1: Run the full backend suite**
 
 Run: `php vendor\bin\phpunit`
 
