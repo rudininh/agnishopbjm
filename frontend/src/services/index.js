@@ -166,7 +166,9 @@ export const omnichannelService = {
   },
 
   tiktokVariantReconciliationProducts() { return api.get('/tiktok/variant-reconciliation/products') },
+  tiktokVariantReconciliationOverview() { return api.get('/tiktok/variant-reconciliation/overview') },
   tiktokVariantReconciliationPreview(params) { return api.get('/tiktok/variant-reconciliation/preview', { params }) },
+  tiktokVariantReconciliationSubmit(data) { return api.post('/tiktok/variant-reconciliation/submit', data) },
   prepareMissingVariant(data) {
     return api.post('/sku-mapping/prepare-missing-variant', data)
   },

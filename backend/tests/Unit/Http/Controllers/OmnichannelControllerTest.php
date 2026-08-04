@@ -530,6 +530,57 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame($template, $canonical);
     }
 
+    public function test_global_reconciliation_overview_lists_explicit_variant_anomalies(): void
+    {
+        $controller = new class extends OmnichannelController {
+            protected function tiktokVariantReconciliationOverviewProducts(): array
+            {
+                return [[
+                    'shopee_item_id' => '100',
+                    'tiktok_product_id' => '900',
+                    'product_name' => 'Produk Merah',
+                    'shopee_models' => [
+                        ['model_id' => 'model-1', 'name' => 'Merah', 'model_sku' => 'INT-100-MERAH', 'stock_qty' => 5, 'image_url' => '/cached-images/red.jpg'],
+                        ['model_id' => 'model-2', 'name' => 'Biru', 'model_sku' => 'LEGACY-BIRU', 'stock_qty' => 3, 'image_url' => '/cached-images/blue.jpg'],
+                    ],
+                    'tiktok_skus' => [
+                        ['sku_id' => 'sku-1', 'seller_sku' => 'INT-100-OLD', 'sku_name' => 'Merah', 'stock_qty' => 1, 'image_url' => 'https://cdn.test/old-red.jpg'],
+                        ['sku_id' => 'sku-2', 'seller_sku' => 'INT-100-BIRU', 'sku_name' => 'Biru', 'stock_qty' => 3, 'image_url' => '/cached-images/blue.jpg'],
+                        ['sku_id' => 'sku-3', 'seller_sku' => 'INT-100-HAPUS', 'sku_name' => 'Hapus', 'stock_qty' => 1, 'image_url' => 'https://cdn.test/hapus.jpg'],
+                    ],
+                ]];
+            }
+        };
+
+        $overview = $controller->tiktokVariantReconciliationOverview()->getData(true);
+
+        $this->assertSame(1, $overview['summary']['tiktok_sku_mismatch']);
+        $this->assertSame(1, $overview['summary']['shopee_sku_template_mismatch']);
+        $this->assertSame(1, $overview['summary']['tiktok_image_mismatch']);
+        $this->assertSame(1, $overview['summary']['tiktok_stock_mismatch']);
+        $this->assertSame(1, $overview['summary']['tiktok_orphan']);
+    }
+
+    public function test_global_reconciliation_submit_rejects_stale_revision_before_mutation(): void
+    {
+        $controller = new class extends OmnichannelController {
+            protected function tiktokVariantReconciliationOverviewProducts(): array
+            {
+                return [];
+            }
+        };
+
+        $response = $controller->submitTiktokVariantReconciliation(
+            \Illuminate\Http\Request::create('/api/tiktok/variant-reconciliation/submit', 'POST', [
+                'revision' => 'stale',
+                'row_keys' => ['100:900:model-1:sku-1'],
+            ])
+        );
+
+        $this->assertSame(409, $response->getStatusCode());
+        $this->assertSame('stale_revision', $response->getData(true)['status']);
+    }
+
     public function test_variant_reconciliation_preview_returns_only_selected_linked_product_rows(): void
     {
         $snapshot = $this->invokeControllerMethod('buildTiktokVariantReconciliationPreview', [[

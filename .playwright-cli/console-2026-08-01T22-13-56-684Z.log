@@ -1,0 +1,1 @@
+[     117ms] [ERROR] Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html". Strict MIME type checking is enforced for module scripts per HTML spec. @ http://agnishopbjm-laravel.test/assets/index-DgrPzqk8.js:0

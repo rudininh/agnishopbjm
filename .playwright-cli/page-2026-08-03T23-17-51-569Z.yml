@@ -1,0 +1,114 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Agni Shop Banjarmasin Agni Shop Omnichannel" [ref=e5] [cursor=pointer]:
+      - /url: /dashboard
+      - img "Agni Shop Banjarmasin" [ref=e6]
+      - generic [ref=e7]:
+        - strong [ref=e8]: Agni Shop
+        - generic [ref=e9]: Omnichannel
+    - navigation [ref=e10]:
+      - link "Dashboard" [ref=e11] [cursor=pointer]:
+        - /url: /dashboard
+      - link "Kelola Produk Mobile" [ref=e12] [cursor=pointer]:
+        - /url: /mobile/kelola-produk
+      - button "Produk +" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: Produk
+        - strong [ref=e16]: +
+      - link "POS Offline" [ref=e17] [cursor=pointer]:
+        - /url: /pos-offline
+      - generic [ref=e18]:
+        - generic [ref=e19]: Marketplace
+        - link "Sinkronisasi Otomatis" [ref=e20] [cursor=pointer]:
+          - /url: /marketplace/auto-sync
+        - link "Import Marketplace" [ref=e21] [cursor=pointer]:
+          - /url: /marketplace/import
+        - link "Cetak Resi" [ref=e22] [cursor=pointer]:
+          - /url: /marketplace/cetak-resi
+        - link "Anomali Stok" [ref=e23] [cursor=pointer]:
+          - /url: /marketplace/stock-anomalies
+  - region "Order sync terbaru" [ref=e24]:
+    - generic [ref=e25]:
+      - strong [ref=e26]: Order Sync
+      - generic [ref=e261]: Live
+    - generic [ref=e44]:
+      - generic [ref=e45]:
+        - generic [ref=e46]: Time
+        - generic [ref=e47]: 04 Agu 2026, 07.14
+      - generic [ref=e48]:
+        - generic [ref=e49]: Runner
+        - generic [ref=e50]: STB
+        - generic [ref=e51]: aml-s9xx-box
+      - generic [ref=e52]:
+        - generic [ref=e53]: Jenis
+        - generic [ref=e54]: Shopee Order
+      - generic [ref=e55]:
+        - generic [ref=e56]: Target
+        - generic [ref=e57]: TikTok
+      - generic [ref=e58]:
+        - generic [ref=e59]: Order/SKU
+        - generic [ref=e60]: 260804ECSQYX7S
+      - generic [ref=e61]:
+        - generic [ref=e62]: Old Stock
+        - generic [ref=e63]: "-"
+      - generic [ref=e64]:
+        - generic [ref=e65]: New Stock
+        - generic [ref=e66]: "-"
+      - generic [ref=e67]:
+        - generic [ref=e68]: Status
+        - generic [ref=e69]: success
+      - generic [ref=e70]:
+        - generic [ref=e71]: Message
+        - generic [ref=e72]: Shopee order 260804ECSQYX7S POLL_CANCEL_ORDER selesai.
+  - main [ref=e29]:
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - paragraph [ref=e33]: Marketplace
+          - heading "Sinkronisasi Varian Marketplace" [level=1] [ref=e34]
+          - generic [ref=e35]: Shopee menjadi sumber SKU, nama, gambar, dan stok varian.
+        - button "Analisis Ulang" [ref=e74] [cursor=pointer]
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - text: Produk terhubung
+          - combobox "Produk terhubung" [ref=e39]:
+            - option "Pilih produk"
+            - 'option "HIJAB INSTAN SIZE M BERGO HUMA BAHAN KAOS RAYON COOLTECH MELEYOT PASHMINA TOP BISA EMPAT MODEL Kerudung Muslim | Shopee 55307930257 | TikTok 1735621806681065406 | Anomali terdeteksi: 2 varian"'
+            - 'option "Hijab Pashmina Ceruty Premium Motif Turki Adem 180x75 | Shopee 46458724642 | TikTok 1735630563631663038 | Anomali terdeteksi: 2 varian"'
+            - 'option "KALISHA X MIMA - Kerudung Bergo Jilbab Instan Kaos Rayon Size S Hijab Instan Non Pet Vanya | Shopee 54256579274 | TikTok 1734744416845662142 | Anomali terdeteksi: 4 varian" [selected]'
+            - 'option "Paper Bag Motif Daun Premium dan paper bag motif | Shopee 40255906610 | TikTok 1734744374554101694 | Anomali terdeteksi: 1 varian"'
+            - 'option "Paris jadul Premium Logo AYU DYAH ANDARI KW (By Agni Shop Banjarmasin) | Shopee 52100206786 | TikTok 1735629034787735486 | Anomali terdeteksi: 1 varian"'
+            - 'option "PARIS LEGEND HIJABERIES Segiempat Paris Premium Ori FREE POUCH Segiempat Logo Metal Hijab Segiempat Terbaru Paris Premium | Shopee 40908729245 | TikTok 1732272662367078334 | Anomali terdeteksi: 16 varian"'
+            - option "(Agni) Ciput Dagu Lubang Telinga Spandex Ciput Dagu Anbu Antibudeg Bolong Telinga Ciput Dagu Anti Budeg Bolong Telinga Cantik | Shopee 27420849702 | TikTok 1733054444791367614"
+            - option "(Azara Gratis Box Tali) AZARA MOTIF KEMASAN BOX Metal Logo+Hangtag Pinggir Laser Cut Printing | Shopee 57105980463 | TikTok 1734744375191308222"
+            - option "(Azara Paris) Azara Hijab Segi Empat Sisi Polos Azara Paris Packing Pouch Metal Logoa | Shopee 44008248534 | TikTok 1734743683493955518"
+            - option "(Free Pouch Logo Hijab Agni) Hijab Segi Empat Polos Paris Premium Jahit Tepi Metal Logo By Agni Shop Banjarmasin | Shopee 27273716602 | TikTok 1734744200924596158"
+            - option "(FREE POUCH) - HIJAB SEGIEMPAT BUCKLE SCARVES POLOS / BUCKLE POLOS NECI 4 SISI / SEGI EMPAT PARIS BUCKLE AZARA LOGO POUCH | Shopee 27474912433 | TikTok 1732285402462652350"
+            - option "(Free Pouch) Hijab Seragam OSKARA Motif Plat Logo Pouch LC AZARA Superfashion | Shopee 44450879649 | TikTok 1734744316085962686"
+            - option "(FREE POUCH) SEGI EMPAT JUMBO ( 130 X 130 ) SYARI LASERCUT OSKARA AZARA | Shopee 44025837666 | TikTok 1735919888814802878"
+            - option "(Free Pouch) Segi Empat Voal Lasercut Azara Oskara Premium | Shopee 29371249530 | TikTok 1732308968430340030"
+            - option "(Free Tabung) Hijab Buckle Segiempat Motif Bahan Voal Sublim Premium Ukuran Standar 110*110 by Azara | Shopee 40815036716 | TikTok 1733003957399750590"
+            - option "(Gratis Box Agni Shop) Hijab Paris Japan Segi Empat Jilbab Paris Jadul Bahan Premium | Shopee 51261515282 | TikTok 1735892505243649982"
+            - option "(Gratis Box atau Free Box) Hijab Buckle Box Segi Empat Motif || Jilbab Motif Buckle | Shopee 28383781340 | TikTok 1735630709325531070"
+            - option "(GRATIS GLOSY BOX TALI) Hijab Buckle Box Segi Empat Motif || Jilbab Motif Buckle | Shopee 43062400632 | TikTok 1735606307260106686"
+            - option "(Gratis Tas) SEGI EMPAT BUCKLE MOTIF PACKING BAG ATAU TAS METAL LOGO LASER CUT | Shopee 56258939039 | TikTok 1735627376299247550"
+            - option "(Hanya Box) Khusus Tambahan Box Buckle Tali | Shopee 47552856601 | TikTok 1735630005210286014"
+            - option "AGAPE - Legging Polos wanita / Legging HW Import Polos / legging JUMBO POLOS fit to 90kg - leg 901 / Legging HW Basic Polos / legging premium / legging fit to xxl xxxl / legging import / leging murah / leging wanita / leging import | Shopee 29473089440 | TikTok 1734744257433667518"
+            - option "Agni~ Segiempat Paris Jadul Bordir Pita Besar Tasel/ Paris Jadoel Pita Coquetta Besar Permata Tasel | Shopee 42808291639 | TikTok 1732276777334310846"
+            - option "Aurora Square - Scarf Hijab Gradasi Two Tone 2 Warna Lasercut Segiempat Bahan Voal Premium | Shopee 42731569776 | TikTok 1736019513316771774"
+            - option "Azara Hijab Segi Empat Polos Paris Packing Pouch Metal Logo | Shopee 24340156931 | TikTok 1732272903733872574"
+            - option "Bella square hijab segi empat anti letoy bahan polycotton | Shopee 29120848973 | TikTok 1734744376427186110"
+            - option "Bergo Hamidah Akrilik Jersey / Hijab Instan Menutup Dada Ukuran L | Shopee 28971256091 | TikTok 1734744404463617982"
+            - option "Bergo Hamidah Sporty Size M//Hijab Instan Jersey Korea Size M Ped Nadzira Hijab | Shopee 29435804514 | TikTok 1733288272623863742"
+            - option "Ciput Anti Budeg Lubang Telinga / Ciput Anti Budeg Anti Geser / Ciput Inner Arab anti sakit Kerudung Dalaman Wanita Jilbab | Shopee 24540073694 | TikTok 1732276679092438974"
+            - option "Ciput marsha/iner marsha ped/ciput topi ped/marsha ped Ciput Marsya Spandex Premium | Shopee 26673344532 | TikTok 1734744315783120830"
+            - option "gamis lebaran atau kondangan muslimah dengan bahan ceruty baby dol premium, nyaman adem saat dipakai | Shopee 29393818388 | TikTok 1734744316543469502"
+            - option "HARGA GROSIR (Free Box) Hijab Buckle Box Segi Empat Motif || Jilbab Motif Buckle | Shopee 43960206756 | TikTok 1734744374847899582"
+            - option "HASTI - Hijab Instan Jisoo Plus Inner 2in1 Size L Kaos Rayon Airflow | Shopee 56810959585 | TikTok 1735725575121700798"
+            - option "HERSCARVES BOX / Hijab Segiempat Motif / Bahan Pollycotton | Shopee 46461341420 | TikTok 1735893185493632958"
+            - option "Hijab Bergo Hamidah Size M Label Akrilik Gold Menutup Dada Bahan Jersey premium Pada Busa Kerudung Lembut Syari Instan Renda Sport Muslim Panjang Casual Nyaman Adem | Shopee 28220665012 | TikTok 1734744293751228350"
+            - option "Hijab Bergo Instan AMEL Hyget L Standar daily | Shopee 28785809194 | TikTok 1734744375389161406"
+            - option "Hijab Instan Bergo MOZA Kaos Rayon size M | Shopee 41873847316 | TikTok 1733054384621455294"
+            - option "HIJAB Instan Jersey Oval Inner Tutup Leher|| HIJAB Pashmina Instan Jersey Oval Plus Inner | Shopee 28525635095 | TikTok 1733286021309892542"
+        - generic [ref=e40]:
+          - strong [ref=e41]: 0 varian dianalisis
+          - button "Sinkronkan Semua Anomali" [disabled] [ref=e42]

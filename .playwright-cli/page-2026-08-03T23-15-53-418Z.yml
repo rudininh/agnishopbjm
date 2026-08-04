@@ -1,0 +1,49 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Agni Shop Banjarmasin Agni Shop Omnichannel" [ref=e5] [cursor=pointer]:
+      - /url: /dashboard
+      - img "Agni Shop Banjarmasin" [ref=e6]
+      - generic [ref=e7]:
+        - strong [ref=e8]: Agni Shop
+        - generic [ref=e9]: Omnichannel
+    - navigation [ref=e10]:
+      - link "Dashboard" [ref=e11] [cursor=pointer]:
+        - /url: /dashboard
+      - link "Kelola Produk Mobile" [ref=e12] [cursor=pointer]:
+        - /url: /mobile/kelola-produk
+      - button "Produk +" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: Produk
+        - strong [ref=e16]: +
+      - link "POS Offline" [ref=e17] [cursor=pointer]:
+        - /url: /pos-offline
+      - generic [ref=e18]:
+        - generic [ref=e19]: Marketplace
+        - link "Sinkronisasi Otomatis" [ref=e20] [cursor=pointer]:
+          - /url: /marketplace/auto-sync
+        - link "Import Marketplace" [ref=e21] [cursor=pointer]:
+          - /url: /marketplace/import
+        - link "Cetak Resi" [ref=e22] [cursor=pointer]:
+          - /url: /marketplace/cetak-resi
+        - link "Anomali Stok" [ref=e23] [cursor=pointer]:
+          - /url: /marketplace/stock-anomalies
+  - region "Order sync terbaru" [ref=e24]:
+    - generic [ref=e25]:
+      - strong [ref=e26]: Order Sync
+      - generic [ref=e27]: Updating...
+    - generic [ref=e28]: Belum ada histori order sync.
+  - main [ref=e29]:
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - paragraph [ref=e33]: Marketplace
+          - heading "Sinkronisasi Varian Marketplace" [level=1] [ref=e34]
+          - generic [ref=e35]: Shopee menjadi sumber SKU, nama, gambar, dan stok varian.
+        - button "Memuat..." [disabled] [ref=e36]
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - text: Produk terhubung
+          - combobox "Produk terhubung" [disabled] [ref=e39]:
+            - option "Pilih produk" [selected]
+        - generic [ref=e40]:
+          - strong [ref=e41]: 0 varian dianalisis
+          - button "Sinkronkan Semua Anomali" [disabled] [ref=e42]

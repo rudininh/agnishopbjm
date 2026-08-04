@@ -1,0 +1,79 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Agni Shop Banjarmasin Agni Shop Omnichannel" [ref=e5] [cursor=pointer]:
+      - /url: /dashboard
+      - img "Agni Shop Banjarmasin" [ref=e6]
+      - generic [ref=e7]:
+        - strong [ref=e8]: Agni Shop
+        - generic [ref=e9]: Omnichannel
+    - navigation [ref=e10]:
+      - link "Dashboard" [ref=e11] [cursor=pointer]:
+        - /url: /dashboard
+      - link "Kelola Produk Mobile" [ref=e12] [cursor=pointer]:
+        - /url: /mobile/kelola-produk
+      - button "Produk +" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: Produk
+        - strong [ref=e16]: +
+      - link "POS Offline" [ref=e17] [cursor=pointer]:
+        - /url: /pos-offline
+      - generic [ref=e18]:
+        - generic [ref=e19]: Marketplace
+        - link "Sinkronisasi Otomatis" [ref=e20] [cursor=pointer]:
+          - /url: /marketplace/auto-sync
+        - link "Import Marketplace" [ref=e21] [cursor=pointer]:
+          - /url: /marketplace/import
+        - link "Cetak Resi" [ref=e22] [cursor=pointer]:
+          - /url: /marketplace/cetak-resi
+        - link "Anomali Stok" [ref=e23] [cursor=pointer]:
+          - /url: /marketplace/stock-anomalies
+  - region "Order sync terbaru" [ref=e24]:
+    - generic [ref=e25]:
+      - strong [ref=e26]: Order Sync
+      - generic [ref=e27]: Updating...
+    - generic [ref=e28]: Belum ada histori order sync.
+  - main [ref=e29]:
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - paragraph [ref=e33]: Marketplace
+          - heading "Tambah Semua Varian TikTok" [level=1] [ref=e34]
+          - generic [ref=e35]: Tambahkan varian Shopee yang belum ada pada produk TikTok terkait.
+        - button "Muat Ulang" [disabled] [ref=e36]
+      - region "Pengaturan proses" [ref=e37]:
+        - group "Cakupan" [ref=e38]:
+          - generic [ref=e40]:
+            - radio "Produk dipilih (0)" [checked] [ref=e41]
+            - text: Produk dipilih (0)
+          - generic [ref=e42]:
+            - radio "Semua produk (0)" [ref=e43]
+            - text: Semua produk (0)
+        - group "Harga TikTok" [ref=e44]:
+          - generic [ref=e46]:
+            - radio "Harga mayoritas per produk" [checked] [ref=e47]
+            - text: Harga mayoritas per produk
+          - generic [ref=e48]:
+            - radio "Harga manual" [ref=e49]
+            - text: Harga manual
+        - generic [ref=e50]:
+          - strong [ref=e51]: 0 varian target
+          - generic [ref=e52]: Harga paling sering pada varian TikTok dipakai per produk.
+          - button "Tambahkan Varian ke TikTok" [disabled] [ref=e53]
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - generic [ref=e56]:
+            - strong [ref=e57]: Kandidat Varian Shopee
+            - generic [ref=e58]: Memuat preview...
+          - generic [ref=e59]:
+            - checkbox "Pilih semua" [disabled] [ref=e60]
+            - text: Pilih semua
+        - table [ref=e61]:
+          - rowgroup [ref=e62]:
+            - row [ref=e63]:
+              - columnheader "Pilih" [ref=e64]
+              - columnheader "Produk TikTok" [ref=e66]
+              - columnheader "Varian Shopee yang akan ditambah" [ref=e67]
+              - columnheader "Harga mayoritas TikTok" [ref=e68]
+              - columnheader "Status preview" [ref=e69]
+          - rowgroup [ref=e70]:
+            - row [ref=e71]:
+              - cell "Sedang memuat kandidat..." [ref=e72]

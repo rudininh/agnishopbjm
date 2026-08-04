@@ -40,6 +40,7 @@ Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class
 Route::get('tiktok/bulk-missing-variants', [OmnichannelController::class, 'bulkTiktokMissingVariantsPreview']);
 Route::post('tiktok/bulk-missing-variants/submit', [OmnichannelController::class, 'bulkSubmitTiktokMissingVariants']);
 Route::get('tiktok/variant-reconciliation/products', [OmnichannelController::class, 'tiktokVariantReconciliationProducts']);
+Route::get('tiktok/variant-reconciliation/overview', [OmnichannelController::class, 'tiktokVariantReconciliationOverview']);
 Route::get('tiktok/variant-reconciliation/preview', [OmnichannelController::class, 'tiktokVariantReconciliationPreview']);
 Route::post('tiktok/variant-reconciliation/submit', [OmnichannelController::class, 'submitTiktokVariantReconciliation']);
 Route::post('tiktok-variant/action', [OmnichannelController::class, 'tiktokVariantAction']);

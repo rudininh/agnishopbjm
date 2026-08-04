@@ -1,0 +1,8 @@
+[   70903ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[  352633ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[  636226ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[ 1636060ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[ 4224622ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[ 4902243ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[ 5144743ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0
+[ 5637760ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://agnishopbjm-laravel.test/api/marketplace/auto-sync/order-sync?page=1&per_page=1:0

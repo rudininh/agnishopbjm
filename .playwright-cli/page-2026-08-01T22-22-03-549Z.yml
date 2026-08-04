@@ -1,0 +1,119 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link "Agni Shop Banjarmasin Agni Shop Omnichannel" [ref=e5] [cursor=pointer]:
+      - /url: /dashboard
+      - img "Agni Shop Banjarmasin" [ref=e6]
+      - generic [ref=e7]:
+        - strong [ref=e8]: Agni Shop
+        - generic [ref=e9]: Omnichannel
+    - navigation [ref=e10]:
+      - link "Dashboard" [ref=e11] [cursor=pointer]:
+        - /url: /dashboard
+      - link "Kelola Produk Mobile" [ref=e12] [cursor=pointer]:
+        - /url: /mobile/kelola-produk
+      - button "Produk +" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: Produk
+        - strong [ref=e16]: +
+      - link "POS Offline" [ref=e17] [cursor=pointer]:
+        - /url: /pos-offline
+      - generic [ref=e18]:
+        - generic [ref=e19]: Marketplace
+        - link "Sinkronisasi Otomatis" [ref=e20] [cursor=pointer]:
+          - /url: /marketplace/auto-sync
+        - link "Import Marketplace" [ref=e21] [cursor=pointer]:
+          - /url: /marketplace/import
+        - link "Cetak Resi" [ref=e22] [cursor=pointer]:
+          - /url: /marketplace/cetak-resi
+        - link "Anomali Stok" [ref=e23] [cursor=pointer]:
+          - /url: /marketplace/stock-anomalies
+  - region "Order sync terbaru" [ref=e24]:
+    - generic [ref=e25]:
+      - strong [ref=e26]: Order Sync
+      - generic [ref=e27]: Updating...
+    - generic [ref=e28]: Belum ada histori order sync.
+  - main [ref=e29]:
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - paragraph [ref=e33]: Marketplace
+          - heading "Stok Shopee" [level=1] [ref=e34]
+        - generic [ref=e35]:
+          - button "Reset Filter" [ref=e36] [cursor=pointer]
+          - button "Isi SKU Kosong (0)" [disabled] [ref=e37]
+          - button "Memuat..." [disabled] [ref=e38]
+      - generic [ref=e39]:
+        - article [ref=e40]:
+          - generic [ref=e41]: Produk Live
+          - strong [ref=e42]: "0"
+        - article [ref=e43]:
+          - generic [ref=e44]: Total Varian
+          - strong [ref=e45]: "0"
+        - article [ref=e46]:
+          - generic [ref=e47]: Total Stok
+          - strong [ref=e48]: "0"
+        - article [ref=e49]:
+          - generic [ref=e50]: Nilai Stok
+          - strong [ref=e51]: Rp 0
+      - generic [ref=e52]:
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]: Stores
+            - combobox "Stores" [ref=e56]:
+              - option "All" [selected]
+          - generic [ref=e57]:
+            - generic [ref=e58]: Status
+            - combobox "Status" [ref=e59]:
+              - option "Semua Status" [selected]
+              - option "Live"
+              - option "Sold Out"
+              - option "Tidak Live"
+          - generic [ref=e60]:
+            - generic [ref=e61]: Stok Minimum
+            - spinbutton "Stok Minimum" [ref=e62]
+          - generic [ref=e63]:
+            - generic [ref=e64]: Harga
+            - combobox "Harga" [ref=e65]:
+              - option "Semua Harga" [selected]
+              - option "Ada Promo"
+              - option "Di atas Rp50.000"
+        - generic [ref=e66]:
+          - generic [ref=e67]:
+            - generic [ref=e68]: Search
+            - generic [ref=e69]:
+              - combobox "Search Cari produk / SKU Shopee" [ref=e70]:
+                - option "Semua" [selected]
+                - option "Product Name"
+                - option "SKU"
+                - option "Item ID"
+              - searchbox "Cari produk / SKU Shopee" [ref=e71]
+          - generic [ref=e72]:
+            - generic [ref=e73]: Sort By
+            - combobox "Sort By" [ref=e74]:
+              - option "Update Time" [selected]
+              - option "Create Time"
+              - option "Stock"
+              - option "Sales"
+              - option "Product Name"
+      - generic [ref=e75]:
+        - navigation [ref=e76]:
+          - button "Live (0)" [ref=e77] [cursor=pointer]
+          - button "Sold Out (0)" [ref=e78] [cursor=pointer]
+          - button "Tidak Live (0)" [ref=e79] [cursor=pointer]
+          - button "Semua (0)" [ref=e80] [cursor=pointer]
+        - generic [ref=e81]: 0 produk tampil
+      - table [ref=e84]:
+        - rowgroup [ref=e85]:
+          - row [ref=e86]:
+            - columnheader [ref=e87]:
+              - checkbox [ref=e88]
+            - columnheader "Item & Store" [ref=e89]
+            - columnheader "Parent SKU" [ref=e90]
+            - columnheader "SKU" [ref=e91]
+            - columnheader "Price" [ref=e92]
+            - columnheader "Stock" [ref=e93]
+            - columnheader "Quality" [ref=e94]
+            - columnheader "Time" [ref=e95]
+            - columnheader "Operation" [ref=e96]
+        - rowgroup [ref=e97]:
+          - row [ref=e98]:
+            - cell "Sedang memuat produk..." [ref=e99]
