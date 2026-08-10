@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CartController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\GitaOrderScrapeController;
 use App\Http\Controllers\MarketplaceAutoSyncController;
 use App\Http\Controllers\MarketplaceImportController;
 use App\Http\Controllers\MarketplaceWebhookController;
@@ -16,6 +17,9 @@ use App\Http\Controllers\StbMappingSyncController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('health', fn () => response()->json(['status' => 'ok', 'service' => 'agnishop-api']));
+Route::post('gita-order-scrapes/runs', [GitaOrderScrapeController::class, 'store']);
+Route::get('gita-order-scrapes/latest', [GitaOrderScrapeController::class, 'latest']);
+Route::get('gita-order-scrapes/items', [GitaOrderScrapeController::class, 'items']);
 Route::get('shopee/callback', [OmnichannelController::class, 'shopeeCallback']);
 Route::get('tiktok/callback', [OmnichannelController::class, 'tiktokCallback']);
 Route::get('tiktok-callback', [OmnichannelController::class, 'tiktokCallback']);

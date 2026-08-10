@@ -16,6 +16,7 @@ import MarketplaceAutoSync from '@/pages/MarketplaceAutoSync.vue'
 import ImportMarketplace from '@/pages/ImportMarketplace.vue'
 import ImportMarketplaceMobile from '@/pages/ImportMarketplaceMobile.vue'
 import StockAnomalies from '@/pages/StockAnomalies.vue'
+import GitaOrderScrapeReport from '@/pages/GitaOrderScrapeReport.vue'
 import ShippingLabels from '@/pages/ShippingLabels.vue'
 import POSOffline from '@/pages/POSOffline.vue'
 import MobileProductManagement from '@/pages/MobileProductManagement.vue'
@@ -120,6 +121,16 @@ const routes = [
     path: '/marketplace/stock-anomalies',
     name: 'marketplace-stock-anomalies',
     component: StockAnomalies
+  },
+  {
+    path: '/marketplace/gita-stock',
+    name: 'marketplace-gita-stock',
+    redirect: '/marketplace/gita-orders'
+  },
+  {
+    path: '/marketplace/gita-orders',
+    name: 'marketplace-gita-orders',
+    component: GitaOrderScrapeReport
   },
   {
     path: '/pos-offline',

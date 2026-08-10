@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useAuthStore } from '@/stores/authStore'
+import { shouldRedirectOnUnauthorized } from './authRedirectPolicy'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -24,7 +25,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && shouldRedirectOnUnauthorized(error.config)) {
       const authStore = useAuthStore()
       authStore.logout()
       if (window.location.pathname !== '/login') {

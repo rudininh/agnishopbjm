@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test:gita-stock-scraper": "node --test tools/gita-stock-scraper/tests/*.test.js",
-    "gita-stock-scrape": "node tools/gita-stock-scraper/src/cli.js"
+    "test:gita-order-scraper": "node --test tools/gita-order-scraper/tests/*.test.js",
+    "gita-order-scrape": "node tools/gita-order-scraper/src/cli.js",
+    "gita-order-calibrate": "node tools/gita-order-scraper/src/calibrate.js"
   },
   "dependencies": {
     "pg": "^8.11.3"

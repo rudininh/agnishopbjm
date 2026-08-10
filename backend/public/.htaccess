@@ -5,6 +5,10 @@
 
     RewriteEngine On
 
+    # Preserve bearer credentials for Laravel API requests.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
     # Serve existing static files directly (JS, CSS, images, fonts)
     RewriteCond %{REQUEST_FILENAME} -f
     RewriteCond %{REQUEST_URI} \.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$ [NC]

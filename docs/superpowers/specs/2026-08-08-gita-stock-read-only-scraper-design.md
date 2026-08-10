@@ -106,7 +106,11 @@ Dedicated GET endpoints provide the latest run and paginated item history. The r
 
 ### Operational Verification
 
-After code verification, the operator logs into Gita manually and invokes the worker once. Verification requires a successful read-only run, report count reconciliation, and database checks confirming no stock change was made to Gita, Stock Master, Shopee AgniShop BJM, or TikTok AgniShop BJM.
+After automated verification, the operator sets the local worker environment values without committing them, runs `npm run gita-stock-scrape` with `GITA_SCRAPER_HEADLESS=false`, and completes Gita manual login, CAPTCHA, or MFA only in the visible browser. The expected terminal result is either `success` with a complete item count, or `needs_login`/`failed` with zero items.
+
+The operator then signs in to AgniShop and reviews `/marketplace/gita-stock`. Before and after the supervised run, compare database rows to confirm that `stock_master`, `sku_mappings`, Shopee cache tables, TikTok cache tables, and `marketplace_sync_logs` have no changes from the collection. Confirm separately in Gita Seller Centre that no stock was edited or published.
+
+Automated verification uses `npm run test:gita-stock-scraper`, `backend/vendor/bin/phpunit --filter=GitaStockScrape`, `backend/vendor/bin/phpunit`, `npm --prefix frontend test`, and `npm --prefix frontend run build`. No production schedule, cron entry, supervisor configuration, or frontend control starts the local browser worker.
 
 ## Acceptance Criteria
 
