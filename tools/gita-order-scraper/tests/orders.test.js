@@ -91,6 +91,16 @@ test('extracts an exact seller SKU when Seller Centre renders it outside bracket
   )
 })
 
+test('removes a rendered Indonesian price that is adjacent to the seller SKU', () => {
+  const detail = parseHTML('<main>Kode Variasi: INT-40908729245-SAGEE27.900</main>').document
+
+  assert.deepEqual(extractDetailSellerSkus(detail), ['INT-40908729245-SAGEE'])
+  assert.equal(
+    extractSellerSku('Variasi: Sagee SKU: INT-24340156931-AZR-HJP-BRKWHT23.400'),
+    'INT-24340156931-AZR-HJP-BRKWHT'
+  )
+})
+
 test('ignores order items that do not have an AgniShop internal SKU', () => {
   const invalid = parseHTML(`
     <main data-testid='order-list-table-skeleton'>

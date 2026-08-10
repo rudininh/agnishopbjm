@@ -97,7 +97,7 @@ export function extractOrderCandidates(document, tabStatus) {
 export function extractDetailSellerSkus(document) {
   const text = String(document.body?.textContent || document.documentElement?.textContent || '')
   const skus = [...text.matchAll(/Kode\s+Variasi\s*:\s*(INT-[A-Za-z0-9][A-Za-z0-9._-]*)/gi)]
-    .map((match) => match[1])
+    .map((match) => withoutRenderedPrice(match[1]))
 
   if (skus.length === 0) {
     throw new Error('Detail seller SKU is unavailable.')
@@ -121,7 +121,11 @@ export function extractSellerSku(value) {
   if (matches.length === 0) return null
   if (matches.length > 1) throw new Error('seller SKU is ambiguous')
 
-  return matches[0]
+  return withoutRenderedPrice(matches[0])
+}
+
+function withoutRenderedPrice(value) {
+  return String(value).replace(/\d{1,3}\.\d{3}(?:,\d{2})?$/, '')
 }
 
 function sellerOrderIdFrom(value) {
