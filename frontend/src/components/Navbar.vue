@@ -44,6 +44,7 @@
           <RouterLink to="/marketplace/import">Import Marketplace</RouterLink>
           <RouterLink to="/marketplace/cetak-resi">Cetak Resi</RouterLink>
           <RouterLink to="/marketplace/stock-anomalies">Anomali Stok</RouterLink>
+          <RouterLink to="/marketplace/gita-orders">Pesanan Gita</RouterLink>
         </div>
       </nav>
     </aside>

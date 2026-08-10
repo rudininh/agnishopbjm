@@ -2,7 +2,16 @@
   "name": "agnishopbjm",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test:gita-order-scraper": "node --test tools/gita-order-scraper/tests/*.test.js",
+    "gita-order-scrape": "node tools/gita-order-scraper/src/cli.js",
+    "gita-order-calibrate": "node tools/gita-order-scraper/src/calibrate.js"
+  },
   "dependencies": {
     "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.13",
+    "playwright": "^1.62.1"
   }
 }

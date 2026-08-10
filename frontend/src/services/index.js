@@ -382,6 +382,14 @@ export const omnichannelService = {
     return api.post('/marketplace/import/manual-stock-sync', payload)
   },
 
+  gitaOrderScrapeLatest() {
+    return api.get('/gita-order-scrapes/latest', { skipAuthRedirect: true })
+  },
+
+  gitaOrderScrapeItems(params = {}) {
+    return api.get('/gita-order-scrapes/items', { params, skipAuthRedirect: true })
+  },
+
   runTokenAction(action) {
     return api.post(`/omnichannel/${action}`)
   }
