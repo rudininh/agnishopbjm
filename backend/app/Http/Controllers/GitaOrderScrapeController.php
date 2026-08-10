@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\GitaOrderScrapeService;
+use App\Services\GitaOrderStockSyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -10,7 +11,10 @@ use Illuminate\Validation\ValidationException;
 
 class GitaOrderScrapeController extends Controller
 {
-    public function __construct(private readonly GitaOrderScrapeService $scrapeService)
+    public function __construct(
+        private readonly GitaOrderScrapeService $scrapeService,
+        private readonly GitaOrderStockSyncService $stockSyncService,
+    )
     {
     }
 
@@ -53,6 +57,16 @@ class GitaOrderScrapeController extends Controller
             'match_status' => $data['match_status'] ?? null,
             'tab_status' => $data['tab_status'] ?? null,
         ], (int) ($data['page'] ?? 1), (int) ($data['per_page'] ?? 50)));
+    }
+
+    public function syncItem(int $item): JsonResponse
+    {
+        return response()->json(['data' => $this->stockSyncService->syncItem($item)]);
+    }
+
+    public function syncLatest(): JsonResponse
+    {
+        return response()->json(['data' => $this->stockSyncService->syncLatest()]);
     }
 
     private function authorizedWorker(Request $request): bool

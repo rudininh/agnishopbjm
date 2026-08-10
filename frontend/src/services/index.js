@@ -390,6 +390,14 @@ export const omnichannelService = {
     return api.get('/gita-order-scrapes/items', { params, skipAuthRedirect: true })
   },
 
+  syncGitaOrderItems() {
+    return api.post('/gita-order-scrapes/sync', {}, { skipAuthRedirect: true })
+  },
+
+  syncGitaOrderItem(itemId) {
+    return api.post(`/gita-order-scrapes/items/${itemId}/sync`, {}, { skipAuthRedirect: true })
+  },
+
   runTokenAction(action) {
     return api.post(`/omnichannel/${action}`)
   }

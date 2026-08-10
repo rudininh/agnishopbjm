@@ -9,6 +9,23 @@ const TAB_STATUS_LABELS = {
   shipped: 'Dikirim'
 }
 
+const SYNC_STATUS_LABELS = {
+  pending: 'Belum Disinkronkan',
+  processing: 'Sedang Diproses',
+  synced: 'Sudah Disinkronkan',
+  failed: 'Gagal Disinkronkan',
+  blocked: 'Tidak Dapat Disinkronkan'
+}
+
+export const dailyGitaCollectorCommand = `Set-Location C:\\laragon\\www\\agnishopbjm-laravel
+$env:GITA_ORDER_SCRAPER_API_BASE_URL='http://agnishopbjm-laravel.test/api'
+$env:GITA_ORDER_SCRAPER_PROFILE_DIR='tools/gita-order-scraper/.profile'
+$env:GITA_ORDER_SCRAPER_HEADLESS='false'
+npm run gita-order-scrape`
+
+export const gitaCollectorCalibrationCommand = `Set-Location C:\\laragon\\www\\agnishopbjm-laravel
+npm run gita-order-calibrate`
+
 export function buildGitaOrderScrapeQuery({ matchStatus, tabStatus, page } = {}) {
   const query = {}
 
@@ -33,4 +50,16 @@ export function gitaOrderMatchStatusLabel(status) {
 
 export function gitaOrderTabStatusLabel(status) {
   return TAB_STATUS_LABELS[status] || 'Status tidak dikenal'
+}
+
+export function gitaOrderSyncStatusLabel(status) {
+  return SYNC_STATUS_LABELS[status] || 'Status tidak dikenal'
+}
+
+export function canSyncGitaOrder(item) {
+  return item?.match_status === 'matched' && ['pending', 'failed'].includes(item?.sync_status)
+}
+
+export function gitaOrderSyncActionLabel(item) {
+  return item?.sync_status === 'failed' ? 'Coba Lagi' : 'Sinkronkan'
 }

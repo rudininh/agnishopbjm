@@ -1,26 +1,24 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildGitaOrderScrapeQuery, gitaOrderMatchStatusLabel, gitaOrderTabStatusLabel } from '../src/pages/gitaOrderScrapeState.js'
+import test from 'node:test'
+import {
+  canSyncGitaOrder,
+  dailyGitaCollectorCommand,
+  gitaOrderSyncActionLabel,
+  gitaOrderSyncStatusLabel
+} from '../src/pages/gitaOrderScrapeState.js'
 
-test('builds only read-only order report filters', () => {
-  assert.deepEqual(buildGitaOrderScrapeQuery({
-    matchStatus: 'matched',
-    tabStatus: 'to_ship',
-    page: 2
-  }), {
-    match_status: 'matched',
-    tab_status: 'to_ship',
-    page: 2
-  })
+test('labels and enables Gita order sync state safely', () => {
+  assert.equal(gitaOrderSyncStatusLabel('pending'), 'Belum Disinkronkan')
+  assert.equal(gitaOrderSyncStatusLabel('synced'), 'Sudah Disinkronkan')
+  assert.equal(gitaOrderSyncActionLabel({ sync_status: 'failed' }), 'Coba Lagi')
+  assert.equal(canSyncGitaOrder({ match_status: 'matched', sync_status: 'failed' }), true)
+  assert.equal(canSyncGitaOrder({ match_status: 'unmatched', sync_status: 'blocked' }), false)
 })
 
-test('uses visible labels for persisted order statuses', () => {
-  assert.equal(gitaOrderMatchStatusLabel('matched'), 'Cocok')
-  assert.equal(gitaOrderMatchStatusLabel('unmatched'), 'Tidak ditemukan di Stock Master')
-  assert.equal(gitaOrderTabStatusLabel('to_ship'), 'Perlu Dikirim')
-  assert.equal(gitaOrderTabStatusLabel('completed'), 'Status tidak dikenal')
-})
-
-test('excludes the completed tab from report filters', () => {
-  assert.deepEqual(buildGitaOrderScrapeQuery({ tabStatus: 'completed' }), {})
+test('daily collector command documents local settings without a token', () => {
+  assert.match(dailyGitaCollectorCommand, /GITA_ORDER_SCRAPER_API_BASE_URL/)
+  assert.match(dailyGitaCollectorCommand, /GITA_ORDER_SCRAPER_PROFILE_DIR/)
+  assert.match(dailyGitaCollectorCommand, /GITA_ORDER_SCRAPER_HEADLESS/)
+  assert.match(dailyGitaCollectorCommand, /npm run gita-order-scrape/)
+  assert.doesNotMatch(dailyGitaCollectorCommand, /INGEST_TOKEN|ee88/i)
 })

@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Services\MarketplaceSyncService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Mockery;
 use Tests\TestCase;
 
 class GitaOrderScrapeControllerTest extends TestCase
@@ -138,6 +140,53 @@ class GitaOrderScrapeControllerTest extends TestCase
             ->assertJsonPath('items.0.synced_at', '2026-08-10 10:00:00');
     }
 
+    public function test_syncing_a_matched_latest_item_updates_stock_once_and_logs_both_targets(): void
+    {
+        $stockMasterId = DB::table('stock_master')->insertGetId([
+            'internal_sku' => 'INT-40908729245-SAGEE',
+            'stock_qty' => 7,
+        ]);
+        $this->withToken('worker-secret')->postJson('/api/gita-order-scrapes/runs', $this->successPayload())->assertCreated();
+        $itemId = (int) DB::table('gita_order_scrape_items')->value('id');
+        $this->bindSuccessfulMarketplaceSync($stockMasterId);
+
+        $this->postJson('/api/gita-order-scrapes/items/'.$itemId.'/sync')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'synced')
+            ->assertJsonPath('data.old_stock', 7)
+            ->assertJsonPath('data.new_stock', 6);
+
+        $this->assertDatabaseHas('stock_master', ['id' => $stockMasterId, 'stock_qty' => 6]);
+        $this->assertDatabaseHas('gita_order_stock_syncs', ['status' => 'synced', 'quantity' => 1]);
+        $this->assertDatabaseCount('marketplace_sync_logs', 2);
+
+        $this->postJson('/api/gita-order-scrapes/items/'.$itemId.'/sync')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'synced')
+            ->assertJsonPath('data.idempotent', true);
+
+        $this->assertDatabaseHas('stock_master', ['id' => $stockMasterId, 'stock_qty' => 6]);
+        $this->assertDatabaseCount('marketplace_sync_logs', 2);
+    }
+
+    public function test_syncing_all_latest_items_processes_each_pending_order_sku_once(): void
+    {
+        $stockMasterId = DB::table('stock_master')->insertGetId([
+            'internal_sku' => 'INT-40908729245-SAGEE',
+            'stock_qty' => 7,
+        ]);
+        $this->withToken('worker-secret')->postJson('/api/gita-order-scrapes/runs', $this->successPayload())->assertCreated();
+        $this->bindSuccessfulMarketplaceSync($stockMasterId);
+
+        $this->postJson('/api/gita-order-scrapes/sync')
+            ->assertOk()
+            ->assertJsonPath('data.summary.total', 1)
+            ->assertJsonPath('data.summary.synced', 1);
+
+        $this->assertDatabaseHas('stock_master', ['id' => $stockMasterId, 'stock_qty' => 6]);
+        $this->assertDatabaseCount('marketplace_sync_logs', 2);
+    }
+
     public function test_public_report_items_are_empty_when_the_latest_run_failed(): void
     {
         $this->withToken('worker-secret')
@@ -209,5 +258,32 @@ class GitaOrderScrapeControllerTest extends TestCase
                 'captured_at' => '2026-08-09T00:00:05.000Z',
             ]],
         ];
+    }
+
+    private function bindSuccessfulMarketplaceSync(int $stockMasterId): void
+    {
+        $mapping = (object) ['id' => $stockMasterId, 'stock_qty' => 7, 'internal_sku' => 'INT-40908729245-SAGEE'];
+        $service = Mockery::mock(MarketplaceSyncService::class);
+        $service->shouldReceive('findSkuMappingByStockMasterId')->andReturn($mapping);
+        $service->shouldReceive('pushTargetStock')->twice()->andReturn(['status' => 'success', 'message' => 'ok']);
+        $service->shouldReceive('updateLocalStock')->twice()->andReturnUsing(function (object $row, string $marketplace, int $stock): void {
+            DB::table('stock_master')->where('id', $row->id)->update(['stock_qty' => $stock]);
+        });
+        $service->shouldReceive('logSync')->twice()->andReturnUsing(function (?string $source, ?string $target, ?string $sku, ?int $oldStock, ?int $newStock, string $status, ?string $message): int {
+            return (int) DB::table('marketplace_sync_logs')->insertGetId([
+                'source_marketplace' => $source,
+                'target_marketplace' => $target,
+                'sku' => $sku,
+                'old_stock' => $oldStock,
+                'new_stock' => $newStock,
+                'status' => $status,
+                'message' => $message,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        });
+        $service->shouldReceive('updateStatus')->twice();
+        $service->shouldReceive('canonicalSku')->andReturn('INT-40908729245-SAGEE');
+        $this->app->instance(MarketplaceSyncService::class, $service);
     }
 }

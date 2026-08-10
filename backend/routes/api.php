@@ -20,6 +20,8 @@ Route::get('health', fn () => response()->json(['status' => 'ok', 'service' => '
 Route::post('gita-order-scrapes/runs', [GitaOrderScrapeController::class, 'store']);
 Route::get('gita-order-scrapes/latest', [GitaOrderScrapeController::class, 'latest']);
 Route::get('gita-order-scrapes/items', [GitaOrderScrapeController::class, 'items']);
+Route::post('gita-order-scrapes/sync', [GitaOrderScrapeController::class, 'syncLatest']);
+Route::post('gita-order-scrapes/items/{item}/sync', [GitaOrderScrapeController::class, 'syncItem'])->whereNumber('item');
 Route::get('shopee/callback', [OmnichannelController::class, 'shopeeCallback']);
 Route::get('tiktok/callback', [OmnichannelController::class, 'tiktokCallback']);
 Route::get('tiktok-callback', [OmnichannelController::class, 'tiktokCallback']);
