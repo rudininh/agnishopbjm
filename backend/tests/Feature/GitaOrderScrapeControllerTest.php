@@ -97,6 +97,47 @@ class GitaOrderScrapeControllerTest extends TestCase
             ->assertJsonValidationErrors(['page', 'per_page']);
     }
 
+    public function test_public_report_items_expose_pending_and_persisted_sync_state(): void
+    {
+        $stockMasterId = DB::table('stock_master')->insertGetId([
+            'internal_sku' => 'INT-40908729245-SAGEE',
+            'stock_qty' => 7,
+        ]);
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/runs', $this->successPayload())
+            ->assertCreated();
+
+        $this->getJson('/api/gita-order-scrapes/items')
+            ->assertOk()
+            ->assertJsonPath('items.0.sync_status', 'pending')
+            ->assertJsonPath('items.0.sync_message', 'Belum Disinkronkan');
+
+        $itemId = (int) DB::table('gita_order_scrape_items')->value('id');
+        DB::table('gita_order_stock_syncs')->insert([
+            'seller_order_id' => '260808T15MHC24',
+            'seller_sku' => 'INT-40908729245-SAGEE',
+            'stock_master_id' => $stockMasterId,
+            'collector_item_id' => $itemId,
+            'quantity' => 1,
+            'status' => 'synced',
+            'message' => 'Sudah Disinkronkan',
+            'old_stock' => 7,
+            'new_stock' => 6,
+            'synced_at' => '2026-08-10 10:00:00',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->getJson('/api/gita-order-scrapes/items')
+            ->assertOk()
+            ->assertJsonPath('items.0.sync_status', 'synced')
+            ->assertJsonPath('items.0.sync_message', 'Sudah Disinkronkan')
+            ->assertJsonPath('items.0.old_stock', 7)
+            ->assertJsonPath('items.0.new_stock', 6)
+            ->assertJsonPath('items.0.synced_at', '2026-08-10 10:00:00');
+    }
+
     public function test_public_report_items_are_empty_when_the_latest_run_failed(): void
     {
         $this->withToken('worker-secret')

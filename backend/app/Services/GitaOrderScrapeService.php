@@ -96,10 +96,19 @@ class GitaOrderScrapeService
         $latestRunId = DB::table('gita_order_scrape_runs')->max('id');
         $query = DB::table('gita_order_scrape_items as items')
             ->join('gita_order_scrape_runs as runs', 'runs.id', '=', 'items.run_id')
+            ->leftJoin('gita_order_stock_syncs as sync', function ($join): void {
+                $join->on('sync.seller_order_id', '=', 'items.seller_order_id')
+                    ->on('sync.seller_sku', '=', 'items.seller_sku');
+            })
             ->select([
                 'items.*',
                 'runs.status as run_status',
                 'runs.finished_at as run_finished_at',
+                'sync.status as sync_status',
+                'sync.message as sync_message',
+                'sync.old_stock as sync_old_stock',
+                'sync.new_stock as sync_new_stock',
+                'sync.synced_at as sync_synced_at',
             ])
             ->orderByDesc('items.run_id')
             ->orderByDesc('items.id');
@@ -344,6 +353,8 @@ class GitaOrderScrapeService
 
     private function serializeItem(object $item): array
     {
+        [$syncStatus, $syncMessage] = $this->syncState($item);
+
         return [
             'id' => (int) $item->id,
             'run_id' => (int) $item->run_id,
@@ -358,6 +369,26 @@ class GitaOrderScrapeService
             'captured_at' => $item->captured_at,
             'run_status' => (string) $item->run_status,
             'run_finished_at' => $item->run_finished_at,
+            'sync_status' => $syncStatus,
+            'sync_message' => $syncMessage,
+            'old_stock' => $item->sync_old_stock === null ? null : (int) $item->sync_old_stock,
+            'new_stock' => $item->sync_new_stock === null ? null : (int) $item->sync_new_stock,
+            'synced_at' => $item->sync_synced_at,
         ];
+    }
+
+    private function syncState(object $item): array
+    {
+        if ($item->sync_status !== null) {
+            return [(string) $item->sync_status, (string) ($item->sync_message ?? '')];
+        }
+
+        if ($item->match_status === 'matched') {
+            return ['pending', 'Belum Disinkronkan'];
+        }
+
+        return ['blocked', $item->match_status === 'unmatched'
+            ? 'SKU tidak ditemukan di Stock Master.'
+            : 'SKU Stock Master ganda.'];
     }
 }
