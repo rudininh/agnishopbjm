@@ -6,11 +6,21 @@ use Illuminate\Support\Facades\DB;
 
 class GitaOrderStockSyncService
 {
-    public function __construct(private readonly MarketplaceSyncService $marketplaceSync)
+    public function __construct(
+        private readonly MarketplaceSyncService $marketplaceSync,
+        private readonly MarketplaceTokenRefreshService $tokenRefresh,
+    )
     {
     }
 
     public function syncItem(int $itemId): array
+    {
+        $this->refreshMarketplaceTokens();
+
+        return $this->syncItemAfterTokenRefresh($itemId);
+    }
+
+    private function syncItemAfterTokenRefresh(int $itemId): array
     {
         return DB::transaction(function () use ($itemId): array {
             $latestRun = DB::table('gita_order_scrape_runs')->orderByDesc('id')->first();
@@ -101,8 +111,12 @@ class GitaOrderStockSyncService
         $results = [];
         $summary = ['total' => 0, 'synced' => 0, 'failed' => 0, 'blocked' => 0];
 
+        if ($items->isNotEmpty()) {
+            $this->refreshMarketplaceTokens();
+        }
+
         foreach ($items as $itemId) {
-            $result = $this->syncItem((int) $itemId);
+            $result = $this->syncItemAfterTokenRefresh((int) $itemId);
             $results[] = ['item_id' => (int) $itemId, ...$result];
             $summary['total'] += 1;
             if (array_key_exists($result['status'], $summary)) {
@@ -111,6 +125,11 @@ class GitaOrderStockSyncService
         }
 
         return ['summary' => $summary, 'items' => $results];
+    }
+
+    private function refreshMarketplaceTokens(): void
+    {
+        $this->tokenRefresh->refreshDueTokens();
     }
 
     private function saveProcessing(?object $ledger, object $item, int $oldStock, int $newStock): int

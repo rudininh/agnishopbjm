@@ -378,6 +378,22 @@ export const omnichannelService = {
     })
   },
 
+  startShopeeGitaMassUpload() {
+    return api.post('/marketplace/import/shopee-gita/mass-upload/jobs')
+  },
+
+  wakeShopeeGitaMassUploadWorker() {
+    return api.post('/marketplace/import/shopee-gita/mass-upload/worker/wake')
+  },
+
+  currentShopeeGitaMassUpload() {
+    return api.get('/marketplace/import/shopee-gita/mass-upload/jobs/current')
+  },
+
+  listShopeeGitaMassUploads(params = {}) {
+    return api.get('/marketplace/import/shopee-gita/mass-upload/jobs', { params })
+  },
+
   manualImportMarketplaceStockSync(payload = {}) {
     return api.post('/marketplace/import/manual-stock-sync', payload)
   },
@@ -388,6 +404,10 @@ export const omnichannelService = {
 
   gitaOrderScrapeItems(params = {}) {
     return api.get('/gita-order-scrapes/items', { params, skipAuthRedirect: true })
+  },
+
+  wakeGitaOrderScraperWorker() {
+    return api.post('/gita-order-scrapes/worker/wake', {}, { skipAuthRedirect: true })
   },
 
   syncGitaOrderItems() {

@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url'
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 const DEFAULT_API_BASE_URL = 'http://agnishopbjm-laravel.test/api'
-const DEFAULT_ORDER_START_URL = 'https://seller.shopee.co.id/portal/sale/order?type=toship&source=processed&sort_by=confirmed_date_asc'
+const DEFAULT_ORDER_START_URL = 'https://seller.shopee.co.id/portal/sale/order?type=toship&source=to_process&sort_by=confirmed_date_asc'
 const DEFAULT_PROFILE_DIR = 'tools/gita-order-scraper/.profile'
+const DEFAULT_WORKER_LEASE_SECONDS = 900
+const DEFAULT_TIMEOUT_SECONDS = 90
 
 export function loadOrderWorkerConfig(env = process.env, dependencies = {}) {
   const readBackendEnvToken = dependencies.readBackendEnvToken ?? backendEnvToken
@@ -22,6 +24,9 @@ export function loadOrderWorkerConfig(env = process.env, dependencies = {}) {
     ingestToken,
     ...calibration,
     headless: booleanValue(env.GITA_ORDER_SCRAPER_HEADLESS, 'GITA_ORDER_SCRAPER_HEADLESS', false),
+    operationLeaseToken: optionalValue(env, 'GITA_ORDER_SCRAPER_OPERATION_LEASE_TOKEN'),
+    leaseSeconds: workerLeaseSeconds(env.GITA_ORDER_SCRAPER_LOCAL_WORKER_LEASE_SECONDS),
+    leaseRenewMs: workerLeaseRenewMs(workerLeaseSeconds(env.GITA_ORDER_SCRAPER_LOCAL_WORKER_LEASE_SECONDS)),
   }
 }
 
@@ -83,8 +88,19 @@ function booleanValue(value, key, defaultValue) {
 }
 
 function timeoutMs(value) {
-  const parsed = Number.parseInt(String(value ?? 30), 10)
-  const seconds = Number.isFinite(parsed) ? parsed : 30
+  const parsed = Number.parseInt(String(value ?? DEFAULT_TIMEOUT_SECONDS), 10)
+  const seconds = Number.isFinite(parsed) ? parsed : DEFAULT_TIMEOUT_SECONDS
 
-  return Math.min(Math.max(seconds, 10), 120) * 1000
+  return Math.min(Math.max(seconds, 10), 180) * 1000
+}
+
+function workerLeaseSeconds(value) {
+  const parsed = Number.parseInt(String(value ?? DEFAULT_WORKER_LEASE_SECONDS), 10)
+  const seconds = Number.isFinite(parsed) ? parsed : DEFAULT_WORKER_LEASE_SECONDS
+
+  return Math.min(Math.max(seconds, 60), 3600)
+}
+
+function workerLeaseRenewMs(seconds) {
+  return Math.max(15000, Math.min(seconds * 500, 300000))
 }

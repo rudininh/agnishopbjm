@@ -91,14 +91,27 @@ test('extracts an exact seller SKU when Seller Centre renders it outside bracket
   )
 })
 
-test('removes a rendered Indonesian price that is adjacent to the seller SKU', () => {
+test('preserves a seller SKU ending in a digit when a rendered price is adjacent', () => {
   const detail = parseHTML('<main>Kode Variasi: INT-40908729245-SAGEE27.900</main>').document
 
-  assert.deepEqual(extractDetailSellerSkus(detail), ['INT-40908729245-SAGEE'])
+  assert.deepEqual(extractDetailSellerSkus(detail), ['INT-40908729245-SAGEE27.900'])
   assert.equal(
     extractSellerSku('Variasi: Sagee SKU: INT-24340156931-AZR-HJP-BRKWHT23.400'),
-    'INT-24340156931-AZR-HJP-BRKWHT'
+    'INT-24340156931-AZR-HJP-BRKWHT23.400'
   )
+  assert.equal(
+    extractSellerSku('Variasi: Blush 1 SKU: INT-40908729245-BLUSH-127.900'),
+    'INT-40908729245-BLUSH-127.900'
+  )
+})
+
+test('does not append a sibling rendered price to a detail seller SKU', () => {
+  const detail = parseHTML('<main><div>Kode Variasi: INT-28383781340-BOX-14</div><div>41.000</div><div>Kode Variasi: INT-28383781340-BOX-18</div><div>41.000</div></main>').document
+
+  assert.deepEqual(extractDetailSellerSkus(detail), [
+    'INT-28383781340-BOX-14',
+    'INT-28383781340-BOX-18'
+  ])
 })
 
 test('ignores order items that do not have an AgniShop internal SKU', () => {

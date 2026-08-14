@@ -110,13 +110,4 @@ After automated verification, the operator sets the local worker environment val
 
 The operator then signs in to AgniShop and reviews `/marketplace/gita-stock`. Before and after the supervised run, compare database rows to confirm that `stock_master`, `sku_mappings`, Shopee cache tables, TikTok cache tables, and `marketplace_sync_logs` have no changes from the collection. Confirm separately in Gita Seller Centre that no stock was edited or published.
 
-Automated verification uses `npm run test:gita-stock-scraper`, `backend/vendor/bin/phpunit --filter=GitaStockScrape`, `backend/vendor/bin/phpunit`, `npm --prefix frontend test`, and `npm --prefix frontend run build`. No production schedule, cron entry, supervisor configuration, or frontend control starts the local browser worker.
-
-## Acceptance Criteria
-
-1. A local manual worker run collects Gita variant SKU and stock through an authenticated browser session without writing on Seller Centre.
-2. Login expiry, CAPTCHA, and MFA yield `needs_login` without a partial backend snapshot.
-3. A valid complete snapshot is persisted with exact-SKU match status and history.
-4. The report clearly separates matched, unmatched, duplicate, and changed-stock rows.
-5. No phase-one route, command, queue, or worker action changes stock in any marketplace or in `stock_master`.
-6. Credentials and browser session artifacts are absent from source control, database records, and application logs.
+Automated verification uses `npm run test:gita-stock-scraper`, `backend/vendor/bin/phpunit --filter=GitaStockScrape`, `backend/vendor/bin/phpunit`, `npm --prefix frontend test`, and `npm --prefix frontend run build`. No production schedule, cron entry, supervisor configuration, or frontend control starts the local browser worker.uy

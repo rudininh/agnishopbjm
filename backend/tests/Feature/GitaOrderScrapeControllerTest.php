@@ -2,7 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Services\MarketplaceOperationLeaseService;
 use App\Services\MarketplaceSyncService;
+use App\Services\MarketplaceTokenRefreshService;
+use App\Services\GitaOrderScrapeWorkerLauncher;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +30,10 @@ class GitaOrderScrapeControllerTest extends TestCase
         }
 
         config(['gita_order_scraper.ingest_token' => 'worker-secret']);
+
+        $tokens = Mockery::mock(MarketplaceTokenRefreshService::class);
+        $tokens->shouldReceive('refreshDueTokens')->zeroOrMoreTimes()->andReturn(['status' => 'ok']);
+        $this->app->instance(MarketplaceTokenRefreshService::class, $tokens);
     }
 
     public function test_authorized_worker_persists_a_read_only_order_line(): void
@@ -54,6 +61,48 @@ class GitaOrderScrapeControllerTest extends TestCase
         ]);
     }
 
+    public function test_worker_matches_a_master_sku_when_seller_centre_concatenates_a_rendered_price(): void
+    {
+        DB::table('stock_master')->insert([
+            'internal_sku' => 'INT-40908729245-BLUSH-1',
+            'stock_qty' => 3,
+        ]);
+        $payload = $this->successPayload();
+        $payload['items'][0]['seller_sku'] = 'INT-40908729245-BLUSH-127.900';
+        $payload['items'][0]['variant_label'] = 'Blush 1';
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/runs', $payload)
+            ->assertCreated()
+            ->assertJsonPath('data.summary.matched_count', 1);
+
+        $this->assertDatabaseHas('gita_order_scrape_items', [
+            'seller_sku' => 'INT-40908729245-BLUSH-1',
+            'match_status' => 'matched',
+        ]);
+    }
+
+    public function test_worker_does_not_guess_when_a_concatenated_price_can_match_multiple_master_skus(): void
+    {
+        DB::table('stock_master')->insert([
+            ['internal_sku' => 'INT-40908729245-SAGEE', 'stock_qty' => 3],
+            ['internal_sku' => 'INT-40908729245-SAGEE2', 'stock_qty' => 3],
+        ]);
+        $payload = $this->successPayload();
+        $payload['items'][0]['seller_sku'] = 'INT-40908729245-SAGEE27.900';
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/runs', $payload)
+            ->assertCreated()
+            ->assertJsonPath('data.summary.matched_count', 0)
+            ->assertJsonPath('data.summary.unmatched_count', 1);
+
+        $this->assertDatabaseHas('gita_order_scrape_items', [
+            'seller_sku' => 'INT-40908729245-SAGEE27.900',
+            'match_status' => 'unmatched',
+        ]);
+    }
+
     public function test_worker_run_endpoint_rejects_missing_or_invalid_bearer_token(): void
     {
         $this->postJson('/api/gita-order-scrapes/runs', $this->successPayload())
@@ -65,6 +114,99 @@ class GitaOrderScrapeControllerTest extends TestCase
         config(['gita_order_scraper.ingest_token' => '']);
         $this->withToken('worker-secret')->postJson('/api/gita-order-scrapes/runs', $this->successPayload())
             ->assertUnauthorized();
+    }
+
+    public function test_worker_can_claim_renew_and_release_the_gita_scraper_marketplace_lease(): void
+    {
+        $this->postJson('/api/gita-order-scrapes/worker/lease')
+            ->assertUnauthorized();
+
+        $claim = $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/worker/lease')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'claimed')
+            ->assertJsonMissingPath('data.lease_token')
+            ->json('data');
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/worker/lease')
+            ->assertConflict()
+            ->assertJsonPath('data.status', 'already_running')
+            ->assertJsonMissingPath('data.lease_token');
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/worker/lease/renew', ['lease_token' => $claim['token']])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'renewed');
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/worker/lease/release', ['lease_token' => $claim['token']])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'released');
+    }
+
+    public function test_worker_lease_reports_marketplace_busy_without_exposing_the_lock_token(): void
+    {
+        $lease = app(MarketplaceOperationLeaseService::class)->acquire('stb_marketplace_sync', 300);
+
+        $this->assertTrue($lease['acquired']);
+
+        $this->withToken('worker-secret')
+            ->postJson('/api/gita-order-scrapes/worker/lease')
+            ->assertStatus(423)
+            ->assertJsonPath('data.status', 'marketplace_busy')
+            ->assertJsonPath('data.operation', 'stb_marketplace_sync')
+            ->assertJsonMissingPath('data.token')
+            ->assertJsonMissingPath('data.lease_token');
+    }
+
+    public function test_dashboard_wakes_the_local_gita_scraper_worker_without_exposing_worker_details(): void
+    {
+        $launcher = Mockery::mock(GitaOrderScrapeWorkerLauncher::class);
+        $launcher->shouldReceive('wake')->once()->andReturn(['status' => 'started']);
+        $this->app->instance(GitaOrderScrapeWorkerLauncher::class, $launcher);
+
+        $this->postJson('/api/gita-order-scrapes/worker/wake')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'started')
+            ->assertJsonMissingPath('data.token')
+            ->assertJsonMissingPath('data.lease_token');
+    }
+
+    public function test_dashboard_wake_reports_an_active_gita_scraper_safely(): void
+    {
+        $launcher = Mockery::mock(GitaOrderScrapeWorkerLauncher::class);
+        $launcher->shouldReceive('wake')->once()->andReturn(['status' => 'already_running']);
+        $this->app->instance(GitaOrderScrapeWorkerLauncher::class, $launcher);
+
+        $this->postJson('/api/gita-order-scrapes/worker/wake')
+            ->assertConflict()
+            ->assertJsonPath('data.status', 'already_running')
+            ->assertJsonMissingPath('data.token');
+    }
+
+    public function test_dashboard_wake_reports_a_busy_marketplace_safely(): void
+    {
+        $launcher = Mockery::mock(GitaOrderScrapeWorkerLauncher::class);
+        $launcher->shouldReceive('wake')->once()->andReturn(['status' => 'marketplace_busy']);
+        $this->app->instance(GitaOrderScrapeWorkerLauncher::class, $launcher);
+
+        $this->postJson('/api/gita-order-scrapes/worker/wake')
+            ->assertStatus(423)
+            ->assertJsonPath('data.status', 'marketplace_busy')
+            ->assertJsonMissingPath('data.token');
+    }
+
+    public function test_dashboard_wake_reports_when_manual_start_is_required(): void
+    {
+        $launcher = Mockery::mock(GitaOrderScrapeWorkerLauncher::class);
+        $launcher->shouldReceive('wake')->once()->andReturn(['status' => 'manual_required']);
+        $this->app->instance(GitaOrderScrapeWorkerLauncher::class, $launcher);
+
+        $this->postJson('/api/gita-order-scrapes/worker/wake')
+            ->assertStatus(503)
+            ->assertJsonPath('data.status', 'manual_required')
+            ->assertJsonMissingPath('data.token');
     }
 
     public function test_public_reports_return_order_lines_and_validate_filters(): void
@@ -185,6 +327,24 @@ class GitaOrderScrapeControllerTest extends TestCase
 
         $this->assertDatabaseHas('stock_master', ['id' => $stockMasterId, 'stock_qty' => 6]);
         $this->assertDatabaseCount('marketplace_sync_logs', 2);
+    }
+
+    public function test_syncing_all_latest_items_refreshes_marketplace_tokens_once_before_pushing_stock(): void
+    {
+        $stockMasterId = DB::table('stock_master')->insertGetId([
+            'internal_sku' => 'INT-40908729245-SAGEE',
+            'stock_qty' => 7,
+        ]);
+        $this->withToken('worker-secret')->postJson('/api/gita-order-scrapes/runs', $this->successPayload())->assertCreated();
+        $this->bindSuccessfulMarketplaceSync($stockMasterId);
+
+        $tokens = Mockery::mock(MarketplaceTokenRefreshService::class);
+        $tokens->shouldReceive('refreshDueTokens')->once()->andReturn(['status' => 'ok']);
+        $this->app->instance(MarketplaceTokenRefreshService::class, $tokens);
+
+        $this->postJson('/api/gita-order-scrapes/sync')
+            ->assertOk()
+            ->assertJsonPath('data.summary.synced', 1);
     }
 
     public function test_public_report_items_are_empty_when_the_latest_run_failed(): void

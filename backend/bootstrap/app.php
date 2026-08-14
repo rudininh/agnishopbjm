@@ -16,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->alias([
+            'shopee.mass-upload.worker' => \App\Http\Middleware\EnsureShopeeMassUploadWorkerToken::class,
+        ]);
         $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
         $middleware->redirectGuestsTo(fn () => null);
     })

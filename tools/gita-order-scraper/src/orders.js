@@ -95,15 +95,29 @@ export function extractOrderCandidates(document, tabStatus) {
 }
 
 export function extractDetailSellerSkus(document) {
-  const text = String(document.body?.textContent || document.documentElement?.textContent || '')
-  const skus = [...text.matchAll(/Kode\s+Variasi\s*:\s*(INT-[A-Za-z0-9][A-Za-z0-9._-]*)/gi)]
-    .map((match) => withoutRenderedPrice(match[1]))
+  const skus = [...document.querySelectorAll('*')]
+    .map((element) => detailSellerSku(directTextContent(element)))
+    .filter((sku) => sku !== null)
 
   if (skus.length === 0) {
     throw new Error('Detail seller SKU is unavailable.')
   }
 
   return skus
+}
+
+function directTextContent(element) {
+  return [...element.childNodes]
+    .filter((node) => node.nodeType === 3)
+    .map((node) => node.textContent ?? '')
+    .join(' ')
+    .trim()
+}
+
+function detailSellerSku(value) {
+  const match = String(value).match(/^Kode\s+Variasi\s*:\s*(INT-[A-Za-z0-9][A-Za-z0-9._-]*)\s*$/i)
+
+  return match?.[1] ?? null
 }
 
 export function hasNextOrderPage(document) {
@@ -121,11 +135,7 @@ export function extractSellerSku(value) {
   if (matches.length === 0) return null
   if (matches.length > 1) throw new Error('seller SKU is ambiguous')
 
-  return withoutRenderedPrice(matches[0])
-}
-
-function withoutRenderedPrice(value) {
-  return String(value).replace(/\d{1,3}\.\d{3}(?:,\d{2})?$/, '')
+  return matches[0]
 }
 
 function sellerOrderIdFrom(value) {

@@ -3,6 +3,8 @@
     <header class='page-header'>
       <div><p>Marketplace</p><h1>Pesanan Gita</h1></div>
       <div class='header-actions'>
+        <RouterLink class='ghost mass-upload-link' :to='gitaShopMassUploadRoute'>Upload Otomatis Gitashop</RouterLink>
+        <button class='ghost' type='button' :disabled='wakingScraperWorker' @click='wakeScraperWorker'>{{ wakingScraperWorker ? 'Menjalankan...' : 'Jalankan Scraper PC' }}</button>
         <button class='primary' type='button' :disabled='loading || syncingAll || !hasSyncableItems' @click='syncAll'>{{ syncingAll ? 'Menyinkronkan...' : 'Sinkronkan Semua' }}</button>
         <button class='ghost' type='button' :disabled='loading || syncingAll' @click='loadReport(pagination.page)'>{{ loading ? 'Memuat...' : 'Muat ulang' }}</button>
       </div>
@@ -10,10 +12,12 @@
 
     <p v-if='errorMessage' class='notice error'>{{ errorMessage }}</p>
     <p v-if='syncMessage' class='notice success'>{{ syncMessage }}</p>
+    <p v-if='launcherMessage' :class='[notice, launcherMessage.type]'>{{ launcherMessage.text }}</p>
 
     <section class='guide'>
       <div><p>Collector lokal</p><h2>Login browser pertama kali</h2><pre>{{ gitaCollectorCalibrationCommand }}</pre></div>
       <div><p>Collector harian</p><h2>Ambil pesanan Gita</h2><pre>{{ dailyGitaCollectorCommand }}</pre></div>
+      <div><p>Worker PC</p><h2>Fallback jika launcher otomatis gagal</h2><pre>{{ gitaOrderScraperManualCommand }}</pre><small>Jalankan satu kali saja. Login atau verifikasi tetap perlu diselesaikan manusia di browser Gita.</small></div>
     </section>
 
     <section v-if='latestRun' class='run-overview'>
@@ -83,15 +87,17 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { omnichannelService } from '@/services'
-import { buildGitaOrderScrapeQuery, canSyncGitaOrder, dailyGitaCollectorCommand, gitaCollectorCalibrationCommand, gitaOrderMatchStatusLabel, gitaOrderSyncActionLabel, gitaOrderSyncStatusLabel, gitaOrderTabStatusLabel } from './gitaOrderScrapeState'
+import { buildGitaOrderScrapeQuery, canSyncGitaOrder, dailyGitaCollectorCommand, formatGitaOrderDate, gitaCollectorCalibrationCommand, gitaOrderMatchStatusLabel, gitaOrderScraperLauncherMessage, gitaOrderScraperManualCommand, gitaOrderSyncActionLabel, gitaOrderSyncStatusLabel, gitaOrderTabStatusLabel, gitaShopMassUploadRoute } from './gitaOrderScrapeState'
 
 const loading = ref(false)
 const errorMessage = ref('')
 const syncMessage = ref('')
+const launcherMessage = ref(null)
 const syncingAll = ref(false)
 const syncingItemId = ref(null)
+const wakingScraperWorker = ref(false)
 const latestRun = ref(null)
 const items = ref([])
 const pagination = ref({ page: 1, last_page: 1, total: 0 })
@@ -104,6 +110,7 @@ const latestSummary = computed(() => latestRun.value?.summary || {
   duplicate_master_count: 0
 })
 const hasSyncableItems = computed(() => items.value.some(canSyncGitaOrder))
+let scraperPollTimer = null
 
 const loadReport = async (page = 1) => {
   loading.value = true
@@ -160,13 +167,53 @@ const syncItem = async (item) => {
     syncingItemId.value = null
   }
 }
-const formatDate = (value) => {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+
+const stopScraperPolling = () => {
+  if (scraperPollTimer) clearInterval(scraperPollTimer)
+  scraperPollTimer = null
 }
 
+const refreshForScraperWorker = async () => {
+  const previousFinishedAt = latestRun.value?.finished_at || ''
+  let attempts = 0
+
+  stopScraperPolling()
+  await loadReport(1)
+  scraperPollTimer = setInterval(async () => {
+    if (loading.value) return
+
+    attempts += 1
+    await loadReport(1)
+    if (attempts >= 180 || (latestRun.value?.finished_at && latestRun.value.finished_at !== previousFinishedAt)) {
+      stopScraperPolling()
+    }
+  }, 5000)
+}
+
+const wakeScraperWorker = async () => {
+  wakingScraperWorker.value = true
+  errorMessage.value = ''
+  launcherMessage.value = null
+
+  try {
+    const response = await omnichannelService.wakeGitaOrderScraperWorker()
+    const result = response.data?.data || {}
+    launcherMessage.value = gitaOrderScraperLauncherMessage(result)
+
+    if (['started', 'already_running'].includes(result.status)) {
+      await refreshForScraperWorker()
+    }
+  } catch (error) {
+    const result = error?.response?.data?.data
+    launcherMessage.value = gitaOrderScraperLauncherMessage(result)
+  } finally {
+    wakingScraperWorker.value = false
+  }
+}
+const formatDate = formatGitaOrderDate
+
 onMounted(() => loadReport(1))
+onUnmounted(stopScraperPolling)
 </script>
 
 <style scoped>
@@ -179,17 +226,20 @@ onMounted(() => loadReport(1))
 button { border:0; border-radius:6px; cursor:pointer; font-weight:700; padding:9px 13px; }
 button:disabled { cursor:not-allowed; opacity:.6; }
 .ghost { background:#fff; border:1px solid #dbe3ef; color:#0f172a; }
+.mass-upload-link { align-items:center; display:inline-flex; text-decoration:none; }
 .primary,.small-primary { background:#0f766e; color:#fff; }
 .small-primary { font-size:12px; padding:7px 9px; }
 .notice,.run-overview,.panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; }
 .notice { margin-bottom:14px; padding:10px 12px; }
 .notice.error { background:#fef2f2; border-color:#fecaca; color:#991b1b; }
 .notice.success { background:#ecfdf5; border-color:#a7f3d0; color:#166534; }
+.notice.warning { background:#fef3c7; border-color:#fde68a; color:#92400e; }
 .guide { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); margin-bottom:14px; }
 .guide > div { background:#f8fafc; border:1px solid #dbe3ef; border-radius:8px; padding:12px; }
 .guide p { color:#0f766e; font-size:12px; font-weight:800; margin-bottom:4px; text-transform:uppercase; }
 .guide h2 { font-size:16px; margin-bottom:9px; }
 .guide pre { background:#0f172a; border-radius:6px; color:#e2e8f0; font:12px/1.45 Consolas,monospace; margin:0; overflow:auto; padding:10px; white-space:pre-wrap; }
+.guide small { color:#475569; line-height:1.45; }
 .run-overview { margin-bottom:14px; padding:13px 14px; }
 .run-overview > div { align-items:center; display:flex; flex-wrap:wrap; gap:10px; }
 .run-overview small,.empty { color:#64748b; }

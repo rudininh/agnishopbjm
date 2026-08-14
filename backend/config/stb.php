@@ -35,6 +35,7 @@ return [
         'retry_sleep_seconds' => $int('STB_SYNC_RETRY_SLEEP_SECONDS', 3, 0, 60),
         'order_product_refresh_limit' => $int('STB_ORDER_PRODUCT_REFRESH_LIMIT', 10, 1, 50),
         'heartbeat_timeout_minutes' => $int('STB_HEARTBEAT_TIMEOUT_MINUTES', 3, 1, 60),
+        'marketplace_operation_lease_seconds' => $int('STB_MARKETPLACE_OPERATION_LEASE_SECONDS', 3600, 60, 3600),
         'supervisor_program' => env('STB_SUPERVISOR_PROGRAM', 'agnishop-worker'),
     ],
 ];

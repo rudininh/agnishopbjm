@@ -1469,7 +1469,11 @@ class MarketplaceSyncService
             return ['status' => 'error', 'message' => 'Push Shopee dibatalkan: model Shopee aktif tidak ditemukan di cache.'];
         }
 
+        $accountKey = trim((string) config('shopee.account_key', 'shopee-agnishopbjm'));
         $token = DB::table('shopee_tokens')
+            ->when($accountKey !== '', function ($query) use ($accountKey): void {
+                $query->where('account_key', $accountKey);
+            })
             ->whereRaw('COALESCE(is_active, true) = true')
             ->orderByDesc('created_at')
             ->first();

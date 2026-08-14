@@ -216,9 +216,13 @@ class GitaOrderScrapeService
     private function matchItems(array $items): array
     {
         $skus = array_values(array_unique(array_column($items, 'seller_sku')));
+        $candidateSkus = array_values(array_unique(array_merge(
+            $skus,
+            ...array_map(fn (string $sku): array => $this->priceSeparatedSkuCandidates($sku), $skus),
+        )));
         $masterRows = DB::table('stock_master')
             ->select(['id', 'internal_sku'])
-            ->whereIn('internal_sku', $skus)
+            ->whereIn('internal_sku', $candidateSkus)
             ->get();
 
         $masterIdsBySku = [];
@@ -227,11 +231,13 @@ class GitaOrderScrapeService
         }
 
         foreach ($items as &$item) {
-            $masterIds = $masterIdsBySku[$item['seller_sku']] ?? [];
+            $matchedSku = $this->matchedMasterSku($item['seller_sku'], $masterIdsBySku);
+            $masterIds = $matchedSku === null ? [] : $masterIdsBySku[$matchedSku];
 
             if (count($masterIds) === 1) {
                 $item['stock_master_id'] = $masterIds[0];
                 $item['match_status'] = 'matched';
+                $item['seller_sku'] = $matchedSku;
                 continue;
             }
 
@@ -241,6 +247,41 @@ class GitaOrderScrapeService
         unset($item);
 
         return $items;
+    }
+
+    private function matchedMasterSku(string $sellerSku, array $masterIdsBySku): ?string
+    {
+        if (array_key_exists($sellerSku, $masterIdsBySku)) {
+            return $sellerSku;
+        }
+
+        $candidates = array_values(array_filter(
+            $this->priceSeparatedSkuCandidates($sellerSku),
+            fn (string $candidate): bool => array_key_exists($candidate, $masterIdsBySku),
+        ));
+
+        if (count($candidates) !== 1) {
+            return null;
+        }
+
+        return $candidates[0];
+    }
+
+    private function priceSeparatedSkuCandidates(string $sellerSku): array
+    {
+        $candidates = [];
+        $length = strlen($sellerSku);
+
+        for ($suffixLength = 5; $suffixLength <= min(10, $length - 1); $suffixLength++) {
+            $suffix = substr($sellerSku, -$suffixLength);
+            if (preg_match('/^\d{1,3}\.\d{3}(?:,\d{2})?$/', $suffix) !== 1) {
+                continue;
+            }
+
+            $candidates[] = substr($sellerSku, 0, -$suffixLength);
+        }
+
+        return $candidates;
     }
 
     private function summaryFor(array $items): array

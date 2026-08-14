@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Services\GitaOrderScrapeService;
 use App\Services\GitaOrderStockSyncService;
+use App\Services\GitaOrderScrapeWorkerLeaseService;
+use App\Services\GitaOrderScrapeWorkerLauncher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -14,6 +16,8 @@ class GitaOrderScrapeController extends Controller
     public function __construct(
         private readonly GitaOrderScrapeService $scrapeService,
         private readonly GitaOrderStockSyncService $stockSyncService,
+        private readonly GitaOrderScrapeWorkerLeaseService $workerLeaseService,
+        private readonly GitaOrderScrapeWorkerLauncher $workerLauncher,
     )
     {
     }
@@ -67,6 +71,57 @@ class GitaOrderScrapeController extends Controller
     public function syncLatest(): JsonResponse
     {
         return response()->json(['data' => $this->stockSyncService->syncLatest()]);
+    }
+
+    public function claimWorkerLease(Request $request): JsonResponse
+    {
+        if (! $this->authorizedWorker($request)) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $data = $this->workerLeaseService->claim();
+
+        return response()->json(['data' => $data], match ($data['status']) {
+            'already_running' => 409,
+            'marketplace_busy' => 423,
+            default => 200,
+        });
+    }
+
+    public function renewWorkerLease(Request $request): JsonResponse
+    {
+        if (! $this->authorizedWorker($request)) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $data = $request->validate(['lease_token' => ['required', 'string']]);
+        abort_unless($this->workerLeaseService->renew($data['lease_token']), 409, 'Lease scraper Gita tidak aktif.');
+
+        return response()->json(['data' => ['status' => 'renewed']]);
+    }
+
+    public function releaseWorkerLease(Request $request): JsonResponse
+    {
+        if (! $this->authorizedWorker($request)) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $data = $request->validate(['lease_token' => ['required', 'string']]);
+        abort_unless($this->workerLeaseService->release($data['lease_token']), 409, 'Lease scraper Gita tidak aktif.');
+
+        return response()->json(['data' => ['status' => 'released']]);
+    }
+
+    public function wakeWorker(): JsonResponse
+    {
+        $data = $this->workerLauncher->wake();
+
+        return response()->json(['data' => $data], match ($data['status']) {
+            'already_running' => 409,
+            'marketplace_busy' => 423,
+            'manual_required' => 503,
+            default => 200,
+        });
     }
 
     private function authorizedWorker(Request $request): bool
