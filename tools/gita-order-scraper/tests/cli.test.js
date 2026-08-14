@@ -1,6 +1,9 @@
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { EMPTY_ORDER_SELECTOR, ORDER_TAB_SEQUENCE, orderContentTransitioned, orderScrapeFailureReason, runOrderScrape, sellerCentreTabSelector, waitForOrderContent } from '../src/cli.js'
+import { acquireOrderScraperLock, EMPTY_ORDER_SELECTOR, ORDER_TAB_SEQUENCE, ORDER_TYPE_SEQUENCE, openOrderType, orderContentTransitioned, orderScrapeFailureReason, runOrderScrape, runOrderScrapeWorker, sellerCentreOrderTypeSelector, sellerCentreTabSelector, waitForOrderContent } from '../src/cli.js'
 
 const config = {
   orderStartUrl: 'https://seller.example/orders',
@@ -29,20 +32,32 @@ function orderDetailPage(...skus) {
   return `<main>${skus.map((sku) => `<p>Kode Variasi: ${sku}</p>`).join('\n')}</main>`
 }
 
+function emptyOrderPage() {
+  return "<main data-testid='order-list-table-skeleton'><div class='empty-order-wrapper'></div></main>"
+}
+
 function workerDependencies(pagesByTab, detailPages = {}) {
   const posted = []
   const detailUrls = []
   const detailWaits = []
+  const orderTypeCalls = []
+  let initialGotoOptions
   let closed = false
   let tabStatus = 'to_ship'
+  let orderType = 'regular'
   let pageIndex = 0
   let newPageCount = 0
   let detailUrl = ''
+
+  const pagesForCurrentFilter = () => (tabStatus === 'shipped' ? pagesByTab[tabStatus] : pagesByTab[`${tabStatus}:${orderType}`])
+    ?? (orderType === 'regular' ? pagesByTab[tabStatus] : [emptyOrderPage()])
 
   return {
     posted,
     detailUrls,
     detailWaits,
+    orderTypeCalls,
+    initialGotoOptions: () => initialGotoOptions,
     contextClosed: () => closed,
     launchContext: async () => ({
       newPage: async () => {
@@ -50,9 +65,11 @@ function workerDependencies(pagesByTab, detailPages = {}) {
 
         if (newPageCount === 1) {
           return {
-            goto: async () => undefined,
+            goto: async (_url, options) => {
+              initialGotoOptions = options
+            },
             url: () => 'https://seller.example/orders',
-            content: async () => pagesByTab[tabStatus][pageIndex]
+            content: async () => pagesForCurrentFilter()[pageIndex]
           }
         }
 
@@ -71,8 +88,13 @@ function workerDependencies(pagesByTab, detailPages = {}) {
       tabStatus = tab.status
       pageIndex = 0
     },
+    openOrderType: async (_page, type) => {
+      orderType = type.key
+      pageIndex = 0
+      orderTypeCalls.push(`${tabStatus}:${orderType}`)
+    },
     advancePage: async () => {
-      if (pageIndex + 1 >= pagesByTab[tabStatus].length) return false
+      if (pageIndex + 1 >= pagesForCurrentFilter().length) return false
       pageIndex += 1
       return true
     },
@@ -81,12 +103,71 @@ function workerDependencies(pagesByTab, detailPages = {}) {
   }
 }
 
+test('starts Seller Centre navigation at commit before waiting for its order UI', async () => {
+  const dependencies = workerDependencies({
+    to_ship: [emptyOrderPage()],
+    shipped: [emptyOrderPage()]
+  })
+
+  const result = await runOrderScrape(config, dependencies)
+
+  assert.deepEqual(result, { status: 'success', itemCount: 0 })
+  assert.deepEqual(dependencies.initialGotoOptions(), {
+    waitUntil: 'commit',
+    timeout: config.timeoutMs
+  })
+})
+
 test('maps the two required statuses to calibrated Seller Centre tabs', () => {
-  assert.deepEqual(ORDER_TAB_SEQUENCE, [
-    { status: 'to_ship', testId: 'l1-tab-toship' },
-    { status: 'shipped', testId: 'l1-tab-shipping' }
+  assert.deepEqual(ORDER_TAB_SEQUENCE.map(({ status, testId, orderTypes }) => ({
+    status,
+    testId,
+    orderTypes: orderTypes?.map((type) => type.key) ?? null
+  })), [
+    { status: 'to_ship', testId: 'l1-tab-toship', orderTypes: ['regular', 'instant'] },
+    { status: 'shipped', testId: 'l1-tab-shipping', orderTypes: null }
   ])
   assert.equal(sellerCentreTabSelector('l1-tab-shipping'), '[data-testid=l1-tab-shipping]')
+  assert.deepEqual(ORDER_TYPE_SEQUENCE, [
+    { key: 'regular', label: 'Pesanan Reguler' },
+    { key: 'instant', label: 'Instant' }
+  ])
+  assert.equal(sellerCentreOrderTypeSelector('Instant'), 'button, [role=button], [role=radio], label, span, div')
+})
+
+test('uses an exclusive local lock before the Gita browser can open', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gita-order-lock-'))
+  const lockPath = path.join(directory, 'worker.lock')
+  const release = await acquireOrderScraperLock(lockPath)
+
+  try {
+    assert.equal(typeof release, 'function')
+    assert.equal(await acquireOrderScraperLock(lockPath), null)
+  } finally {
+    await release()
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('does not launch the Gita browser while a marketplace operation is busy', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gita-order-lease-'))
+  let launched = false
+
+  try {
+    const result = await runOrderScrapeWorker(config, {
+      lockPath: path.join(directory, 'worker.lock'),
+      claimLease: async () => ({ status: 'marketplace_busy' }),
+      launchContext: async () => {
+        launched = true
+        throw new Error('Browser must not open.')
+      }
+    })
+
+    assert.deepEqual(result, { status: 'marketplace_busy', itemCount: 0 })
+    assert.equal(launched, false)
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('does not accept an empty transient DOM as a completed tab transition', () => {
@@ -116,10 +197,59 @@ test('waits through an empty transient before accepting newly loaded orders', as
   assert.equal(waits, 1)
 })
 
+test('accepts a rendered empty list for an order type whose chip count is zero', async () => {
+  let clicked = false
+  let orderFingerprintReads = 0
+  const label = {
+    count: async () => 1,
+    evaluate: async () => false,
+    allTextContents: async () => ['Instant (0)'],
+    click: async () => { clicked = true }
+  }
+  const page = {
+    locator: (selector) => selector.includes('order-sn')
+      ? {
+          allTextContents: async () => {
+            orderFingerprintReads += 1
+            return orderFingerprintReads === 1 ? ['ORDER-1'] : []
+          }
+        }
+      : { filter: () => ({ first: () => label }) },
+    evaluate: async () => ({ hasEmptyState: true, hasTable: true, fingerprint: '' }),
+    waitForTimeout: async () => undefined
+  }
+
+  await openOrderType(page, ORDER_TYPE_SEQUENCE[1], config)
+
+  assert.equal(clicked, true)
+})
+
+test('does not wait for a list transition when the order type is already active', async () => {
+  let clicked = false
+  const label = {
+    count: async () => 1,
+    evaluate: async () => true,
+    allTextContents: async () => ['Pesanan Reguler (3)'],
+    click: async () => { clicked = true }
+  }
+  const page = {
+    locator: (selector) => selector.includes('order-sn')
+      ? { allTextContents: async () => ['ORDER-1'] }
+      : { filter: () => ({ first: () => label }) },
+    evaluate: async () => ({ hasEmptyState: false, hasTable: true, fingerprint: 'ORDER-2' }),
+    waitForTimeout: async () => undefined
+  }
+
+  await openOrderType(page, ORDER_TYPE_SEQUENCE[0], config)
+
+  assert.equal(clicked, false)
+})
+
 test('classifies worker failures without returning raw error details', () => {
   assert.equal(orderScrapeFailureReason(new Error('Browser user data directory is already in use')), 'profile_in_use')
   assert.equal(orderScrapeFailureReason(new Error('Gita order run request failed (401).')), 'ingest_unauthorized')
   assert.equal(orderScrapeFailureReason(new Error('Timeout 30000ms exceeded.')), 'timeout')
+  assert.equal(orderScrapeFailureReason(new Error('Order type filter is unavailable: instant.')), 'order_type_unavailable')
   assert.equal(orderScrapeFailureReason(new Error('seller SKU is ambiguous')), 'parsing_conflicting_seller_sku')
   assert.equal(orderScrapeFailureReason(new Error('Detail seller SKU is unavailable.')), 'parsing_detail_seller_sku')
   assert.equal(orderScrapeFailureReason(new Error('Duplicate Gita order item.')), 'parsing_duplicate_item')
@@ -157,6 +287,31 @@ test('visits every active tab and its order details before posting one complete 
     { timeout: 30000 }
   ])
   assert.equal(dependencies.contextClosed(), true)
+})
+
+test('collects regular and instant orders in Perlu Dikirim before reading Dikirim once', async () => {
+  const dependencies = workerDependencies({
+    'to_ship:regular': [orderPage('REGULAR-TO-SHIP', 'DETAIL-REGULAR-TO-SHIP')],
+    'to_ship:instant': [orderPage('INSTANT-TO-SHIP', 'DETAIL-INSTANT-TO-SHIP')],
+    shipped: [orderPage('SHIPPED', 'DETAIL-SHIPPED')]
+  }, {
+    'https://seller.example/portal/sale/order/DETAIL-REGULAR-TO-SHIP': orderDetailPage('INT-REGULAR-TO-SHIP'),
+    'https://seller.example/portal/sale/order/DETAIL-INSTANT-TO-SHIP': orderDetailPage('INT-INSTANT-TO-SHIP'),
+    'https://seller.example/portal/sale/order/DETAIL-SHIPPED': orderDetailPage('INT-SHIPPED')
+  })
+
+  const result = await runOrderScrape(config, dependencies)
+
+  assert.deepEqual(result, { status: 'success', itemCount: 3 })
+  assert.deepEqual(dependencies.orderTypeCalls, [
+    'to_ship:regular',
+    'to_ship:instant'
+  ])
+  assert.deepEqual(dependencies.posted[0].items.map((item) => item.seller_order_id), [
+    'REGULAR-TO-SHIP',
+    'INSTANT-TO-SHIP',
+    'SHIPPED'
+  ])
 })
 
 test('reports needs_login without posting item rows', async () => {
@@ -234,4 +389,23 @@ test('reports a sanitized workflow stage for an otherwise unclassified browser e
   assert.deepEqual(result, { status: 'failed', itemCount: 0, reason: 'unexpected_open_order_list' })
   assert.equal(posted[0].message, 'Pengambilan pesanan Gita gagal.')
   assert.equal(JSON.stringify(posted).includes('unclassified browser failure'), false)
+})
+
+test('records an actionable safe message when Seller Centre loading times out', async () => {
+  const posted = []
+  const dependencies = {
+    launchContext: async () => ({
+      newPage: async () => ({
+        goto: async () => { throw new Error('Timeout 30000ms exceeded.') }
+      }),
+      close: async () => undefined
+    }),
+    postRun: async (_config, payload) => { posted.push(payload) },
+    now: () => new Date('2026-08-14T03:48:23.000Z')
+  }
+
+  const result = await runOrderScrape(config, dependencies)
+
+  assert.deepEqual(result, { status: 'failed', itemCount: 0, reason: 'timeout' })
+  assert.equal(posted[0].message, 'Halaman Seller Centre terlalu lama dimuat. Coba lagi setelah halaman Gita siap.')
 })

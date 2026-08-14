@@ -12,6 +12,7 @@ class StbSyncWorkerService
         private readonly MarketplaceOrderSyncService $orderSyncService,
         private readonly StockConsistencyService $stockConsistencyService,
         private readonly StbRuntimeService $runtime,
+        private readonly MarketplaceOperationLeaseService $marketplaceOperationLease,
     ) {
     }
 
@@ -28,33 +29,45 @@ class StbSyncWorkerService
             return $this->finish('stb_order_sync', 'marketplace_orders', 'skipped', 'Order sync STB disabled dari environment.', []);
         }
 
+        $lease = $this->marketplaceOperationLease->acquire('stb_marketplace_sync', $this->marketplaceLeaseSeconds());
+        if (! $lease['acquired']) {
+            return $this->marketplaceOperationBusyResult('stb_order_sync', 'marketplace_orders', $lease);
+        }
+
         $hours = max(1, min(72, $hours));
-        $this->refreshTokens();
+        try {
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $this->refreshTokens();
 
-        $shopee = $this->retry('poll_shopee_orders', fn (): array => $this->orderSyncService->pollShopeeReadyOrders($hours));
-        $tiktok = $this->retry('poll_tiktok_orders', fn (): array => $this->orderSyncService->pollTiktokUpdatedOrders($hours));
-        $refresh = $this->retry('pending_product_refresh', fn (): array => $this->orderSyncService->processPendingProductCacheRefreshes(
-            (int) config('stb.worker.order_product_refresh_limit', 10)
-        ));
+            $shopee = $this->retry('poll_shopee_orders', fn (): array => $this->orderSyncService->pollShopeeReadyOrders($hours));
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $tiktok = $this->retry('poll_tiktok_orders', fn (): array => $this->orderSyncService->pollTiktokUpdatedOrders($hours));
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $refresh = $this->retry('pending_product_refresh', fn (): array => $this->orderSyncService->processPendingProductCacheRefreshes(
+                (int) config('stb.worker.order_product_refresh_limit', 10)
+            ));
 
-        $failed = (int) ($shopee['failed'] ?? 0)
-            + (int) ($tiktok['failed'] ?? 0)
-            + (int) ($refresh['failed'] ?? 0);
-        $status = $this->resultStatus([$shopee, $tiktok, $refresh], $failed);
-        $message = sprintf(
-            'STB order sync selesai. Shopee baru=%s, TikTok baru=%s, refresh=%s, gagal=%s.',
-            (int) ($shopee['processed'] ?? 0),
-            (int) ($tiktok['processed'] ?? 0),
-            (int) ($refresh['processed'] ?? 0),
-            $failed
-        );
+            $failed = (int) ($shopee['failed'] ?? 0)
+                + (int) ($tiktok['failed'] ?? 0)
+                + (int) ($refresh['failed'] ?? 0);
+            $status = $this->resultStatus([$shopee, $tiktok, $refresh], $failed);
+            $message = sprintf(
+                'STB order sync selesai. Shopee baru=%s, TikTok baru=%s, refresh=%s, gagal=%s.',
+                (int) ($shopee['processed'] ?? 0),
+                (int) ($tiktok['processed'] ?? 0),
+                (int) ($refresh['processed'] ?? 0),
+                $failed
+            );
 
-        return $this->finish('stb_order_sync', 'marketplace_orders', $status, $message, [
-            'hours' => $hours,
-            'shopee' => $this->compactResult($shopee),
-            'tiktok' => $this->compactResult($tiktok),
-            'refresh' => $this->compactResult($refresh),
-        ]);
+            return $this->finish('stb_order_sync', 'marketplace_orders', $status, $message, [
+                'hours' => $hours,
+                'shopee' => $this->compactResult($shopee),
+                'tiktok' => $this->compactResult($tiktok),
+                'refresh' => $this->compactResult($refresh),
+            ]);
+        } finally {
+            $this->marketplaceOperationLease->release($lease['token']);
+        }
     }
 
     public function syncMarketplaceLite(): array
@@ -65,19 +78,29 @@ class StbSyncWorkerService
             return $this->finish('stb_marketplace_lite', 'marketplace_cache', 'skipped', 'Marketplace sync lite STB disabled dari environment.', []);
         }
 
-        $this->refreshTokens();
-        $result = $this->retry('sync_marketplace_lite', function (): array {
-            return app(OmnichannelController::class)->syncMarketplaceCachesForSkuMapping();
-        });
+        $lease = $this->marketplaceOperationLease->acquire('stb_marketplace_sync', $this->marketplaceLeaseSeconds());
+        if (! $lease['acquired']) {
+            return $this->marketplaceOperationBusyResult('stb_marketplace_lite', 'marketplace_cache', $lease);
+        }
 
-        $status = in_array(($result['status'] ?? ''), ['ok', 'success'], true) ? 'success' : 'warning';
-        $message = sprintf(
-            'STB marketplace lite selesai. Shopee=%s TikTok=%s.',
-            $result['shopee']['message'] ?? $result['shopee']['status'] ?? '-',
-            $result['tiktok']['message'] ?? $result['tiktok']['status'] ?? '-'
-        );
+        try {
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $this->refreshTokens();
+            $result = $this->retry('sync_marketplace_lite', function (): array {
+                return app(OmnichannelController::class)->syncMarketplaceCachesForSkuMapping();
+            });
 
-        return $this->finish('stb_marketplace_lite', 'marketplace_cache', $status, $message, $this->compactResult($result));
+            $status = in_array(($result['status'] ?? ''), ['ok', 'success'], true) ? 'success' : 'warning';
+            $message = sprintf(
+                'STB marketplace lite selesai. Shopee=%s TikTok=%s.',
+                $result['shopee']['message'] ?? $result['shopee']['status'] ?? '-',
+                $result['tiktok']['message'] ?? $result['tiktok']['status'] ?? '-'
+            );
+
+            return $this->finish('stb_marketplace_lite', 'marketplace_cache', $status, $message, $this->compactResult($result));
+        } finally {
+            $this->marketplaceOperationLease->release($lease['token']);
+        }
     }
 
     public function safetyCheckLite(): array
@@ -116,6 +139,32 @@ class StbSyncWorkerService
             report($exception);
             $this->runtime->logSync('stb_token_refresh', 'marketplace_tokens', 'error', 'Auto refresh token STB gagal: '.$exception->getMessage());
         }
+    }
+
+    private function marketplaceLeaseSeconds(): int
+    {
+        return max(60, min(3600, (int) config('stb.worker.marketplace_operation_lease_seconds', 3600)));
+    }
+
+    private function renewMarketplaceLeaseOrThrow(string $token): void
+    {
+        if (! $this->marketplaceOperationLease->renew($token, $this->marketplaceLeaseSeconds())) {
+            throw new \RuntimeException('Lease operasi marketplace STB tidak dapat diperbarui.');
+        }
+    }
+
+    private function marketplaceOperationBusyResult(string $source, string $target, array $lease): array
+    {
+        return $this->finish(
+            $source,
+            $target,
+            'skipped',
+            'Sinkronisasi STB dilewati karena operasi marketplace terlindungi sedang aktif.',
+            [
+                'active_operation' => $lease['operation'],
+                'locked_until_at' => $lease['locked_until_at'],
+            ],
+        );
     }
 
     private function retry(string $name, callable $callback): array

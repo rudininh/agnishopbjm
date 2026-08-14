@@ -96,10 +96,19 @@ class GitaOrderScrapeService
         $latestRunId = DB::table('gita_order_scrape_runs')->max('id');
         $query = DB::table('gita_order_scrape_items as items')
             ->join('gita_order_scrape_runs as runs', 'runs.id', '=', 'items.run_id')
+            ->leftJoin('gita_order_stock_syncs as sync', function ($join): void {
+                $join->on('sync.seller_order_id', '=', 'items.seller_order_id')
+                    ->on('sync.seller_sku', '=', 'items.seller_sku');
+            })
             ->select([
                 'items.*',
                 'runs.status as run_status',
                 'runs.finished_at as run_finished_at',
+                'sync.status as sync_status',
+                'sync.message as sync_message',
+                'sync.old_stock as sync_old_stock',
+                'sync.new_stock as sync_new_stock',
+                'sync.synced_at as sync_synced_at',
             ])
             ->orderByDesc('items.run_id')
             ->orderByDesc('items.id');
@@ -207,9 +216,13 @@ class GitaOrderScrapeService
     private function matchItems(array $items): array
     {
         $skus = array_values(array_unique(array_column($items, 'seller_sku')));
+        $candidateSkus = array_values(array_unique(array_merge(
+            $skus,
+            ...array_map(fn (string $sku): array => $this->priceSeparatedSkuCandidates($sku), $skus),
+        )));
         $masterRows = DB::table('stock_master')
             ->select(['id', 'internal_sku'])
-            ->whereIn('internal_sku', $skus)
+            ->whereIn('internal_sku', $candidateSkus)
             ->get();
 
         $masterIdsBySku = [];
@@ -218,11 +231,13 @@ class GitaOrderScrapeService
         }
 
         foreach ($items as &$item) {
-            $masterIds = $masterIdsBySku[$item['seller_sku']] ?? [];
+            $matchedSku = $this->matchedMasterSku($item['seller_sku'], $masterIdsBySku);
+            $masterIds = $matchedSku === null ? [] : $masterIdsBySku[$matchedSku];
 
             if (count($masterIds) === 1) {
                 $item['stock_master_id'] = $masterIds[0];
                 $item['match_status'] = 'matched';
+                $item['seller_sku'] = $matchedSku;
                 continue;
             }
 
@@ -232,6 +247,41 @@ class GitaOrderScrapeService
         unset($item);
 
         return $items;
+    }
+
+    private function matchedMasterSku(string $sellerSku, array $masterIdsBySku): ?string
+    {
+        if (array_key_exists($sellerSku, $masterIdsBySku)) {
+            return $sellerSku;
+        }
+
+        $candidates = array_values(array_filter(
+            $this->priceSeparatedSkuCandidates($sellerSku),
+            fn (string $candidate): bool => array_key_exists($candidate, $masterIdsBySku),
+        ));
+
+        if (count($candidates) !== 1) {
+            return null;
+        }
+
+        return $candidates[0];
+    }
+
+    private function priceSeparatedSkuCandidates(string $sellerSku): array
+    {
+        $candidates = [];
+        $length = strlen($sellerSku);
+
+        for ($suffixLength = 5; $suffixLength <= min(10, $length - 1); $suffixLength++) {
+            $suffix = substr($sellerSku, -$suffixLength);
+            if (preg_match('/^\d{1,3}\.\d{3}(?:,\d{2})?$/', $suffix) !== 1) {
+                continue;
+            }
+
+            $candidates[] = substr($sellerSku, 0, -$suffixLength);
+        }
+
+        return $candidates;
     }
 
     private function summaryFor(array $items): array
@@ -344,6 +394,8 @@ class GitaOrderScrapeService
 
     private function serializeItem(object $item): array
     {
+        [$syncStatus, $syncMessage] = $this->syncState($item);
+
         return [
             'id' => (int) $item->id,
             'run_id' => (int) $item->run_id,
@@ -358,6 +410,26 @@ class GitaOrderScrapeService
             'captured_at' => $item->captured_at,
             'run_status' => (string) $item->run_status,
             'run_finished_at' => $item->run_finished_at,
+            'sync_status' => $syncStatus,
+            'sync_message' => $syncMessage,
+            'old_stock' => $item->sync_old_stock === null ? null : (int) $item->sync_old_stock,
+            'new_stock' => $item->sync_new_stock === null ? null : (int) $item->sync_new_stock,
+            'synced_at' => $item->sync_synced_at,
         ];
+    }
+
+    private function syncState(object $item): array
+    {
+        if ($item->sync_status !== null) {
+            return [(string) $item->sync_status, (string) ($item->sync_message ?? '')];
+        }
+
+        if ($item->match_status === 'matched') {
+            return ['pending', 'Belum Disinkronkan'];
+        }
+
+        return ['blocked', $item->match_status === 'unmatched'
+            ? 'SKU tidak ditemukan di Stock Master.'
+            : 'SKU Stock Master ganda.'];
     }
 }

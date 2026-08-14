@@ -21,10 +21,10 @@ Normal local operation uses these defaults:
 
 ```text
 GITA_ORDER_SCRAPER_API_BASE_URL=http://agnishopbjm-laravel.test/api
-GITA_ORDER_SCRAPER_START_URL=https://seller.shopee.co.id/portal/sale/order?type=toship&source=processed&sort_by=confirmed_date_asc
+GITA_ORDER_SCRAPER_START_URL=https://seller.shopee.co.id/portal/sale/order?type=toship&source=to_process&sort_by=confirmed_date_asc
 GITA_ORDER_SCRAPER_PROFILE_DIR=tools/gita-order-scraper/.profile
 GITA_ORDER_SCRAPER_HEADLESS=false
-GITA_ORDER_SCRAPER_TIMEOUT_SECONDS=30
+GITA_ORDER_SCRAPER_TIMEOUT_SECONDS=90
 ```
 
 Each non-secret value may be overridden through a local worker environment when
@@ -34,7 +34,7 @@ Optional overrides:
 
 ```text
 GITA_ORDER_SCRAPER_API_BASE_URL=http://127.0.0.1:8000/api
-GITA_ORDER_SCRAPER_START_URL=https://seller.shopee.co.id/portal/sale/order?type=toship&source=processed&sort_by=confirmed_date_asc
+GITA_ORDER_SCRAPER_START_URL=https://seller.shopee.co.id/portal/sale/order?type=toship&source=to_process&sort_by=confirmed_date_asc
 GITA_ORDER_SCRAPER_PROFILE_DIR=C:\local\gita-order-profile
 GITA_ORDER_SCRAPER_HEADLESS=true
 GITA_ORDER_SCRAPER_TIMEOUT_SECONDS=45
@@ -44,9 +44,32 @@ The persistent profile directory is ignored by Git and must remain local. Do
 not place a password, cookie, session ID, token, CAPTCHA value, or MFA code in
 this document or in any tracked file.
 
+## Automatic Launcher
+
+Gunakan tombol `Jalankan Scraper PC` pada `/marketplace/gita-orders` sebagai
+cara normal untuk mengambil pesanan. Launcher hanya menjalankan
+`npm run gita-order-scrape` pada PC server; proses tetap read-only dan tidak
+menjalankan sinkron stok otomatis.
+
+Sistem menerima satu scraper Gita saja. Klik berikutnya menampilkan bahwa
+scraper sudah berjalan. Jika pengaman marketplace sedang dipakai STB atau
+operasi lain, launcher menampilkan status aman dan tidak membuka browser atau
+menghentikan proses yang sedang aktif.
+
+Jika launcher otomatis tidak tersedia, buka PowerShell pada PC server dan
+jalankan satu kali:
+
+```powershell
+Set-Location 'C:\laragon\www\agnishopbjm-laravel'
+npm run gita-order-scrape
+```
+
+Command manual memakai lock profil dan lease marketplace yang sama, sehingga
+command kedua tidak dapat membuka browser Gita kedua.
+
 ## Manual Run
 
-## Required First Calibration
+### Required First Calibration
 
 The worker selectors have been calibrated in a supervised, manually
 authenticated Gita Seller Centre session. The calibration inspected only tabs,
@@ -62,7 +85,7 @@ Run `npm run gita-order-calibrate` when a future Seller Centre change requires
 recalibration; the visible worker browser remains open until `Ctrl+C` is pressed
 in the terminal.
 
-## Manual Run After Calibration
+### Manual Run After Calibration
 
 1. Confirm `backend/.env` has a local `GITA_ORDER_SCRAPER_INGEST_TOKEN`.
 2. Run `npm run gita-order-scrape` from the repository root. The normal local
@@ -71,15 +94,16 @@ in the terminal.
 3. In the visible browser profile opened by the worker, log into the Gita
    Collection BJM Seller Centre account yourself. Complete any CAPTCHA or MFA
    yourself.
-4. Leave the worker to read the `Perlu Dikirim` and `Dikirim` tabs and all
-   discovered pages. For each order it opens the read-only detail page to read
-   `Kode Variasi`. Do not use edit, save, publish, update, delete, bulk-change,
-   or order-action controls in Seller Centre.
+4. Leave the worker to read `Pesanan Reguler` and `Instant` in `Perlu Dikirim`,
+   then the `Dikirim` tab, including all discovered pages. For each order it
+   opens the read-only detail page to read `Kode Variasi`. Do not use edit,
+   save, publish, update, delete, bulk-change, or order-action controls in
+   Seller Centre.
 
 The worker sends exactly one terminal result:
 
-- `success` only after both required tabs, all discovered pages, and every
-  order detail page are collected.
+- `success` only after both required tabs, the two `Perlu Dikirim` order types,
+  all discovered pages, and every order detail page are collected.
 - `needs_login` with no item rows when login, CAPTCHA, MFA, or verification is
   required.
 - `failed` with no item rows when navigation, parsing, deduplication, or

@@ -9,6 +9,62 @@ const TAB_STATUS_LABELS = {
   shipped: 'Dikirim'
 }
 
+const SYNC_STATUS_LABELS = {
+  pending: 'Belum Disinkronkan',
+  processing: 'Sedang Diproses',
+  synced: 'Sudah Disinkronkan',
+  failed: 'Gagal Disinkronkan',
+  blocked: 'Tidak Dapat Disinkronkan'
+}
+
+export const gitaShopMassUploadRoute = '/marketplace/import'
+
+export const gitaOrderScraperManualCommand = 'Set-Location C:\\laragon\\www\\agnishopbjm-laravel\nnpm run gita-order-scrape'
+
+export function gitaOrderScraperLauncherMessage(result) {
+  switch (result?.status) {
+    case 'started':
+      return { type: 'success', text: 'Scraper Gita sedang dijalankan di PC ini.' }
+    case 'already_running':
+      return { type: 'warning', text: 'Scraper Gita sudah berjalan; laporan akan diperbarui otomatis.' }
+    case 'marketplace_busy':
+      return { type: 'warning', text: 'Scraper belum dijalankan karena operasi marketplace lain masih aktif.' }
+    case 'manual_required':
+      return { type: 'warning', text: 'Launcher otomatis tidak tersedia. Jalankan command PowerShell pada panduan.' }
+    default:
+      return { type: 'error', text: 'Scraper Gita tidak dapat dijalankan. Coba lagi atau gunakan panduan PowerShell.' }
+  }
+}
+
+export const dailyGitaCollectorCommand = `Set-Location C:\\laragon\\www\\agnishopbjm-laravel
+$env:GITA_ORDER_SCRAPER_API_BASE_URL='http://agnishopbjm-laravel.test/api'
+$env:GITA_ORDER_SCRAPER_PROFILE_DIR='tools/gita-order-scraper/.profile'
+$env:GITA_ORDER_SCRAPER_HEADLESS='false'
+npm run gita-order-scrape`
+
+export const gitaCollectorCalibrationCommand = `Set-Location C:\\laragon\\www\\agnishopbjm-laravel
+npm run gita-order-calibrate`
+
+export function formatGitaOrderDate(value) {
+  if (!value) return '-'
+
+  const timestamp = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value.replace(' ', 'T')}Z`
+  const date = new Date(timestamp)
+
+  if (Number.isNaN(date.getTime())) return value
+
+  return new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Makassar',
+    timeZoneName: 'short'
+  }).format(date)
+}
+
 export function buildGitaOrderScrapeQuery({ matchStatus, tabStatus, page } = {}) {
   const query = {}
 
@@ -33,4 +89,16 @@ export function gitaOrderMatchStatusLabel(status) {
 
 export function gitaOrderTabStatusLabel(status) {
   return TAB_STATUS_LABELS[status] || 'Status tidak dikenal'
+}
+
+export function gitaOrderSyncStatusLabel(status) {
+  return SYNC_STATUS_LABELS[status] || 'Status tidak dikenal'
+}
+
+export function canSyncGitaOrder(item) {
+  return item?.match_status === 'matched' && ['pending', 'failed'].includes(item?.sync_status)
+}
+
+export function gitaOrderSyncActionLabel(item) {
+  return item?.sync_status === 'failed' ? 'Coba Lagi' : 'Sinkronkan'
 }

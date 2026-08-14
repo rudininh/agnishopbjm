@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\MarketplaceOrderSyncService;
+use App\Services\MarketplaceOperationLeaseService;
 use App\Services\StbRuntimeService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -20,6 +21,7 @@ class SyncRuntimeController extends Controller
     public function __construct(
         private readonly MarketplaceOrderSyncService $orderSyncService,
         private readonly StbRuntimeService $stbRuntimeService,
+        private readonly MarketplaceOperationLeaseService $marketplaceOperationLease,
     ) {
     }
 
@@ -36,6 +38,7 @@ class SyncRuntimeController extends Controller
     public function stbStatus(): JsonResponse
     {
         $statusUrl = trim((string) config('stb.status_url', ''));
+        $localStatus = $this->sanitizeStbStatusPayload($this->stbRuntimeService->status());
 
         if ($statusUrl !== '') {
             try {
@@ -43,6 +46,13 @@ class SyncRuntimeController extends Controller
                 $payload = $response->json();
 
                 if ($response->successful() && is_array($payload)) {
+                    $payload = $this->sanitizeStbStatusPayload($payload);
+                    $localOperation = $localStatus['marketplace_operation'] ?? null;
+
+                    if (($localOperation['active'] ?? false) === true) {
+                        $payload['marketplace_operation'] = $localOperation;
+                    }
+
                     return response()->json([
                         ...$payload,
                         'source' => 'remote_stb',
@@ -52,7 +62,7 @@ class SyncRuntimeController extends Controller
                 }
 
                 return response()->json([
-                    ...$this->stbRuntimeService->status(),
+                    ...$localStatus,
                     'source' => 'local_fallback',
                     'status_url' => $statusUrl,
                     'remote_status' => [
@@ -64,12 +74,12 @@ class SyncRuntimeController extends Controller
                 ]);
             } catch (\Throwable $exception) {
                 return response()->json([
-                    ...$this->stbRuntimeService->status(),
+                    ...$localStatus,
                     'source' => 'local_fallback',
                     'status_url' => $statusUrl,
                     'remote_status' => [
                         'status' => 'error',
-                        'message' => $exception->getMessage(),
+                        'message' => 'Status STB remote tidak dapat dihubungi.',
                     ],
                     'proxy_checked_at' => now()->toISOString(),
                 ]);
@@ -77,8 +87,77 @@ class SyncRuntimeController extends Controller
         }
 
         return response()->json([
-            ...$this->stbRuntimeService->status(),
+            ...$localStatus,
             'source' => 'local',
+        ]);
+    }
+
+    private function sanitizeStbStatusPayload(array $payload): array
+    {
+        if (is_array($payload['marketplace_operation'] ?? null)) {
+            unset($payload['marketplace_operation']['token']);
+        }
+
+        return $payload;
+    }
+
+    public function acquireMarketplaceOperation(Request $request): JsonResponse
+    {
+        if ($response = $this->guardMarketplaceOperationControlToken($request)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'operation' => ['required', 'string', 'in:gitashop_mass_upload'],
+            'seconds' => ['nullable', 'integer', 'min:10', 'max:3600'],
+        ]);
+
+        return response()->json([
+            'status' => 'ok',
+            'data' => $this->marketplaceOperationLease->acquire(
+                $data['operation'],
+                (int) ($data['seconds'] ?? config('shopee_mass_upload.stb_wait_seconds', 300)),
+            ),
+        ]);
+    }
+
+    public function renewMarketplaceOperation(Request $request): JsonResponse
+    {
+        if ($response = $this->guardMarketplaceOperationControlToken($request)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+            'seconds' => ['nullable', 'integer', 'min:10', 'max:3600'],
+        ]);
+
+        return response()->json([
+            'status' => 'ok',
+            'data' => [
+                'renewed' => $this->marketplaceOperationLease->renew(
+                    $data['token'],
+                    (int) ($data['seconds'] ?? config('shopee_mass_upload.stb_wait_seconds', 300)),
+                ),
+            ],
+        ]);
+    }
+
+    public function releaseMarketplaceOperation(Request $request): JsonResponse
+    {
+        if ($response = $this->guardMarketplaceOperationControlToken($request)) {
+            return $response;
+        }
+
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+        ]);
+
+        return response()->json([
+            'status' => 'ok',
+            'data' => [
+                'released' => $this->marketplaceOperationLease->release($data['token']),
+            ],
         ]);
     }
 
@@ -719,6 +798,21 @@ class SyncRuntimeController extends Controller
         return response()->json([
             'status' => 'unauthorized',
             'message' => $message,
+        ], 401);
+    }
+
+    private function guardMarketplaceOperationControlToken(Request $request): ?JsonResponse
+    {
+        $expected = trim((string) config('shopee_mass_upload.stb_control_token', ''));
+        $given = trim((string) $request->bearerToken());
+
+        if ($expected !== '' && $given !== '' && hash_equals($expected, $given)) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 'unauthorized',
+            'message' => 'Kontrol operasi marketplace ditolak: token tidak valid.',
         ], 401);
     }
 

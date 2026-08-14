@@ -9,7 +9,9 @@ test('loads a visible local Gita order worker configuration', () => {
     GITA_ORDER_SCRAPER_START_URL: 'https://seller.example/orders',
     GITA_ORDER_SCRAPER_PROFILE_DIR: 'tools/gita-order-scraper/.profile',
     GITA_ORDER_SCRAPER_HEADLESS: 'false',
-    GITA_ORDER_SCRAPER_TIMEOUT_SECONDS: '45'
+    GITA_ORDER_SCRAPER_TIMEOUT_SECONDS: '45',
+    GITA_ORDER_SCRAPER_OPERATION_LEASE_TOKEN: 'launcher-claim',
+    GITA_ORDER_SCRAPER_LOCAL_WORKER_LEASE_SECONDS: '900'
   }, {
     readBackendEnvToken: () => 'backend-token'
   })
@@ -19,6 +21,9 @@ test('loads a visible local Gita order worker configuration', () => {
   assert.equal(config.orderStartUrl, 'https://seller.example/orders')
   assert.equal(config.headless, false)
   assert.equal(config.timeoutMs, 45000)
+  assert.equal(config.operationLeaseToken, 'launcher-claim')
+  assert.equal(config.leaseSeconds, 900)
+  assert.equal(config.leaseRenewMs, 300000)
 })
 
 test('loads the local defaults and backend token without worker environment values', () => {
@@ -29,10 +34,13 @@ test('loads the local defaults and backend token without worker environment valu
   assert.deepEqual(config, {
     apiBaseUrl: 'http://agnishopbjm-laravel.test/api',
     ingestToken: 'backend-token',
-    orderStartUrl: 'https://seller.shopee.co.id/portal/sale/order?type=toship&source=processed&sort_by=confirmed_date_asc',
+    orderStartUrl: 'https://seller.shopee.co.id/portal/sale/order?type=toship&source=to_process&sort_by=confirmed_date_asc',
     profileDir: config.profileDir,
     headless: false,
-    timeoutMs: 30000
+    timeoutMs: 90000,
+    operationLeaseToken: '',
+    leaseSeconds: 900,
+    leaseRenewMs: 300000
   })
 })
 

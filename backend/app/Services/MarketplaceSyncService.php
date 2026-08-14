@@ -106,7 +106,7 @@ class MarketplaceSyncService
     public function orderSyncHistory(array $filters = [], int $page = 1, int $perPage = 20): array
     {
         $query = DB::table('marketplace_sync_logs')
-            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order', 'gita_order'])
             ->orderByDesc('created_at')
             ->orderByDesc('id');
 
@@ -124,7 +124,7 @@ class MarketplaceSyncService
     public function orderSyncExportRows(array $filters = [], int $limit = 5000)
     {
         $query = DB::table('marketplace_sync_logs')
-            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order'])
+            ->whereIn('source_marketplace', ['shopee_order', 'shopee_stock_refresh', 'tiktok_order', 'gita_order'])
             ->orderByDesc('created_at')
             ->orderByDesc('id');
 
@@ -1213,6 +1213,11 @@ class MarketplaceSyncService
         return null;
     }
 
+    public function findSkuMappingByStockMasterId(int $stockMasterId): ?object
+    {
+        return DB::table('stock_master')->where('id', $stockMasterId)->first();
+    }
+
     private function firstStockValue(object $mapping, array $keys): ?int
     {
         foreach ($keys as $key) {
@@ -1464,7 +1469,11 @@ class MarketplaceSyncService
             return ['status' => 'error', 'message' => 'Push Shopee dibatalkan: model Shopee aktif tidak ditemukan di cache.'];
         }
 
+        $accountKey = trim((string) config('shopee.account_key', 'shopee-agnishopbjm'));
         $token = DB::table('shopee_tokens')
+            ->when($accountKey !== '', function ($query) use ($accountKey): void {
+                $query->where('account_key', $accountKey);
+            })
             ->whereRaw('COALESCE(is_active, true) = true')
             ->orderByDesc('created_at')
             ->first();

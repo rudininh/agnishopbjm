@@ -12,6 +12,11 @@ class StbRuntimeService
     private const RUNTIME_KEY = 'stb_sync_worker';
     private const CACHE_HEARTBEAT_KEY = 'stb_sync_worker:last_heartbeat_at';
 
+    public function __construct(
+        private readonly MarketplaceOperationLeaseService $marketplaceOperationLease,
+    ) {
+    }
+
     public function heartbeat(string $source = 'artisan', bool $schedulerTick = false): array
     {
         $now = now();
@@ -151,6 +156,7 @@ class StbRuntimeService
             'db_status' => $dbStatus,
             'disk_warning' => $disk,
             'memory_warning' => $memory,
+            'marketplace_operation' => $this->marketplaceOperationLease->status(),
             'server_time' => now()->toISOString(),
         ];
     }

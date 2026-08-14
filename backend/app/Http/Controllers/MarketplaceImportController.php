@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use ZipArchive;
 
@@ -26,6 +27,37 @@ class MarketplaceImportController extends Controller
 
     public function __construct(private readonly MarketplaceSyncService $syncService)
     {
+    }
+
+    public function generateShopeeGitaMassUpdateFiles(string $relativeDirectory): array
+    {
+        $relativeDirectory = trim(str_replace('\\', '/', $relativeDirectory), '/');
+        abort_unless(str_starts_with($relativeDirectory, 'import-marketplace/generated/'), 422, 'Lokasi file Mass Update tidak valid.');
+
+        $workDir = storage_path('app/'.$relativeDirectory);
+        File::ensureDirectoryExists($workDir);
+        $files = [];
+
+        foreach ($this->shopeeGitaTemplates() as $type => $template) {
+            $fileName = $template['file'];
+            $source = storage_path('app/'.self::TEMPLATE_DIR.'/'.$fileName);
+            abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
+
+            $target = $workDir.'/'.$fileName;
+            File::copy($source, $target);
+            $template['writer']($target);
+
+            $files[] = [
+                'file_type' => $type,
+                'filename' => $fileName,
+                'storage_path' => $relativeDirectory.'/'.$fileName,
+                'row_count' => $this->sheetDataRowCount($target),
+                'shopee_expected_processed_count' => $this->sheetDistinctProductCount($target),
+                'sha256' => hash_file('sha256', $target),
+            ];
+        }
+
+        return $files;
     }
 
     public function downloadShopeeGitaMassUpdate(Request $request): BinaryFileResponse
@@ -1152,6 +1184,16 @@ class MarketplaceImportController extends Controller
 
     private function variantRows()
     {
+        foreach (['stock_master', 'shopee_product', 'shopee_product_model', 'sku_mappings', 'shopee_product_image'] as $table) {
+            if (! Schema::hasTable($table)) {
+                return collect();
+            }
+        }
+
+        if (! DB::table('stock_master')->exists()) {
+            return collect();
+        }
+
         return DB::table('stock_master as sm')
             ->join('shopee_product_model as spm', function ($join) {
                 $join->on(DB::raw('spm.item_id::TEXT'), '=', 'sm.shopee_product_id')
@@ -1202,6 +1244,10 @@ class MarketplaceImportController extends Controller
 
     private function productRows()
     {
+        if (! Schema::hasTable('shopee_product')) {
+            return collect();
+        }
+
         $variants = $this->variantRows()->groupBy('item_id');
         $imagesByItem = $this->productImagesByItem();
         $productsByItem = DB::table('shopee_product')
@@ -1233,6 +1279,10 @@ class MarketplaceImportController extends Controller
 
     private function productImagesByItem(bool $cfOnly = false): array
     {
+        if (! Schema::hasTable('shopee_product_image')) {
+            return [];
+        }
+
         return DB::table('shopee_product_image')
             ->whereNull('model_id')
             ->whereNotNull('image_url')
@@ -1291,6 +1341,49 @@ class MarketplaceImportController extends Controller
 
         $zip->addFromString($sheetPath, $dom->saveXML());
         $zip->close();
+    }
+
+    private function sheetDataRowCount(string $path, int $startRow = 7, string $sheetFile = 'xl/worksheets/sheet1.xml'): int
+    {
+        [$zip, $sheetPath] = $this->openWorkbookSheet($path, $sheetFile);
+        $dom = new \DOMDocument();
+        $dom->loadXML($zip->getFromName($sheetPath));
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('x', self::XLSX_NS);
+        $count = 0;
+
+        foreach ($xpath->query('//x:sheetData/x:row') as $rowNode) {
+            if ((int) $rowNode->getAttribute('r') >= $startRow) {
+                $count++;
+            }
+        }
+        $zip->close();
+
+        return $count;
+    }
+
+    private function sheetDistinctProductCount(string $path, int $startRow = 7, string $sheetFile = 'xl/worksheets/sheet1.xml'): int
+    {
+        [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($path, $sheetFile);
+        $dom = new \DOMDocument();
+        $dom->loadXML($zip->getFromName($sheetPath));
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('x', self::XLSX_NS);
+        $products = [];
+
+        foreach ($xpath->query('//x:sheetData/x:row') as $rowNode) {
+            if ((int) $rowNode->getAttribute('r') < $startRow) {
+                continue;
+            }
+
+            $productId = trim((string) ($this->readRowValues($rowNode, $sharedStrings)['A'] ?? ''));
+            if ($productId !== '') {
+                $products[$productId] = true;
+            }
+        }
+        $zip->close();
+
+        return count($products);
     }
 
     private function sanitizeMediaImageUrls(string $path): void

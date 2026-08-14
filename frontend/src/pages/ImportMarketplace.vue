@@ -154,6 +154,26 @@
       </article>
     </section>
 
+    <section class="download-panel mass-upload-panel">
+      <div class="panel-head"><h2>Upload Otomatis Gitashopcollection</h2><button class="primary" type="button" :disabled="startingMassUpload || Boolean(massUploadCurrent && !massUploadCurrent.isTerminal)" @click="startMassUpload">{{ startingMassUpload ? 'Memulai...' : 'Upload Otomatis Gitashop' }}</button></div>
+      <div class="worker-guide">
+        <div>
+          <strong>Worker PC</strong>
+          <p>Klik Upload Otomatis akan menjalankan worker di PC ini. Jika status masih Menunggu STB lebih dari sekitar 15 detik, tekan tombol berikut.</p>
+        </div>
+        <button class="secondary" type="button" :disabled="wakingMassUploadWorker || !massUploadCurrent || massUploadCurrent.isTerminal" @click="wakeMassUploadWorker">{{ wakingMassUploadWorker ? 'Menjalankan...' : 'Jalankan Worker PC' }}</button>
+        <p class="worker-guide-note">Jika launcher otomatis tidak diizinkan Windows/Apache, buka PowerShell pada PC server lalu jalankan:</p>
+        <pre><code>Set-Location 'C:\laragon\www\agnishopbjm-laravel'
+$env:GITASHOP_MASS_UPLOAD_TIMEOUT_SECONDS='300'
+npm run gitashop-mass-upload-worker</code></pre>
+        <p class="worker-guide-note">Jalankan satu kali saja. Worker mengunci proses ganda dan memproses file Gitashopcollection secara berurutan.</p>
+      </div>
+      <p v-if="massUploadCurrent" :class="['mass-upload-status', massUploadCurrent.statusTone]">{{ massUploadCurrent.statusLabel }} - {{ massUploadCurrent.message }}</p>
+      <div v-if="massUploadCurrent" class="mass-upload-content table-wrap"><table><thead><tr><th>File</th><th>Data</th><th>Status</th><th>Shopee</th></tr></thead><tbody><tr v-for="file in massUploadCurrent.files" :key="file.fileType"><td><strong>{{ file.filename }}</strong><span>{{ file.fileType }}</span></td><td>{{ file.rowCountLabel }}<span>SHA-256 {{ file.hashPrefix || '-' }}</span></td><td>{{ file.statusLabel }}</td><td>{{ file.shopeeProcessedLabel }}</td></tr></tbody></table></div>
+      <p v-else class="empty">Belum ada job aktif.</p>
+      <div v-if="massUploadHistory.length" class="mass-upload-history table-wrap"><h3>Riwayat Upload</h3><table><thead><tr><th>Job</th><th>Status</th><th>Diminta</th><th>Selesai</th></tr></thead><tbody><tr v-for="job in massUploadHistory" :key="job.id"><td>#{{ job.id }}</td><td>{{ job.statusLabel }}</td><td>{{ job.requestedAt }}</td><td>{{ job.finishedAt || '-' }}</td></tr></tbody></table></div>
+    </section>
+
     <section class="download-panel">
       <div class="panel-head">
         <div>
@@ -256,8 +276,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { omnichannelService, posService } from '@/services'
+import { toMassUploadViewModel } from './gitashopMassUploadState'
 
 const notice = ref({ type: '', message: '' })
 const downloadingKey = ref('')
@@ -267,6 +288,11 @@ const stockSearch = ref('')
 const sourceMarketplace = ref('Lazada Agni Shop Banjarmasin')
 const loadingProducts = ref(false)
 const syncingStock = ref(false)
+const startingMassUpload = ref(false)
+const wakingMassUploadWorker = ref(false)
+const massUploadCurrent = ref(null)
+const massUploadHistory = ref([])
+let massUploadPolling = null
 
 const downloadingLazada = ref(false)
 const downloadingLazadaAdvanced = ref(false)
@@ -275,6 +301,66 @@ const shopeeGitaMassUpdateUrl = '/api/marketplace/import/shopee-gita/mass-update
 const shopeeGitaMassUpdateFileUrl = (type) => `${shopeeGitaMassUpdateUrl}/${type}`
 const lazadaMassUpdateUrl = '/api/marketplace/import/lazada/mass-update'
 const lazadaAdvancedUpdateUrl = '/api/marketplace/import/lazada/advanced-update'
+
+const clearMassUploadPolling = () => {
+  if (massUploadPolling) window.clearInterval(massUploadPolling)
+  massUploadPolling = null
+}
+
+const refreshMassUpload = async () => {
+  try {
+    const [currentResponse, historyResponse] = await Promise.all([
+      omnichannelService.currentShopeeGitaMassUpload(),
+      omnichannelService.listShopeeGitaMassUploads({ per_page: 20 })
+    ])
+    massUploadCurrent.value = toMassUploadViewModel(currentResponse.data.data)
+    massUploadHistory.value = (historyResponse.data.data || []).map(toMassUploadViewModel)
+    if (!massUploadCurrent.value || massUploadCurrent.value.isTerminal) clearMassUploadPolling()
+  } catch {
+    clearMassUploadPolling()
+  }
+}
+
+const ensureMassUploadPolling = () => {
+  if (!massUploadCurrent.value || massUploadCurrent.value.isTerminal || massUploadPolling) return
+  massUploadPolling = window.setInterval(refreshMassUpload, 5000)
+}
+
+const startMassUpload = async () => {
+  startingMassUpload.value = true
+  try {
+    const response = await omnichannelService.startShopeeGitaMassUpload()
+    massUploadCurrent.value = toMassUploadViewModel(response.data.data)
+    const workerStatus = response.data.worker?.status
+    notice.value = { type: 'success', message: workerStatus === 'manual_required' ? 'Job dibuat. Jalankan perintah PowerShell pada panduan Worker PC.' : 'Job dibuat dan worker PC sedang dijalankan otomatis.' }
+    await refreshMassUpload()
+    ensureMassUploadPolling()
+  } catch (error) {
+    if (error?.response?.status === 409) {
+      await wakeMassUploadWorker()
+      await refreshMassUpload()
+      ensureMassUploadPolling()
+      notice.value = { type: 'error', message: 'Masih ada job upload aktif. Status terbaru sudah dimuat.' }
+    } else {
+      notice.value = { type: 'error', message: error?.response?.data?.message || 'Job upload Gitashopcollection gagal dibuat.' }
+    }
+  } finally {
+    startingMassUpload.value = false
+  }
+}
+
+const wakeMassUploadWorker = async () => {
+  wakingMassUploadWorker.value = true
+  try {
+    const response = await omnichannelService.wakeShopeeGitaMassUploadWorker()
+    const status = response.data.data?.status
+    notice.value = { type: status === 'manual_required' ? 'error' : 'success', message: status === 'already_running' ? 'Worker PC sudah aktif; status job sedang diperbarui.' : status === 'manual_required' ? 'Worker PC tidak dapat dijalankan otomatis. Gunakan perintah PowerShell pada panduan.' : 'Worker PC dijalankan otomatis.' }
+  } catch (error) {
+    notice.value = { type: 'error', message: error?.response?.data?.message || 'Worker PC tidak dapat dijalankan otomatis. Gunakan perintah PowerShell pada panduan.' }
+  } finally {
+    wakingMassUploadWorker.value = false
+  }
+}
 
 const downloadLazadaMassUpdate = () => {
   downloadingLazada.value = true
@@ -518,7 +604,11 @@ const downloadMassUpdateFile = (file) => {
   downloadUrl(shopeeGitaMassUpdateFileUrl(file.key))
 }
 
-onMounted(loadProducts)
+onMounted(async () => {
+  await Promise.all([loadProducts(), refreshMassUpload()])
+  ensureMassUploadPolling()
+})
+onBeforeUnmount(clearMassUploadPolling)
 </script>
 
 <style scoped>
@@ -575,6 +665,20 @@ button { border:0; border-radius:6px; cursor:pointer; font-weight:800; padding:1
 .mini { background:#0f5fc7; color:#fff; min-width:126px; padding:8px 11px; }
 button:disabled { cursor:wait; opacity:.72; }
 .download-panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); margin-top:16px; overflow:hidden; }
+.mass-upload-content,.mass-upload-history { padding:16px; }
+.mass-upload-history { border-top:1px solid #e2e8f0; }
+.mass-upload-history h3 { font-size:16px; margin-bottom:10px; }
+.mass-upload-status { border-radius:7px; margin-bottom:10px; padding:10px 12px; }
+.mass-upload-status.success { background:#dcfce7; color:#166534; }
+.mass-upload-status.warning { background:#fef3c7; color:#92400e; }
+.mass-upload-status.danger { background:#fee2e2; color:#991b1b; }
+.mass-upload-status.neutral { background:#eff6ff; color:#1d4ed8; }
+.mass-upload-active { color:#475569; font-size:13px; font-weight:700; margin-bottom:12px; }
+.worker-guide { display:grid; gap:8px; margin:14px 16px; padding:12px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1e3a8a; }
+.worker-guide p { margin:0; }
+.worker-guide .secondary { justify-self:start; }
+.worker-guide pre { overflow:auto; margin:0; padding:10px; border-radius:6px; background:#172554; color:#dbeafe; font-size:12px; line-height:1.55; }
+.worker-guide-note { font-size:13px; }
 .panel-head { align-items:center; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; gap:14px; padding:16px; }
 .panel-head h2 { font-size:18px; line-height:1.25; }
 .panel-head p { color:#64748b; font-size:13px; font-weight:700; margin-top:3px; }

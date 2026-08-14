@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
@@ -11760,6 +11761,26 @@ class OmnichannelController extends Controller
     }
 
     private function refreshShopeeToken(array $account): array
+    {
+        $lock = Cache::lock('shopee-token-refresh:'.$account['key'], 60);
+        if (! $lock->get()) {
+            return [
+                'status' => 'error',
+                'action' => 'refresh-token-'.$account['key'],
+                'account_key' => $account['key'],
+                'account_name' => $account['name'],
+                'message' => 'Refresh token '.$account['name'].' sedang diproses. Tunggu lalu coba lagi.',
+            ];
+        }
+
+        try {
+            return $this->refreshShopeeTokenUnlocked($account);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function refreshShopeeTokenUnlocked(array $account): array
     {
         $token = DB::table('shopee_tokens')
             ->where('account_key', $account['key'])

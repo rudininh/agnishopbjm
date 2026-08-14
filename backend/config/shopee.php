@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'account_key' => env('SHOPEE_ACCOUNT_KEY', 'shopee-agnishopbjm'),
     'partner_id' => (int) env('SHOPEE_PARTNER_ID', 2013107),
     'partner_key' => env('SHOPEE_PARTNER_KEY', ''),
     'host' => env('SHOPEE_HOST', 'https://partner.shopeemobile.com'),

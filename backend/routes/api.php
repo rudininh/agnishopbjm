@@ -12,14 +12,21 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\OmnichannelController;
 use App\Http\Controllers\PosController;
 use App\Http\Controllers\ProductController;
+use App\Http\Controllers\ShopeeMassUploadController;
 use App\Http\Controllers\SyncRuntimeController;
 use App\Http\Controllers\StbMappingSyncController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('health', fn () => response()->json(['status' => 'ok', 'service' => 'agnishop-api']));
 Route::post('gita-order-scrapes/runs', [GitaOrderScrapeController::class, 'store']);
+Route::post('gita-order-scrapes/worker/lease', [GitaOrderScrapeController::class, 'claimWorkerLease']);
+Route::post('gita-order-scrapes/worker/lease/renew', [GitaOrderScrapeController::class, 'renewWorkerLease']);
+Route::post('gita-order-scrapes/worker/lease/release', [GitaOrderScrapeController::class, 'releaseWorkerLease']);
+Route::post('gita-order-scrapes/worker/wake', [GitaOrderScrapeController::class, 'wakeWorker']);
 Route::get('gita-order-scrapes/latest', [GitaOrderScrapeController::class, 'latest']);
 Route::get('gita-order-scrapes/items', [GitaOrderScrapeController::class, 'items']);
+Route::post('gita-order-scrapes/sync', [GitaOrderScrapeController::class, 'syncLatest']);
+Route::post('gita-order-scrapes/items/{item}/sync', [GitaOrderScrapeController::class, 'syncItem'])->whereNumber('item');
 Route::get('shopee/callback', [OmnichannelController::class, 'shopeeCallback']);
 Route::get('tiktok/callback', [OmnichannelController::class, 'tiktokCallback']);
 Route::get('tiktok-callback', [OmnichannelController::class, 'tiktokCallback']);
@@ -57,6 +64,9 @@ Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiT
 Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
 Route::get('runtime/stb-status', [SyncRuntimeController::class, 'stbStatus']);
+Route::post('runtime/marketplace-operation/acquire', [SyncRuntimeController::class, 'acquireMarketplaceOperation']);
+Route::post('runtime/marketplace-operation/renew', [SyncRuntimeController::class, 'renewMarketplaceOperation']);
+Route::post('runtime/marketplace-operation/release', [SyncRuntimeController::class, 'releaseMarketplaceOperation']);
 Route::post('runtime/stb-mapping-sync', [StbMappingSyncController::class, 'import']);
 Route::get('marketplace/auto-sync', [MarketplaceAutoSyncController::class, 'dashboard']);
 Route::get('marketplace/auto-sync/runtime-status', [SyncRuntimeController::class, 'status']);
@@ -97,6 +107,19 @@ Route::post('marketplace/auto-sync/poll-tiktok-orders', [MarketplaceAutoSyncCont
 Route::get('marketplace/import/shopee-gita/mass-update', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdate']);
 Route::get('marketplace/import/shopee-gita/mass-update/{type}', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdateFile'])
     ->where('type', 'basic-info|sales-info|media-info|shipping-info|dts-info|republish-items');
+Route::post('marketplace/import/shopee-gita/mass-upload/jobs', [ShopeeMassUploadController::class, 'create']);
+Route::post('marketplace/import/shopee-gita/mass-upload/worker/wake', [ShopeeMassUploadController::class, 'wake']);
+Route::get('marketplace/import/shopee-gita/mass-upload/jobs/current', [ShopeeMassUploadController::class, 'current']);
+Route::get('marketplace/import/shopee-gita/mass-upload/jobs', [ShopeeMassUploadController::class, 'index']);
+Route::prefix('internal/shopee-gita-mass-upload')->middleware('shopee.mass-upload.worker')->group(function () {
+    Route::post('heartbeat', [ShopeeMassUploadController::class, 'heartbeat']);
+    Route::post('claim', [ShopeeMassUploadController::class, 'claim']);
+    Route::post('jobs/{job}/renew', [ShopeeMassUploadController::class, 'renew'])->whereNumber('job');
+    Route::get('jobs/{job}/files/{file}/download', [ShopeeMassUploadController::class, 'download'])->whereNumber(['job', 'file']);
+    Route::post('jobs/{job}/files/{file}/event', [ShopeeMassUploadController::class, 'event'])->whereNumber(['job', 'file']);
+    Route::post('jobs/{job}/files/{file}/reconcile', [ShopeeMassUploadController::class, 'reconcile'])->whereNumber(['job', 'file']);
+    Route::post('jobs/{job}/terminal', [ShopeeMassUploadController::class, 'terminal'])->whereNumber('job');
+});
 Route::post('marketplace/import/manual-stock-sync', [MarketplaceImportController::class, 'manualStockSync']);
 Route::get('marketplace/import/lazada/mass-update', [MarketplaceImportController::class, 'downloadLazadaMassUpdate']);
 Route::get('marketplace/import/lazada/advanced-update', [MarketplaceImportController::class, 'downloadLazadaAdvancedUpdate']);

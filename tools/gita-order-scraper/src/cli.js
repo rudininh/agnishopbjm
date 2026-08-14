@@ -1,20 +1,31 @@
 import { chromium } from 'playwright'
 import { parseHTML } from 'linkedom'
-import { pathToFileURL } from 'node:url'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { loadOrderWorkerConfig } from './config.js'
-import { postOrderRun } from './client.js'
+import { claimOrderScraperLease, postOrderRun, releaseOrderScraperLease, renewOrderScraperLease } from './client.js'
 import { detectOrderPageState, extractDetailSellerSkus, extractOrderCandidates, hasNextOrderPage } from './orders.js'
 
 const ORDER_CARD_SELECTOR = '[data-testid=order-item]'
 const ORDER_NUMBER_SELECTOR = `${ORDER_CARD_SELECTOR} .order-sn`
 const NEXT_PAGE_SELECTOR = '.eds-pager__button-next'
 const ORDER_TABLE_SELECTOR = '[data-testid=order-list-table-skeleton]'
+const ORDER_TYPE_CONTROL_SELECTOR = 'button, [role=button], [role=radio], label, span, div'
 export const EMPTY_ORDER_SELECTOR = '[data-testid*=empty], .eds-empty, .order-list-empty, .empty-order-wrapper'
 
+export const ORDER_TYPE_SEQUENCE = [
+  { key: 'regular', label: 'Pesanan Reguler' },
+  { key: 'instant', label: 'Instant' }
+]
+
 export const ORDER_TAB_SEQUENCE = [
-  { status: 'to_ship', testId: 'l1-tab-toship' },
+  { status: 'to_ship', testId: 'l1-tab-toship', orderTypes: ORDER_TYPE_SEQUENCE },
   { status: 'shipped', testId: 'l1-tab-shipping' }
 ]
+
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+const DEFAULT_LOCK_PATH = path.join(PROJECT_ROOT, 'backend', 'storage', 'app', 'gita-order-scraper-worker.lock')
 
 export function sellerCentreTabSelector(testId) {
   return `[data-testid=${testId}]`
@@ -40,6 +51,7 @@ export function orderScrapeFailureReason(error) {
     return 'timeout'
   }
 
+  if (/order type filter is unavailable/i.test(message)) return 'order_type_unavailable'
   if (/duplicate gita order item|duplicate order item/i.test(message)) return 'parsing_duplicate_item'
   if (/seller sku is ambiguous/i.test(message)) return 'parsing_conflicting_seller_sku'
   if (/detail seller sku is unavailable/i.test(message)) return 'parsing_detail_seller_sku'
@@ -61,6 +73,7 @@ export async function runOrderScrape(config, dependencies = {}) {
   const launchContext = dependencies.launchContext ?? launchPersistentContext
   const sendRun = dependencies.postRun ?? postOrderRun
   const openTab = dependencies.openTab ?? openOrderTab
+  const openType = dependencies.openOrderType ?? openOrderType
   const advancePage = dependencies.advancePage ?? advanceOrderPage
   const startedAt = now().toISOString()
   let context
@@ -73,7 +86,7 @@ export async function runOrderScrape(config, dependencies = {}) {
     const detailPage = await context.newPage()
     stage = 'open_order_list'
     await page.goto(config.orderStartUrl, {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'commit',
       timeout: config.timeoutMs
     })
 
@@ -84,45 +97,52 @@ export async function runOrderScrape(config, dependencies = {}) {
       stage = 'open_order_tab'
       await openTab(page, tab, config)
 
-      do {
-        stage = 'read_order_list'
-        const document = parseHTML(await page.content()).document
-        if (detectOrderPageState(document) === 'needs_login') {
-          stage = 'record_result'
-          await sendRun(config, terminalPayload('needs_login', startedAt, now, 'Login Gita diperlukan.'))
-
-          return { status: 'needs_login', itemCount: 0 }
+      for (const orderType of tab.orderTypes ?? [null]) {
+        if (orderType !== null) {
+          stage = 'open_order_type'
+          await openType(page, orderType, config)
         }
 
-        stage = 'parse_order_list'
-        const candidates = extractOrderCandidates(document, tab.status)
-        stage = 'open_order_detail'
-        const detailRows = await resolveDetailRows(detailPage, page, candidates, config)
-        if (detailRows === 'needs_login') {
-          stage = 'record_result'
-          await sendRun(config, terminalPayload('needs_login', startedAt, now, 'Login Gita diperlukan.'))
+        do {
+          stage = 'read_order_list'
+          const document = parseHTML(await page.content()).document
+          if (detectOrderPageState(document) === 'needs_login') {
+            stage = 'record_result'
+            await sendRun(config, terminalPayload('needs_login', startedAt, now, 'Login Gita diperlukan.'))
 
-          return { status: 'needs_login', itemCount: 0 }
-        }
+            return { status: 'needs_login', itemCount: 0 }
+          }
 
-        const rows = detailRows
-        for (const row of rows) {
-          const key = [row.sellerOrderId, row.sellerSku, row.variantLabel].join('\u0000')
-          if (seen.has(key)) throw new Error('Duplicate Gita order item.')
+          stage = 'parse_order_list'
+          const candidates = extractOrderCandidates(document, tab.status)
+          stage = 'open_order_detail'
+          const detailRows = await resolveDetailRows(detailPage, page, candidates, config)
+          if (detailRows === 'needs_login') {
+            stage = 'record_result'
+            await sendRun(config, terminalPayload('needs_login', startedAt, now, 'Login Gita diperlukan.'))
 
-          seen.add(key)
-          items.push({
-            seller_order_id: row.sellerOrderId,
-            tab_status: row.tabStatus,
-            seller_sku: row.sellerSku,
-            product_title: row.productTitle,
-            variant_label: row.variantLabel,
-            quantity: row.quantity,
-            captured_at: now().toISOString()
-          })
-        }
-        stage = 'advance_order_page'
-      } while (await advancePage(page, config))
+            return { status: 'needs_login', itemCount: 0 }
+          }
+
+          const rows = detailRows
+          for (const row of rows) {
+            const key = [row.sellerOrderId, row.sellerSku, row.variantLabel].join('\u0000')
+            if (seen.has(key)) throw new Error('Duplicate Gita order item.')
+
+            seen.add(key)
+            items.push({
+              seller_order_id: row.sellerOrderId,
+              tab_status: row.tabStatus,
+              seller_sku: row.sellerSku,
+              product_title: row.productTitle,
+              variant_label: row.variantLabel,
+              quantity: row.quantity,
+              captured_at: now().toISOString()
+            })
+          }
+          stage = 'advance_order_page'
+        } while (await advancePage(page, config))
+      }
     }
 
     stage = 'record_result'
@@ -139,7 +159,9 @@ export async function runOrderScrape(config, dependencies = {}) {
     const reason = classifiedReason === 'unexpected' ? `unexpected_${stage}` : classifiedReason
 
     try {
-      await sendRun(config, terminalPayload('failed', startedAt, now, 'Pengambilan pesanan Gita gagal.'))
+      await sendRun(config, terminalPayload('failed', startedAt, now, classifiedReason === 'timeout'
+        ? 'Halaman Seller Centre terlalu lama dimuat. Coba lagi setelah halaman Gita siap.'
+        : 'Pengambilan pesanan Gita gagal.'))
     } catch {
       // The terminal result remains failed when local delivery is unavailable.
     }
@@ -235,6 +257,37 @@ export async function openOrderTab(page, tab, config) {
   await waitForPageOrderContent(page, previousFingerprint, !wasActive, config)
 }
 
+export function sellerCentreOrderTypeSelector(label) {
+  return ORDER_TYPE_CONTROL_SELECTOR
+}
+
+export async function openOrderType(page, orderType, config) {
+  const label = page.locator(sellerCentreOrderTypeSelector(orderType.label))
+    .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(orderType.label)}(?:\\s*\\(\\d+\\))?\\s*$`, 'i') })
+    .first()
+
+  if (await label.count() === 0) {
+    throw new Error(`Order type filter is unavailable: ${orderType.key}.`)
+  }
+
+  const wasActive = await label.evaluate((element) => {
+    const control = element.closest('.eds-radio-button, [role=radio], label')
+    const radio = control?.querySelector('input[type=radio]')
+
+    return radio?.checked === true
+      || control?.getAttribute('aria-checked') === 'true'
+      || control?.classList.contains('checked') === true
+  })
+
+  if (wasActive) return
+
+  const expectedItemCount = orderTypeItemCount(await label.allTextContents())
+  const previousFingerprint = await orderContentFingerprint(page)
+
+  await label.click({ timeout: config.timeoutMs })
+  await waitForPageOrderContent(page, previousFingerprint, expectedItemCount !== 0, config)
+}
+
 export async function advanceOrderPage(page, config) {
   const next = page.locator(NEXT_PAGE_SELECTOR)
   const count = await next.count()
@@ -294,6 +347,17 @@ export async function waitForOrderContent(dependencies, previousFingerprint, req
   throw new Error('Order content did not become ready before timeout.')
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function orderTypeItemCount(texts) {
+  const text = Array.isArray(texts) ? texts.join(' ') : String(texts ?? '')
+  const match = text.match(/\((\d+)\)\s*$/)
+
+  return match ? Number.parseInt(match[1], 10) : null
+}
+
 function terminalPayload(status, startedAt, now, message) {
   return {
     status,
@@ -303,11 +367,77 @@ function terminalPayload(status, startedAt, now, message) {
   }
 }
 
+export async function acquireOrderScraperLock(lockPath = DEFAULT_LOCK_PATH) {
+  await fs.mkdir(path.dirname(lockPath), { recursive: true })
+
+  try {
+    const handle = await fs.open(lockPath, 'wx')
+    await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+
+    return async () => {
+      await handle.close()
+      await fs.rm(lockPath, { force: true })
+    }
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error
+
+    try {
+      const previous = JSON.parse(await fs.readFile(lockPath, 'utf8'))
+      if (Number.isInteger(previous?.pid)) {
+        try {
+          process.kill(previous.pid, 0)
+          return null
+        } catch (processError) {
+          if (processError?.code !== 'ESRCH') return null
+        }
+      }
+    } catch {}
+
+    await fs.rm(lockPath, { force: true })
+    return acquireOrderScraperLock(lockPath)
+  }
+}
+
+export async function runOrderScrapeWorker(config, dependencies = {}) {
+  const acquireLock = dependencies.acquireLock ?? acquireOrderScraperLock
+  const claimLease = dependencies.claimLease ?? claimOrderScraperLease
+  const renewLease = dependencies.renewLease ?? renewOrderScraperLease
+  const releaseLease = dependencies.releaseLease ?? releaseOrderScraperLease
+  const schedule = dependencies.setInterval ?? setInterval
+  const cancelSchedule = dependencies.clearInterval ?? clearInterval
+  const releaseLock = await acquireLock(dependencies.lockPath ?? DEFAULT_LOCK_PATH)
+
+  if (!releaseLock) return { status: 'already_running', itemCount: 0 }
+
+  let leaseToken = config.operationLeaseToken
+  let renewal
+
+  try {
+    if (!leaseToken) {
+      const claim = await claimLease(config)
+      if (claim.status !== 'claimed' || !claim.token) {
+        return { status: claim.status || 'marketplace_busy', itemCount: 0 }
+      }
+      leaseToken = claim.token
+    }
+
+    renewal = schedule(() => {
+      renewLease(config, leaseToken).catch(() => undefined)
+    }, config.leaseRenewMs)
+
+    return await runOrderScrape(config, dependencies)
+  } finally {
+    if (renewal) cancelSchedule(renewal)
+    if (leaseToken) await releaseLease(config, leaseToken).catch(() => undefined)
+    await releaseLock()
+  }
+}
+
 async function main() {
-  const result = await runOrderScrape(loadOrderWorkerConfig())
+  const result = await runOrderScrapeWorker(loadOrderWorkerConfig())
   const reason = result.reason ? `; reason=${result.reason}` : ''
   console.log(`Gita order scraper: ${result.status}; items=${result.itemCount}${reason}`)
-  process.exitCode = result.status === 'success' ? 0 : 1
+  process.exitCode = ['success', 'already_running', 'marketplace_busy'].includes(result.status) ? 0 : 1
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
