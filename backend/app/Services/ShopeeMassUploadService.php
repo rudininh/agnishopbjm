@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 
 class ShopeeMassUploadService
 {
@@ -406,9 +407,19 @@ class ShopeeMassUploadService
             'status' => $job->status,
             'message' => $this->message($job->message),
             'requested_at' => $job->requested_at,
+            'source_refreshed_at' => $job->source_refreshed_at,
+            'expected_product_count' => $job->expected_product_count === null ? null : (int) $job->expected_product_count,
+            'expected_variant_count' => $job->expected_variant_count === null ? null : (int) $job->expected_variant_count,
+            'matched_variant_count' => $job->matched_variant_count === null ? null : (int) $job->matched_variant_count,
+            'mismatched_variant_count' => $job->mismatched_variant_count === null ? null : (int) $job->mismatched_variant_count,
             'started_at' => $job->started_at,
             'finished_at' => $job->finished_at,
         ];
+        if (Schema::hasTable('shopee_mass_upload_reconciliation_results')) {
+            $data['reconciliation'] = [
+                'mismatched_count' => DB::table('shopee_mass_upload_reconciliation_results')->where('job_id', $job->id)->where('status', 'mismatched')->count(),
+            ];
+        }
         if ($withFiles) {
             $data['files'] = DB::table('shopee_mass_upload_files')->where('job_id', $job->id)->orderBy('sequence')->get()->map(fn (object $file) => $this->serializeFile($file))->all();
         }
