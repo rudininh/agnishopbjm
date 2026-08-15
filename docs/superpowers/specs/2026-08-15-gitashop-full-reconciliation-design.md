@@ -1,7 +1,7 @@
 # Gitashop Full Reconciliation Design
 
 **Date:** 2026-08-15
-**Status:** Proposed — approved for specification review
+**Status:** Approved — implementation plan in preparation
 
 ## Goal
 
