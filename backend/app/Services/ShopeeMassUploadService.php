@@ -14,6 +14,7 @@ class ShopeeMassUploadService
     public function __construct(
         private readonly ShopeeGitaMassUpdateGenerator $generator,
         private readonly ShopeeMassUploadStbGuard $stbGuard,
+        private readonly ShopeeMassUploadManifestService $manifest,
     ) {
     }
 
@@ -107,9 +108,17 @@ class ShopeeMassUploadService
 
         if ($job->status === 'menunggu_stb') {
             try {
+                $source = $this->manifest->refreshSource();
+                $manifest = $this->manifest->buildForJob((int) $job->id);
+                DB::table('shopee_mass_upload_jobs')->where('id', $job->id)->update([
+                    'source_refreshed_at' => $source['refreshed_at'],
+                    'expected_product_count' => $manifest['products'],
+                    'expected_variant_count' => $manifest['variants'],
+                    'updated_at' => now(),
+                ]);
                 $this->generateFiles((int) $job->id);
             } catch (\Throwable) {
-                $this->terminal((int) $job->id, 'dibatalkan_aman', 'File Mass Update tidak dapat dibuat dengan aman.');
+                $this->terminal((int) $job->id, 'dibatalkan_aman', 'Katalog sumber Shopee atau file Mass Update tidak dapat dibuat dengan aman.');
                 return null;
             }
         }
@@ -202,7 +211,7 @@ class ShopeeMassUploadService
             if ($next) {
                 DB::table('shopee_mass_upload_files')->where('id', $next->id)->update(['status' => 'dibuat', 'created_at_worker' => now(), 'updated_at' => now()]);
             } else {
-                $this->terminal($jobId, 'selesai', 'Enam file Mass Update selesai diproses Seller Centre.');
+                $this->terminal($jobId, 'menunggu_verifikasi', 'Enam file Mass Update selesai diproses Seller Centre dan menunggu rekonsiliasi katalog Gitashop.');
             }
         }
 
@@ -351,7 +360,7 @@ class ShopeeMassUploadService
     private function generateFiles(int $jobId): void
     {
         $relativeDirectory = 'import-marketplace/generated/gitashop-mass-upload/job-'.$jobId.'-'.bin2hex(random_bytes(4));
-        $files = $this->generator->generate($relativeDirectory);
+        $files = $this->generator->generate($relativeDirectory, $jobId);
         abort_unless(count($files) === 6, 422, 'Generator Mass Update harus menghasilkan enam file.');
 
         DB::transaction(function () use ($jobId, $files): void {

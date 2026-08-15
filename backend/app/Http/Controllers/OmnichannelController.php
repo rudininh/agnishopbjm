@@ -7266,6 +7266,25 @@ class OmnichannelController extends Controller
         ];
     }
 
+    public function syncShopeeProductCachesForMassUpdate(): array
+    {
+        $this->ensureSkuMappingTables();
+        $this->autoRefreshMarketplaceTokens();
+
+        $shopee = $this->syncShopeeProductsToDatabase();
+        $autoHiddenCount = $this->autoHideInactiveStockMasterMappings();
+
+        return [
+            'status' => ($shopee['status'] ?? '') === 'ok' ? 'ok' : 'error',
+            'message' => ($shopee['status'] ?? '') === 'ok'
+                ? 'Sinkron katalog sumber Shopee selesai.'
+                : 'Sinkron katalog sumber Shopee tidak lengkap.',
+            'shopee' => $shopee,
+            'auto_hidden_inactive_stock_master' => $autoHiddenCount,
+            'source_refreshed_at' => $shopee['last_sync_at'] ?? now()->toDateTimeString(),
+        ];
+    }
+
     public function syncMarketplaceProductCachesForOrder(array $refs, int $tiktokDelaySeconds = 0): array
     {
         $this->autoRefreshMarketplaceTokens();

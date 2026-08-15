@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Services\GitashopMassUploadWorkerLauncher;
 use App\Services\ShopeeGitaMassUpdateGenerator;
+use App\Services\ShopeeMassUploadManifestService;
 use App\Services\ShopeeMassUploadService;
 use App\Services\ShopeeMassUploadStbGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -123,13 +124,24 @@ class ShopeeMassUploadControllerTest extends TestCase
         ], $generatedFiles, array_keys($generatedFiles));
 
         $generator = Mockery::mock(ShopeeGitaMassUpdateGenerator::class);
-        $generator->shouldReceive('generate')->once()->andReturn($generatedFiles);
+        $generator->shouldReceive('generate')->once()->with(Mockery::type('string'), Mockery::type('int'))->andReturn($generatedFiles);
         $guard = Mockery::mock(ShopeeMassUploadStbGuard::class);
         $guard->shouldReceive('acquireForJob')->once()->andReturnTrue();
         $guard->shouldReceive('renewForJob')->andReturnTrue();
         $guard->shouldReceive('releaseForJob')->once();
+        $manifest = Mockery::mock(ShopeeMassUploadManifestService::class);
+        $manifest->shouldReceive('refreshSource')->once()->andReturn([
+            'products' => 60,
+            'variants' => 1730,
+            'refreshed_at' => '2026-08-15 10:30:00',
+        ]);
+        $manifest->shouldReceive('buildForJob')->once()->andReturn([
+            'products' => 60,
+            'variants' => 1730,
+        ]);
         $this->app->instance(ShopeeGitaMassUpdateGenerator::class, $generator);
         $this->app->instance(ShopeeMassUploadStbGuard::class, $guard);
+        $this->app->instance(ShopeeMassUploadManifestService::class, $manifest);
 
         $service = app(ShopeeMassUploadService::class);
         $job = $service->create();
@@ -139,6 +151,12 @@ class ShopeeMassUploadControllerTest extends TestCase
         $this->assertNotEmpty($claim['claim_token']);
         $this->assertNull($service->claim('second-worker'));
         $this->assertDatabaseCount('shopee_mass_upload_files', 6);
+        $this->assertDatabaseHas('shopee_mass_upload_jobs', [
+            'id' => $job->id,
+            'source_refreshed_at' => '2026-08-15 10:30:00',
+            'expected_product_count' => 60,
+            'expected_variant_count' => 1730,
+        ]);
 
         foreach (range(1, 6) as $sequence) {
             $file = DB::table('shopee_mass_upload_files')->where('job_id', $job->id)->where('sequence', $sequence)->first();
@@ -157,7 +175,7 @@ class ShopeeMassUploadControllerTest extends TestCase
         }
 
         $completed = $service->job($job->id);
-        $this->assertSame('selesai', $completed['status']);
+        $this->assertSame('menunggu_verifikasi', $completed['status']);
         $this->assertNull($service->current());
     }
 

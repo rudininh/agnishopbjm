@@ -22,8 +22,8 @@ class ShopeeGitaMassUpdateGenerator
         ];
     }
 
-    public function generate(string $relativeDirectory): array
+    public function generate(string $relativeDirectory, ?int $jobId = null): array
     {
-        return $this->marketplaceImportController->generateShopeeGitaMassUpdateFiles($relativeDirectory);
+        return $this->marketplaceImportController->generateShopeeGitaMassUpdateFiles($relativeDirectory, $jobId);
     }
 }

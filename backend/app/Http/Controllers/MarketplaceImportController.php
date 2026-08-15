@@ -29,7 +29,7 @@ class MarketplaceImportController extends Controller
     {
     }
 
-    public function generateShopeeGitaMassUpdateFiles(string $relativeDirectory): array
+    public function generateShopeeGitaMassUpdateFiles(string $relativeDirectory, ?int $jobId = null): array
     {
         $relativeDirectory = trim(str_replace('\\', '/', $relativeDirectory), '/');
         abort_unless(str_starts_with($relativeDirectory, 'import-marketplace/generated/'), 422, 'Lokasi file Mass Update tidak valid.');
@@ -37,6 +37,10 @@ class MarketplaceImportController extends Controller
         $workDir = storage_path('app/'.$relativeDirectory);
         File::ensureDirectoryExists($workDir);
         $files = [];
+        $manifestRows = $jobId === null ? null : $this->shopeeGitaManifestRows($jobId);
+        if ($jobId !== null && $manifestRows->isEmpty()) {
+            abort(422, 'Manifest Mass Update tidak tersedia atau tidak lengkap.');
+        }
 
         foreach ($this->shopeeGitaTemplates() as $type => $template) {
             $fileName = $template['file'];
@@ -45,7 +49,13 @@ class MarketplaceImportController extends Controller
 
             $target = $workDir.'/'.$fileName;
             File::copy($source, $target);
-            $template['writer']($target);
+            if ($type === 'sales-info' && $manifestRows !== null) {
+                $this->fillSalesInfoFromManifest($target, $manifestRows);
+            } elseif ($type === 'media-info' && $manifestRows !== null) {
+                $this->fillMediaInfoFromManifest($target, $manifestRows);
+            } else {
+                $template['writer']($target);
+            }
 
             $files[] = [
                 'file_type' => $type,
@@ -58,6 +68,70 @@ class MarketplaceImportController extends Controller
         }
 
         return $files;
+    }
+
+    public function shopeeGitaManifestRows(int $jobId)
+    {
+        return DB::table('shopee_mass_upload_manifests')
+            ->where('job_id', $jobId)
+            ->orderBy('target_item_id')
+            ->orderBy('target_model_id')
+            ->get();
+    }
+
+    public function shopeeGitaSourceVariants()
+    {
+        $productImagesByItem = $this->productImagesByItem();
+        $productsByItem = $this->productRows()->keyBy('item_id');
+
+        return $this->variantRows()->map(function ($variant) use ($productImagesByItem, $productsByItem): object {
+            $itemId = (string) $variant->item_id;
+            $product = $productsByItem->get($itemId);
+
+            return (object) [
+                'item_id' => $itemId,
+                'model_id' => (string) $variant->model_id,
+                'seller_sku' => trim((string) $variant->seller_sku),
+                'product_name' => (string) ($product->product_name ?? $variant->product_name ?? ''),
+                'variant_name' => (string) ($variant->variant_name ?? ''),
+                'description' => (string) ($product->description ?? ''),
+                'price' => (int) $variant->price,
+                'stock_qty' => max(0, (int) $variant->stock_qty),
+                'raw_image_url' => (string) ($variant->raw_image_url ?? ''),
+                'product_image_urls' => $productImagesByItem[$itemId] ?? [],
+            ];
+        })->values();
+    }
+
+    public function shopeeGitaSalesTargetMappings()
+    {
+        $source = storage_path('app/'.self::TEMPLATE_DIR.'/mass_update_sales_info.xlsx');
+        abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: mass_update_sales_info.xlsx');
+
+        [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($source);
+        $dom = new \DOMDocument();
+        $dom->loadXML($zip->getFromName($sheetPath));
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('x', self::XLSX_NS);
+        $mappings = collect();
+
+        foreach ($xpath->query('//x:sheetData/x:row') as $rowNode) {
+            if ((int) $rowNode->getAttribute('r') < 7) {
+                continue;
+            }
+
+            $row = $this->readRowValues($rowNode, $sharedStrings);
+            $mappings->push([
+                'source_item_id' => $this->sourceItemIdFromParentSku($row['E'] ?? ''),
+                'source_seller_sku' => trim((string) ($row['F'] ?? '')),
+                'target_item_id' => trim((string) ($row['A'] ?? '')),
+                'target_model_id' => trim((string) ($row['C'] ?? '')),
+            ]);
+        }
+
+        $zip->close();
+
+        return $mappings;
     }
 
     public function downloadShopeeGitaMassUpdate(Request $request): BinaryFileResponse
@@ -1061,6 +1135,71 @@ class MarketplaceImportController extends Controller
                 'J' => $row['J'] ?? '1',
             ];
         });
+    }
+
+    private function fillSalesInfoFromManifest(string $path, $manifestRows): void
+    {
+        $byTarget = $manifestRows->keyBy(fn ($row) => trim((string) $row->target_item_id).'|'.trim((string) $row->target_model_id));
+        $seen = [];
+
+        $this->updateSheetRows($path, 7, function (array $row) use ($byTarget, &$seen): array {
+            $key = trim((string) ($row['A'] ?? '')).'|'.trim((string) ($row['C'] ?? ''));
+            $variant = $byTarget->get($key);
+            if (! $variant) {
+                return [];
+            }
+            $seen[$key] = true;
+
+            return [
+                'F' => $variant->seller_sku,
+                'G' => (int) $variant->price,
+                'I' => (int) $variant->stock_qty,
+            ];
+        });
+
+        abort_unless(count($seen) === $manifestRows->count(), 422, 'Cakupan Sales Info tidak sama dengan manifest Mass Update.');
+    }
+
+    private function fillMediaInfoFromManifest(string $path, $manifestRows): void
+    {
+        $products = $manifestRows
+            ->groupBy(fn ($row) => trim((string) $row->target_item_id))
+            ->map(fn ($rows) => $rows->first());
+        $variantsByTargetItem = $manifestRows
+            ->groupBy(fn ($row) => trim((string) $row->target_item_id))
+            ->map(fn ($rows) => $rows->keyBy(fn ($row) => $this->normalizeOptionName($row->variant_name ?? '')));
+        $seen = [];
+
+        $this->updateSheetRows($path, 7, function (array $row) use ($products, $variantsByTargetItem, &$seen): array {
+            $targetItemId = trim((string) ($row['A'] ?? ''));
+            $product = $products->get($targetItemId);
+            if (! $product) {
+                return [];
+            }
+            $seen[$targetItemId] = true;
+            $images = json_decode((string) $product->product_image_urls, true);
+            $images = is_array($images) ? array_values(array_filter($images, fn ($url) => trim((string) $url) !== '')) : [];
+            $updates = ['C' => (string) ($product->product_name ?? '')];
+            foreach (array_slice($images, 0, 9) as $index => $imageUrl) {
+                $updates[$index === 0 ? 'E' : $this->columnName(5 + $index)] = $imageUrl;
+            }
+            $variants = $variantsByTargetItem->get($targetItemId, collect());
+            for ($columnIndex = 17; $columnIndex <= 205; $columnIndex += 2) {
+                $optionName = trim((string) ($row[$this->columnName($columnIndex)] ?? ''));
+                if ($optionName === '') {
+                    continue;
+                }
+                $variant = $variants->get($this->normalizeOptionName($optionName));
+                if ($variant) {
+                    $updates[$this->columnName($columnIndex + 1)] = (string) ($variant->variant_image_url ?? '');
+                }
+            }
+
+            return $updates;
+        });
+
+        abort_unless(count($seen) === $products->count(), 422, 'Cakupan Media Info tidak sama dengan manifest Mass Update.');
+        $this->sanitizeMediaImageUrls($path);
     }
 
     private function fillShippingInfo(string $path): void
