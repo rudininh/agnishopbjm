@@ -129,7 +129,7 @@ class MarketplaceTokenSyncService
         $query = DB::table($table)->select($selectedColumns);
 
         if (in_array('is_active', $availableColumns, true)) {
-            $query->where('is_active', true);
+            $query->whereRaw('is_active = true');
         }
 
         foreach ($orderBy as $column) {
@@ -164,7 +164,7 @@ class MarketplaceTokenSyncService
             $current = DB::table('shopee_tokens')
                 ->where('account_key', $accountKey)
                 ->where('shop_id', $shopId)
-                ->where('is_active', true)
+                ->whereRaw('is_active = true')
                 ->orderByDesc('updated_at')
                 ->first();
 
@@ -176,7 +176,7 @@ class MarketplaceTokenSyncService
             DB::transaction(function () use ($current, $accountKey, $shopId, $token): void {
                 if ($current) {
                     DB::table('shopee_tokens')->where('id', $current->id)->update([
-                        'is_active' => false,
+                        'is_active' => DB::raw('false'),
                         'updated_at' => now(),
                     ]);
                 }
@@ -191,7 +191,7 @@ class MarketplaceTokenSyncService
                     'refresh_token_expire_at' => $this->tokenDate($token['refresh_token_expire_at'] ?? null),
                     'expire_at' => $this->tokenDate($token['expire_at'] ?? null),
                     'request_id' => $token['request_id'] ?? null,
-                    'is_active' => true,
+                    'is_active' => DB::raw('true'),
                     'created_at' => now(),
                     'updated_at' => $this->tokenDate($token['updated_at'] ?? null) ?: now(),
                 ]);
@@ -237,7 +237,7 @@ class MarketplaceTokenSyncService
                 continue;
             }
 
-            $current = DB::table('tiktok_tokens')->where('account_key', $accountKey)->where('shop_id', $shopId)->where('is_active', true)->orderByDesc('updated_at')->first();
+            $current = DB::table('tiktok_tokens')->where('account_key', $accountKey)->where('shop_id', $shopId)->whereRaw('is_active = true')->orderByDesc('updated_at')->first();
             if ($current && ! $this->incomingTokenIsNewer($token, $current)) {
                 $summary['skipped_stale'] += 1;
                 continue;
@@ -245,7 +245,7 @@ class MarketplaceTokenSyncService
 
             DB::transaction(function () use ($current, $accountKey, $shopId, $token): void {
                 if ($current) {
-                    DB::table('tiktok_tokens')->where('id', $current->id)->update(['is_active' => false, 'updated_at' => now()]);
+                    DB::table('tiktok_tokens')->where('id', $current->id)->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
                 }
 
                 DB::table('tiktok_tokens')->insert([
@@ -259,7 +259,7 @@ class MarketplaceTokenSyncService
                     'refresh_token_expire_at' => $this->tokenDate($token['refresh_token_expire_at'] ?? null),
                     'expire_at' => $this->tokenDate($token['expire_at'] ?? null),
                     'request_id' => $token['request_id'] ?? null,
-                    'is_active' => true,
+                    'is_active' => DB::raw('true'),
                     'created_at' => now(),
                     'updated_at' => $this->tokenDate($token['updated_at'] ?? null) ?: now(),
                 ]);

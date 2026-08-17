@@ -64,6 +64,15 @@ class MarketplaceTokenSyncTest extends TestCase
         $this->assertStringNotContainsString('inactive-access', $response->getContent());
     }
 
+    public function test_stb_export_uses_a_postgresql_safe_boolean_active_filter(): void
+    {
+        $serviceSource = file_get_contents(app_path('Services/MarketplaceTokenSyncService.php'));
+
+        $this->assertStringContainsString("whereRaw('is_active = true')", $serviceSource);
+        $this->assertStringContainsString("'is_active' => DB::raw('true')", $serviceSource);
+        $this->assertStringContainsString("'is_active' => DB::raw('false')", $serviceSource);
+    }
+
     public function test_stb_export_rejects_disabled_or_non_stb_backend(): void
     {
         config([
