@@ -231,19 +231,25 @@ class MarketplaceTokenSyncService
             }
 
             $accountKey = trim((string) ($token['account_key'] ?? ''));
+            $openId = trim((string) ($token['open_id'] ?? ''));
             $shopId = trim((string) ($token['shop_id'] ?? ''));
-            if ($accountKey === '' || $shopId === '') {
+            if ($accountKey === '' || ($openId === '' && $shopId === '')) {
                 $summary['unchanged'] += 1;
                 continue;
             }
 
-            $current = DB::table('tiktok_tokens')->where('account_key', $accountKey)->where('shop_id', $shopId)->whereRaw('is_active = true')->orderByDesc('updated_at')->first();
+            $current = DB::table('tiktok_tokens')
+                ->where('account_key', $accountKey)
+                ->when($openId !== '', fn ($query) => $query->where('open_id', $openId), fn ($query) => $query->where('shop_id', $shopId))
+                ->whereRaw('is_active = true')
+                ->orderByDesc('updated_at')
+                ->first();
             if ($current && ! $this->incomingTokenIsNewer($token, $current)) {
                 $summary['skipped_stale'] += 1;
                 continue;
             }
 
-            DB::transaction(function () use ($current, $accountKey, $shopId, $token): void {
+            DB::transaction(function () use ($current, $accountKey, $openId, $shopId, $token): void {
                 if ($current) {
                     DB::table('tiktok_tokens')->where('id', $current->id)->update(['is_active' => DB::raw('false'), 'updated_at' => now()]);
                 }
@@ -251,8 +257,8 @@ class MarketplaceTokenSyncService
                 DB::table('tiktok_tokens')->insert([
                     'account_key' => $accountKey,
                     'account_name' => trim((string) ($token['account_name'] ?? $accountKey)),
-                    'shop_id' => $shopId,
-                    'open_id' => $token['open_id'] ?? null,
+                    'shop_id' => $shopId !== '' ? $shopId : null,
+                    'open_id' => $openId !== '' ? $openId : null,
                     'access_token' => $token['access_token'],
                     'refresh_token' => $token['refresh_token'],
                     'access_token_expire_at' => $this->tokenDate($token['access_token_expire_at'] ?? null),

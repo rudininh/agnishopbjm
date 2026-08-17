@@ -216,6 +216,44 @@ class MarketplaceTokenSyncTest extends TestCase
         $this->assertDatabaseHas('tiktok_tokens', ['account_key' => 'tiktok-agnishopbjm', 'access_token' => 'tiktok-access', 'is_active' => true]);
     }
 
+    public function test_pc_imports_tiktok_token_with_open_id_when_stb_has_no_shop_id(): void
+    {
+        Schema::create('tiktok_tokens', function ($table): void {
+            $table->id();
+            $table->string('account_key')->nullable();
+            $table->string('account_name')->nullable();
+            $table->string('shop_id')->nullable();
+            $table->string('open_id')->nullable();
+            $table->text('access_token')->nullable();
+            $table->text('refresh_token')->nullable();
+            $table->timestamp('access_token_expire_at')->nullable();
+            $table->timestamp('refresh_token_expire_at')->nullable();
+            $table->timestamp('expire_at')->nullable();
+            $table->string('request_id')->nullable();
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
+        $this->configurePcTokenSync();
+        $payload = $this->stbPayload('shopee-access', 'shopee-refresh');
+        $payload['tiktok'] = [[
+            'account_key' => 'tiktok-agnishopbjm', 'account_name' => 'TikTok AgniShopBJM',
+            'open_id' => 'open-id-only', 'access_token' => 'tiktok-access',
+            'refresh_token' => 'tiktok-refresh', 'updated_at' => now()->toISOString(),
+        ]];
+        Http::fake(['http://10.0.0.2:8088/*' => Http::response($payload, 200)]);
+
+        $result = app(\App\Services\MarketplaceTokenSyncService::class)->pullFromStb();
+
+        $this->assertSame(1, $result['tiktok']['updated']);
+        $this->assertDatabaseHas('tiktok_tokens', [
+            'account_key' => 'tiktok-agnishopbjm',
+            'open_id' => 'open-id-only',
+            'shop_id' => null,
+            'access_token' => 'tiktok-access',
+            'is_active' => true,
+        ]);
+    }
+
     public function test_dashboard_payload_does_not_expose_marketplace_credentials(): void
     {
         $this->insertShopeeToken('shopee-agnishopbjm', 123, 'never-send-access', 'never-send-refresh', true);
