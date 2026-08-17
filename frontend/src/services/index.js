@@ -418,6 +418,10 @@ export const omnichannelService = {
     return api.post(`/gita-order-scrapes/items/${itemId}/sync`, {}, { skipAuthRedirect: true })
   },
 
+  pullStbMarketplaceTokens() {
+    return api.post('/runtime/pull-stb-marketplace-tokens')
+  },
+
   runTokenAction(action) {
     return api.post(`/omnichannel/${action}`)
   }
