@@ -3702,15 +3702,22 @@ class OmnichannelController extends Controller
 
                         if ($existingSellerSkus->contains($sellerSku)) {
                             $tiktokSku = $tiktokSkusBySellerSku->get($sellerSku, []);
+                            $shopeeVariantName = trim((string) ($row->shopee_variant_name ?? ''));
+                            $tiktokVariantName = trim((string) ($tiktokSku['sku_name'] ?? ''));
+                            $hasVariantNameConflict = $shopeeVariantName !== ''
+                                && $tiktokVariantName !== ''
+                                && $this->normalizeTiktokVariantReconciliationName($shopeeVariantName) !== $this->normalizeTiktokVariantReconciliationName($tiktokVariantName);
                             $mappingOnlyVariants->push([
                                 'shopee_item_id' => trim((string) ($row->shopee_item_id ?? '')),
                                 'shopee_model_id' => $modelId,
-                                'variant_name' => trim((string) ($row->shopee_variant_name ?? '')),
+                                'variant_name' => $shopeeVariantName,
                                 'seller_sku' => $sellerSku,
                                 'image_url' => $imageUrl,
                                 'tiktok_sku_id' => $tiktokSku['sku_id'] ?? null,
-                                'tiktok_variant_name' => $tiktokSku['sku_name'] ?? null,
-                                'reason' => 'SKU sudah ada di TikTok; mapping belum tersambung.',
+                                'tiktok_variant_name' => $tiktokVariantName ?: null,
+                                'reason' => $hasVariantNameConflict
+                                    ? 'SKU sudah ada di TikTok, tetapi nama varian berbeda; perlu verifikasi mapping.'
+                                    : 'SKU sudah ada di TikTok; mapping belum tersambung.',
                             ]);
                             return null;
                         }
@@ -6053,6 +6060,7 @@ class OmnichannelController extends Controller
             $sellerSku = $this->extractTiktokSellerSku($sku);
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
+            $warehouseId = trim((string) data_get($sku, 'inventory.0.warehouse_id', data_get($sku, 'inventory.0.warehouse.id', '')));
             $skuImageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokSkuImageUrl($sku), 'tiktok', $productId, $skuId !== '' ? $skuId : $skuName);
             $skuKey = $skuId !== '' ? $skuId : $skuName;
             $matchAttributes = $skuId !== ''
@@ -6071,6 +6079,7 @@ class OmnichannelController extends Controller
                     'image_url' => $skuImageUrl,
                     'sku_name' => $skuName,
                     'seller_sku' => $sellerSku,
+                    'warehouse_id' => $warehouseId !== '' ? $warehouseId : null,
                     'stock_qty' => $stock,
                     'price' => $price,
                     'subtotal' => $price * $stock,
@@ -6642,6 +6651,7 @@ class OmnichannelController extends Controller
                 image_url TEXT NULL,
                 sku_name TEXT NULL,
                 seller_sku TEXT NULL,
+                warehouse_id TEXT NULL,
                 stock_qty INTEGER DEFAULT 0,
                 price BIGINT DEFAULT 0,
                 subtotal BIGINT DEFAULT 0,
@@ -6655,6 +6665,7 @@ class OmnichannelController extends Controller
 
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS sku_id TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS seller_sku TEXT NULL");
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS warehouse_id TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS product_status TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS audit_status TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE");

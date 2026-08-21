@@ -237,6 +237,32 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('1', $groups->first()['variants']->first()['shopee_model_id']);
     }
 
+    public function test_tiktok_bulk_candidates_flag_variant_name_conflicts_for_manual_mapping_review(): void
+    {
+        $groups = $this->tiktokBulkMissingVariantCandidates(collect([
+            (object) [
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk A',
+                'shopee_item_id' => '100',
+                'shopee_model_id' => '1',
+                'shopee_model_sku' => 'SH-BURGANDY',
+                'shopee_variant_name' => 'Seameson',
+                'shopee_image_url' => 'https://cdn.example/seameson.jpg',
+                'tiktok_seller_skus' => ['SH-BURGANDY'],
+                'tiktok_skus' => [[
+                    'seller_sku' => 'SH-BURGANDY',
+                    'sku_id' => 'TT-1',
+                    'sku_name' => 'Burgandy uk M',
+                ]],
+            ],
+        ]));
+
+        $variant = $groups->first()['mapping_only_variants']->first();
+
+        $this->assertSame('TT-1', $variant['tiktok_sku_id']);
+        $this->assertSame('SKU sudah ada di TikTok, tetapi nama varian berbeda; perlu verifikasi mapping.', $variant['reason']);
+    }
+
     public function test_linked_tiktok_seller_sku_lookup_ignores_variant_name_mismatch(): void
     {
         $match = $this->linkedTiktokSellerSkuMatch([

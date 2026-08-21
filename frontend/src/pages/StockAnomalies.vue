@@ -28,6 +28,7 @@
       <article><span>Stok beda</span><strong>{{ summary.stock_mismatch || 0 }}</strong></article>
       <article><span>Stok Shopee kosong</span><strong>{{ summary.missing_shopee_stock || 0 }}</strong></article>
       <article><span>Stok TikTok kosong</span><strong>{{ summary.missing_tiktok_stock || 0 }}</strong></article>
+      <article><span>Konflik SKU TikTok</span><strong>{{ summary.tiktok_sku_conflict || 0 }}</strong></article>
       <article><span>Mapping belum lengkap</span><strong>{{ summary.incomplete_mapping || 0 }}</strong></article>
       <article><span>Safety terakhir</span><strong>{{ formatDate(summary.last_safety_run) }}</strong></article>
     </section>
@@ -137,6 +138,7 @@ const issueLabel = (type) => ({
   stock_mismatch: 'Stok beda',
   missing_shopee_stock: 'Shopee kosong',
   missing_tiktok_stock: 'TikTok kosong',
+  tiktok_sku_conflict: 'Konflik SKU TikTok',
   incomplete_mapping: 'Mapping belum lengkap'
 }[type] || type || '-')
 

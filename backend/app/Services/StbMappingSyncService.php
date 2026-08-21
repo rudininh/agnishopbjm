@@ -29,6 +29,14 @@ class StbMappingSyncService
         'tiktok_products' => ['stock_qty'],
     ];
 
+    private const BOOLEAN_COLUMNS = [
+        'stock_master' => ['is_hidden_from_mapping'],
+        'shopee_product' => ['is_active'],
+        'tiktok_products' => ['is_active'],
+        'shopee_tokens' => ['is_active'],
+        'tiktok_tokens' => ['is_active'],
+    ];
+
     public function snapshot(bool $includeTokens = false, array $onlyTables = [], array $exceptTables = []): array
     {
         $this->ensureTables();
@@ -201,7 +209,7 @@ class StbMappingSyncService
                 $updated++;
             } else {
                 $this->syncSerialSequence($table);
-                DB::table($table)->insert($this->insertData($data));
+                DB::table($table)->insert($this->insertData($table, $data));
                 $inserted++;
             }
         }
@@ -287,12 +295,12 @@ class StbMappingSyncService
             }
         }
 
-        return $this->normalizeDateTimes($data);
+        return $this->normalizeBooleanColumns($table, $this->normalizeDateTimes($data));
     }
 
-    private function insertData(array $data): array
+    private function insertData(string $table, array $data): array
     {
-        return $this->normalizeDateTimes($data);
+        return $this->normalizeBooleanColumns($table, $this->normalizeDateTimes($data));
     }
 
     private function prepareTokenImportData(string $table, array $data): array
@@ -348,6 +356,22 @@ class StbMappingSyncService
         }
         if (array_key_exists('updated_at', $data) && ($data['updated_at'] ?? null) === null) {
             $data['updated_at'] = $now;
+        }
+
+        return $data;
+    }
+
+    private function normalizeBooleanColumns(string $table, array $data): array
+    {
+        foreach (self::BOOLEAN_COLUMNS[$table] ?? [] as $column) {
+            if (! array_key_exists($column, $data) || $data[$column] instanceof \Illuminate\Database\Query\Expression) {
+                continue;
+            }
+
+            $value = filter_var($data[$column], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($value !== null) {
+                $data[$column] = DB::raw($value ? 'true' : 'false');
+            }
         }
 
         return $data;
@@ -471,6 +495,7 @@ class StbMappingSyncService
                 sku_id TEXT NULL,
                 sku_name TEXT NULL,
                 seller_sku TEXT NULL,
+                warehouse_id TEXT NULL,
                 stock_qty INTEGER DEFAULT 0,
                 price BIGINT DEFAULT 0,
                 subtotal BIGINT DEFAULT 0,
@@ -591,6 +616,7 @@ class StbMappingSyncService
                 'image_url TEXT NULL',
                 'sku_id TEXT NULL',
                 'seller_sku TEXT NULL',
+                'warehouse_id TEXT NULL',
                 'product_status TEXT NULL',
                 'audit_status TEXT NULL',
                 'is_active BOOLEAN DEFAULT TRUE',
