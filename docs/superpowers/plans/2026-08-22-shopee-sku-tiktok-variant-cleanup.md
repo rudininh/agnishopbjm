@@ -56,12 +56,12 @@ class ShopeeSellerSkuTemplateTest extends TestCase
         $this->assertSame('INT-100-MERAH-L', $builder->build('100', 'Merah / L'));
     }
 
-    public function test_it_normalizes_symbols_repeated_dashes_and_length(): void
+    public function test_it_normalizes_symbols_preserves_supported_dashes_and_limits_length(): void
     {
         $builder = new ShopeeSellerSkuTemplate();
         $sku = $builder->build('42', '  Rose & Dusty -- Premium  ');
 
-        $this->assertSame('INT-42-ROSE-DUSTY-PREMIUM', $sku);
+        $this->assertSame('INT-42-ROSE-DUSTY----PREMIUM', $sku);
         $this->assertLessThanOrEqual(100, mb_strlen($sku));
     }
 }
