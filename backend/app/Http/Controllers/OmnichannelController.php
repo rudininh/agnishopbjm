@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\ShopeeSellerSkuTemplate;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
@@ -3266,7 +3267,7 @@ class OmnichannelController extends Controller
 
     private function buildShopeeTemplateSellerSku(string $itemId, string $variantName): string
     {
-        return 'INT-'.trim($itemId).'-'.$this->sanitizeSkuFragment($variantName);
+        return app(ShopeeSellerSkuTemplate::class)->build($itemId, $variantName);
     }
 
     private function shopeeModelVariationCode(string $itemId, object $model): string

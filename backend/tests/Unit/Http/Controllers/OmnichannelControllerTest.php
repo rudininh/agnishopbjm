@@ -3,6 +3,7 @@
 namespace Tests\Unit\Http\Controllers;
 
 use App\Http\Controllers\OmnichannelController;
+use App\Services\ShopeeSellerSkuTemplate;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -551,9 +552,11 @@ class OmnichannelControllerTest extends TestCase
     {
         $canonical = $this->invokeControllerMethod('canonicalShopeeVariantSellerSku', ['100', 'Rose_Gold']);
         $template = $this->invokeControllerMethod('buildShopeeTemplateSellerSku', ['100', 'Rose_Gold']);
+        $sharedTemplate = (new ShopeeSellerSkuTemplate())->build('100', 'Rose_Gold');
 
         $this->assertSame('INT-100-ROSE_GOLD', $canonical);
         $this->assertSame($template, $canonical);
+        $this->assertSame($sharedTemplate, $template);
     }
 
     public function test_global_reconciliation_overview_lists_explicit_variant_anomalies(): void
