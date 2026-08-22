@@ -1024,6 +1024,68 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('', $blank);
     }
 
+    public function test_tiktok_delete_helper_delegates_normalized_multi_target_payload_building_without_changing_row_contract(): void
+    {
+        Http::fake();
+        $greenSku = $this->tiktokPartialEditFixtureSku([
+            'id' => 'tt-green',
+            'seller_sku' => 'INT-42-GREEN',
+        ]);
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'id' => 'tt-product-42',
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-blue']),
+                $greenSku,
+            ],
+        ], ' TT-OLD-RED ', ['tt-old-blue', 'TT-OLD-BLUE']]);
+
+        $this->assertSame([[
+            'id' => 'tt-green',
+            'seller_sku' => 'INT-42-GREEN',
+            'price' => [
+                'currency' => 'IDR',
+                'sale_price' => '48000',
+                'tax_exclusive_price' => '48000',
+                'amount' => '48000',
+            ],
+            'inventory' => [[
+                'quantity' => 3,
+                'warehouse_id' => 'warehouse-1',
+            ]],
+            'sales_attributes' => $greenSku['sales_attributes'],
+        ]], $rows);
+        Http::assertNothingSent();
+    }
+
+    public function test_tiktok_delete_helper_preserves_empty_row_contract_when_a_target_is_missing(): void
+    {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [$this->tiktokPartialEditFixtureSku()],
+        ], 'missing-target', []]);
+
+        $this->assertSame([], $rows);
+        Http::assertNothingSent();
+    }
+
+    public function test_tiktok_delete_helper_ignores_historical_exclusions_already_absent_from_fresh_detail(): void
+    {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-green', 'seller_sku' => 'INT-42-GREEN']),
+            ],
+        ], 'tt-old-red', ['tt-already-deleted']]);
+
+        $this->assertSame(['tt-green'], array_column($rows, 'id'));
+        Http::assertNothingSent();
+    }
+
     public function test_tiktok_existing_product_partial_edit_batch_mutation_appends_all_new_skus(): void
     {
         $this->assertTrue($this->hasControllerMethod('buildTiktokExistingProductPartialEditBatchMutation'));

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\TiktokPartialEditSkuPayloadBuilder;
 use App\Services\ShopeeSellerSkuTemplate;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -9406,45 +9407,23 @@ class OmnichannelController extends Controller
 
     private function buildTiktokPartialEditSkuDeleteRows(array $productDetail, string $targetSkuId, array $excludedSkuIds = []): array
     {
-        $rows = [];
-        $targetFound = false;
-        $productId = trim((string) ($productDetail['id'] ?? $productDetail['product_id'] ?? ''));
-        $excludedKeys = collect([...array_values($excludedSkuIds), $targetSkuId])
-            ->map(fn (mixed $value): string => $this->normalizeSkuMatchValue($value))
+        $availableSkuKeys = collect($this->normalizeTiktokSkuList($productDetail))
+            ->filter(fn (mixed $sku): bool => is_array($sku))
+            ->map(fn (array $sku): string => $this->normalizeSkuMatchValue($sku['id'] ?? $sku['sku_id'] ?? ''))
             ->filter()
             ->flip()
             ->all();
+        $presentExclusions = collect($excludedSkuIds)
+            ->filter(fn (mixed $skuId): bool => isset($availableSkuKeys[$this->normalizeSkuMatchValue($skuId)]))
+            ->values()
+            ->all();
 
-        foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
-            if (! is_array($sku)) {
-                continue;
-            }
-
-            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
-            if ($skuId === '') {
-                continue;
-            }
-
-            if ($skuId === $targetSkuId) {
-                $targetFound = true;
-                continue;
-            }
-
-            if (isset($excludedKeys[$this->normalizeSkuMatchValue($skuId)])) {
-                continue;
-            }
-
-            $row = $this->buildTiktokPartialEditSkuKeepRow($sku, null, $productId);
-
-            $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
-            if (is_array($salesAttributes) && $salesAttributes !== []) {
-                $row['sales_attributes'] = $salesAttributes;
-            }
-
-            $rows[] = $row;
+        try {
+            return app(TiktokPartialEditSkuPayloadBuilder::class)
+                ->deleteSkuIds($productDetail, [$targetSkuId, ...$presentExclusions])['skus'];
+        } catch (\RuntimeException) {
+            return [];
         }
-
-        return $targetFound ? $rows : [];
     }
 
     private function buildTiktokPartialEditSkuKeepRow(array $sku, ?string $sellerSkuOverride = null, string $productId = ''): array
