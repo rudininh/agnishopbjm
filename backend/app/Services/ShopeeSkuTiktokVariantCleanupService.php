@@ -162,7 +162,7 @@ final class ShopeeSkuTiktokVariantCleanupService
             : DB::table('tiktok_products')
                 ->where('product_id', $productId)
                 ->where('sku_id', $tiktokSkuId)
-                ->where('is_active', true)
+                ->whereRaw('COALESCE(is_active, true) = true')
                 ->first();
 
         $currentName = $this->stringValue($model->name ?? '');
@@ -180,6 +180,9 @@ final class ShopeeSkuTiktokVariantCleanupService
             } catch (\InvalidArgumentException) {
                 $blockReason = 'invalid_target_sku';
             }
+        }
+        if ($blockReason === null && ($oldSku === '' || $tiktokSellerSku === '')) {
+            $blockReason = 'incomplete_identity';
         }
 
         $status = 'ready';
@@ -253,7 +256,7 @@ final class ShopeeSkuTiktokVariantCleanupService
         foreach ($readyIdsByProduct as $productId => $targetSkuIds) {
             $activeSkuIds = DB::table('tiktok_products')
                 ->where('product_id', $productId)
-                ->where('is_active', true)
+                ->whereRaw('COALESCE(is_active, true) = true')
                 ->pluck('sku_id')
                 ->map(fn (mixed $skuId): string => $this->stringValue($skuId))
                 ->filter()
@@ -288,7 +291,7 @@ final class ShopeeSkuTiktokVariantCleanupService
         return DB::table('tiktok_products')
             ->where('product_id', $productId)
             ->where('sku_id', '!=', $tiktokSkuId)
-            ->where('is_active', true)
+            ->whereRaw('COALESCE(is_active, true) = true')
             ->get()
             ->contains(fn (object $row): bool => $this->normalizedSku($row->seller_sku ?? '') === $this->normalizedSku($targetSku));
     }
@@ -348,7 +351,7 @@ final class ShopeeSkuTiktokVariantCleanupService
 
         return DB::table('tiktok_products')
             ->where('product_id', $productId)
-            ->where('is_active', true)
+            ->whereRaw('COALESCE(is_active, true) = true')
             ->get()
             ->map(fn (object $row): array => [
                 'product_id' => $this->stringValue($row->product_id ?? ''),

@@ -46,7 +46,7 @@ class ShopeeSkuTiktokVariantCleanupServiceTest extends TestCase
             $table->string('seller_sku')->nullable();
             $table->string('product_name')->nullable();
             $table->string('sku_name')->nullable();
-            $table->boolean('is_active')->default(true);
+            $table->boolean('is_active')->nullable()->default(true);
             $table->timestamps();
         });
 
@@ -65,6 +65,34 @@ class ShopeeSkuTiktokVariantCleanupServiceTest extends TestCase
         $this->assertSame('Khakky', $preview['items'][0]['shopee_variant_name']);
         $this->assertSame('Sand', $preview['items'][0]['tiktok_variant_name']);
         $this->assertSame('ready', $preview['items'][0]['status']);
+        Http::assertNothingSent();
+    }
+
+    public function test_preview_treats_legacy_null_tiktok_rows_as_active_with_postgresql_safe_queries(): void
+    {
+        $this->seedCandidate();
+        DB::table('tiktok_products')->where('product_id', 'tt-1')->update(['is_active' => null]);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $preview = app(ShopeeSkuTiktokVariantCleanupService::class)
+            ->createPreview($this->mappingGroups());
+
+        $tiktokActiveQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $query): bool => str_contains($query['query'], 'tiktok_products')
+                && str_contains($query['query'], 'is_active'))
+            ->values();
+        DB::disableQueryLog();
+
+        $this->assertSame('ready', $preview['items'][0]['status']);
+        $this->assertNotEmpty($tiktokActiveQueries);
+        foreach ($tiktokActiveQueries as $query) {
+            $this->assertStringContainsString('COALESCE(is_active, true) = true', $query['query']);
+            $this->assertFalse(
+                collect($query['bindings'])->contains(fn (mixed $binding): bool => is_bool($binding)),
+                'Active-TikTok queries must not use bound booleans on PostgreSQL.',
+            );
+        }
         Http::assertNothingSent();
     }
 
@@ -93,6 +121,36 @@ class ShopeeSkuTiktokVariantCleanupServiceTest extends TestCase
 
         $this->assertSame('blocked', $item['status']);
         $this->assertSame('source_sku_mismatch', $item['block_reason']);
+    }
+
+    public function test_preview_blocks_a_blank_authoritative_shopee_model_sku_as_incomplete(): void
+    {
+        $this->seedCandidate(oldSku: '', tiktokSellerSku: 'INT-54256579274-SAND');
+
+        $item = app(ShopeeSkuTiktokVariantCleanupService::class)->createPreview($this->mappingGroups())['items'][0];
+
+        $this->assertSame('blocked', $item['status']);
+        $this->assertSame('incomplete_identity', $item['block_reason']);
+    }
+
+    public function test_preview_blocks_a_blank_authoritative_tiktok_seller_sku_as_incomplete(): void
+    {
+        $this->seedCandidate(tiktokSellerSku: '');
+
+        $item = app(ShopeeSkuTiktokVariantCleanupService::class)->createPreview($this->mappingGroups())['items'][0];
+
+        $this->assertSame('blocked', $item['status']);
+        $this->assertSame('incomplete_identity', $item['block_reason']);
+    }
+
+    public function test_preview_blocks_two_blank_authoritative_source_skus_as_incomplete(): void
+    {
+        $this->seedCandidate(oldSku: '', tiktokSellerSku: '');
+
+        $item = app(ShopeeSkuTiktokVariantCleanupService::class)->createPreview($this->mappingGroups())['items'][0];
+
+        $this->assertSame('blocked', $item['status']);
+        $this->assertSame('incomplete_identity', $item['block_reason']);
     }
 
     public function test_preview_blocks_when_normalized_authoritative_variant_names_match(): void
