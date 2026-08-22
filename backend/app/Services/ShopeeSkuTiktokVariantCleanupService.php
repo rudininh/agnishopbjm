@@ -804,7 +804,7 @@ final class ShopeeSkuTiktokVariantCleanupService
 
                 return null;
             }
-            if ($this->hasCrossRunShopeeTargetCollision($allRows, $rows)) {
+            if ($this->hasCrossRunShopeeTargetCollision($allRows, $rows, $now)) {
                 $this->persistClaimBlock(
                     $rows,
                     'cross_run_shopee_target_collision',
@@ -864,7 +864,7 @@ final class ShopeeSkuTiktokVariantCleanupService
         });
     }
 
-    private function hasCrossRunShopeeTargetCollision(Collection $allRows, Collection $rows): bool
+    private function hasCrossRunShopeeTargetCollision(Collection $allRows, Collection $rows, Carbon $now): bool
     {
         $currentRunId = $this->stringValue($rows->first()->run_id ?? '');
         $currentProductId = $this->stringValue(($this->decodeJson($rows->first()->payload) ?? [])['tiktok_product_id'] ?? '');
@@ -884,9 +884,11 @@ final class ShopeeSkuTiktokVariantCleanupService
             $currentProductId,
             $currentRunId,
             $currentTargets,
+            $now,
         ): bool {
             if ($this->stringValue($row->run_id ?? '') === $currentRunId
-                || ! in_array((string) $row->status, ['ready', 'partial', 'failed', 'submitted_unverified'], true)) {
+                || ! in_array((string) $row->status, ['ready', 'partial', 'failed', 'submitted_unverified'], true)
+                || $this->isPassiveTerminalConflictRow($row, $now)) {
                 return false;
             }
 
@@ -931,6 +933,21 @@ final class ShopeeSkuTiktokVariantCleanupService
                 ),
             );
         });
+    }
+
+    private function isPassiveTerminalConflictRow(object $row, Carbon $now): bool
+    {
+        if ((string) $row->status !== 'failed'
+            || $this->resultHasIrreversibleDeleteEvidence($this->decodeJson($row->result) ?? [])) {
+            return false;
+        }
+
+        $owner = $this->stringValue($row->execution_owner ?? '');
+        $leaseUntil = $row->execution_lease_until ?? null;
+
+        return $owner === ''
+            || $leaseUntil === null
+            || ! Carbon::parse($leaseUntil)->greaterThan($now);
     }
 
     private function hasOverlappingProductDeleteHistory(Collection $productRows, Collection $rows): bool
