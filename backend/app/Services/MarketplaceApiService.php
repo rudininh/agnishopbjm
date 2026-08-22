@@ -68,8 +68,10 @@ class MarketplaceApiService
             ]);
         }
 
-        $ok = $httpResponse->successful() && (int) ($response['code'] ?? -1) === 0;
-        $product = data_get($response, 'data.product', data_get($response, 'product', data_get($response, 'data')));
+        $marketplaceOk = $httpResponse->successful() && (int) ($response['code'] ?? -1) === 0;
+        $product = data_get($response, 'data.product');
+        $productIsValid = is_array($product) && $product !== [] && ! array_is_list($product);
+        $ok = $marketplaceOk && $productIsValid;
 
         return $this->catalogResult(
             $ok,
@@ -77,9 +79,11 @@ class MarketplaceApiService
                 ? 'Detail produk TikTok berhasil diambil.'
                 : $this->marketplaceFailureMessage(
                     $response,
-                    $httpResponse->successful() ? 'Detail produk TikTok gagal diambil.' : 'TikTok merespons HTTP '.$httpResponse->status().'.',
+                    $marketplaceOk
+                        ? 'Detail produk TikTok tidak valid.'
+                        : ($httpResponse->successful() ? 'Detail produk TikTok gagal diambil.' : 'TikTok merespons HTTP '.$httpResponse->status().'.'),
                 ),
-            ['product_id' => $productId, 'product' => is_array($product) ? $product : null],
+            ['product_id' => $productId, 'product' => $productIsValid ? $product : null],
             $request,
             $response,
         );

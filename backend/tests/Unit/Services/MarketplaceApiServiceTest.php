@@ -101,6 +101,35 @@ class MarketplaceApiServiceTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    /**
+     * @dataProvider malformedTiktokProductResponseProvider
+     */
+    public function test_fetch_tiktok_product_rejects_a_success_response_without_a_valid_product_detail(array $data): void
+    {
+        Http::fake(['https://tiktok.test/*' => Http::response([
+            'code' => 0,
+            'message' => 'Success',
+            'data' => $data,
+        ])]);
+
+        $result = app(MarketplaceApiService::class)->fetchTiktokProduct('tt-product-42');
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame('Detail produk TikTok tidak valid.', $result['message']);
+        $this->assertNull($result['data']['product']);
+        $this->assertSafeRequestMetadata($result['request']);
+        Http::assertSentCount(1);
+    }
+
+    public static function malformedTiktokProductResponseProvider(): array
+    {
+        return [
+            'missing product' => [[]],
+            'scalar product' => [['product' => 'tt-product-42']],
+            'null product' => [['product' => null]],
+        ];
+    }
+
     public function test_partial_edit_tiktok_product_sends_the_supplied_payload_to_the_signed_202509_endpoint(): void
     {
         $payload = [

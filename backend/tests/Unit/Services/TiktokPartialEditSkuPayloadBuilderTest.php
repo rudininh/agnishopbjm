@@ -75,6 +75,85 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
         Http::assertNothingSent();
     }
 
+    /**
+     * @dataProvider invalidTargetIdProvider
+     */
+    public function test_delete_sku_ids_rejects_every_invalid_target_in_a_mixed_request(mixed $invalidTarget): void
+    {
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)->deleteSkuIds(
+                $this->productDetail(),
+                ['tt-old-red', $invalidTarget]
+            );
+            $this->fail('Expected every requested target ID to be validated.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('ID target SKU TikTok tidak valid.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public static function invalidTargetIdProvider(): array
+    {
+        return [
+            'blank string' => ['   '],
+            'null' => [null],
+            'array' => [['tt-old-blue']],
+            'object' => [(object) ['id' => 'tt-old-blue']],
+            'boolean' => [true],
+            'float' => [123.45],
+        ];
+    }
+
+    /**
+     * @dataProvider negativeTargetIdProvider
+     */
+    public function test_delete_sku_ids_rejects_a_negative_target_instead_of_matching_a_positive_id(mixed $negativeTarget): void
+    {
+        $detail = $this->productDetail();
+        $detail['skus'][0]['id'] = '1';
+        $detail['skus'][1]['id'] = '2';
+        $detail['skus'][2]['id'] = '3';
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)->deleteSkuIds($detail, [$negativeTarget, '2']);
+            $this->fail('Expected a negative target ID to be rejected before matching.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('ID target SKU TikTok tidak valid.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public static function negativeTargetIdProvider(): array
+    {
+        return [
+            'negative integer' => [-1],
+            'negative numeric string' => ['-1'],
+        ];
+    }
+
+    public function test_delete_sku_ids_does_not_fold_distinct_id_punctuation_when_matching_targets(): void
+    {
+        $detail = $this->productDetail();
+        $detail['skus'][0]['id'] = 'tt-old_red';
+        $detail['skus'][0]['price'] = [
+            'currency' => 'IDR',
+            'sale_price' => '25000',
+            'tax_exclusive_price' => '25000',
+            'amount' => '25000',
+        ];
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)->deleteSkuIds($detail, ['tt-old-red']);
+            $this->fail('Expected punctuation-distinct SKU IDs not to match.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('SKU TikTok target tidak ditemukan di detail produk terbaru.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_delete_sku_ids_fails_closed_instead_of_silently_omitting_a_source_sku_without_an_id(): void
     {
         $detail = $this->productDetail();
@@ -88,6 +167,37 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
         }
 
         Http::assertNothingSent();
+    }
+
+    /**
+     * @dataProvider invalidSourceSkuIdProvider
+     */
+    public function test_delete_sku_ids_rejects_a_malformed_fresh_source_id_before_casting(mixed $invalidId): void
+    {
+        $detail = $this->productDetail();
+        $detail['skus'][2]['id'] = $invalidId;
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)
+                ->deleteSkuIds($detail, ['tt-old-red', 'tt-old-blue']);
+            $this->fail('Expected every fresh source SKU ID to be validated before matching.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Detail SKU TikTok tidak lengkap atau memiliki ID duplikat.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public static function invalidSourceSkuIdProvider(): array
+    {
+        return [
+            'array' => [['tt-green']],
+            'object' => [(object) ['id' => 'tt-green']],
+            'boolean' => [true],
+            'float' => [123.45],
+            'negative integer' => [-1],
+            'negative numeric string' => ['-1'],
+        ];
     }
 
     /**
@@ -141,6 +251,110 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
         try {
             app(TiktokPartialEditSkuPayloadBuilder::class)->deleteSkuIds($detail, ['tt-old-red', 'tt-old-blue']);
             $this->fail('Expected warehouse identity to be required for every inventory row.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Kontrak SKU TikTok tersisa tidak lengkap.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_delete_sku_ids_preserves_supported_price_and_inventory_fields_without_value_changes(): void
+    {
+        $detail = $this->productDetail();
+        $price = [
+            'currency' => 'IDR',
+            'sale_price' => '25000.00',
+            'tax_exclusive_price' => '24000.50',
+            'amount' => '25000.00',
+        ];
+        $inventory = [
+            ['warehouse_id' => 'warehouse-1', 'quantity' => '04'],
+            ['warehouse_id' => 'warehouse-2', 'quantity' => 0],
+        ];
+        $detail['skus'][2]['price'] = $price;
+        $detail['skus'][2]['inventory'] = $inventory;
+
+        $payload = app(TiktokPartialEditSkuPayloadBuilder::class)
+            ->deleteSkuIds($detail, ['tt-old-red', 'tt-old-blue']);
+
+        $this->assertSame($price, $payload['skus'][0]['price']);
+        $this->assertSame($inventory, $payload['skus'][0]['inventory']);
+        Http::assertNothingSent();
+    }
+
+    /**
+     * @dataProvider unsupportedSurvivorFieldProvider
+     */
+    public function test_delete_sku_ids_fails_closed_instead_of_dropping_unsupported_price_or_inventory_fields(
+        string $contract,
+        string $field,
+        mixed $value
+    ): void {
+        $detail = $this->productDetail();
+        if ($contract === 'price') {
+            $detail['skus'][2]['price'][$field] = $value;
+        } else {
+            $detail['skus'][2]['inventory'][0][$field] = $value;
+        }
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)
+                ->deleteSkuIds($detail, ['tt-old-red', 'tt-old-blue']);
+            $this->fail('Expected unsupported fresh contract fields to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Kontrak SKU TikTok tersisa tidak lengkap.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public static function unsupportedSurvivorFieldProvider(): array
+    {
+        return [
+            'nested price field' => ['price', 'original_price', ['amount' => '30000']],
+            'read-only inventory field' => ['inventory', 'reserved_quantity', 2],
+            'nested warehouse field' => ['inventory', 'warehouse', ['id' => 'warehouse-1']],
+        ];
+    }
+
+    /**
+     * @dataProvider noncanonicalPriceProvider
+     */
+    public function test_delete_sku_ids_fails_closed_instead_of_rewriting_noncanonical_prices(mixed $value): void
+    {
+        $detail = $this->productDetail();
+        $detail['skus'][2]['price']['sale_price'] = $value;
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)
+                ->deleteSkuIds($detail, ['tt-old-red', 'tt-old-blue']);
+            $this->fail('Expected a noncanonical fresh price to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Kontrak SKU TikTok tersisa tidak lengkap.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public static function noncanonicalPriceProvider(): array
+    {
+        return [
+            'localized price' => ['Rp 25.000'],
+            'surrounding whitespace' => [' 25000 '],
+            'negative price' => ['-25000'],
+            'nested value' => [['amount' => '25000']],
+        ];
+    }
+
+    public function test_delete_sku_ids_fails_closed_instead_of_clamping_a_negative_quantity(): void
+    {
+        $detail = $this->productDetail();
+        $detail['skus'][2]['inventory'][0]['quantity'] = -4;
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)
+                ->deleteSkuIds($detail, ['tt-old-red', 'tt-old-blue']);
+            $this->fail('Expected a negative quantity to be rejected rather than clamped.');
         } catch (RuntimeException $exception) {
             $this->assertSame('Kontrak SKU TikTok tersisa tidak lengkap.', $exception->getMessage());
         }

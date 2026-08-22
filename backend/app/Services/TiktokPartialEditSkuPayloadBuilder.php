@@ -10,10 +10,16 @@ class TiktokPartialEditSkuPayloadBuilder
     {
         $targets = [];
         foreach ($targetSkuIds as $targetSkuId) {
-            $key = $this->normalizeSkuMatchValue($targetSkuId);
-            if ($key !== '') {
-                $targets[$key] = trim((string) $targetSkuId);
+            if (! is_string($targetSkuId) && ! is_int($targetSkuId)) {
+                throw new RuntimeException('ID target SKU TikTok tidak valid.');
             }
+
+            $targetSkuId = trim((string) $targetSkuId);
+            $key = $this->normalizeSkuId($targetSkuId);
+            if ($key === '' || preg_match('/^-\d+$/D', $targetSkuId) === 1) {
+                throw new RuntimeException('ID target SKU TikTok tidak valid.');
+            }
+            $targets[$key] = $targetSkuId;
         }
 
         $found = [];
@@ -25,9 +31,14 @@ class TiktokPartialEditSkuPayloadBuilder
                 throw new RuntimeException('Detail SKU TikTok tidak lengkap atau memiliki ID duplikat.');
             }
 
-            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
-            $skuKey = $this->normalizeSkuMatchValue($skuId);
-            if ($skuKey === '' || isset($seenSkuIds[$skuKey])) {
+            $sourceSkuId = $sku['id'] ?? $sku['sku_id'] ?? null;
+            if (! is_string($sourceSkuId) && ! is_int($sourceSkuId)) {
+                throw new RuntimeException('Detail SKU TikTok tidak lengkap atau memiliki ID duplikat.');
+            }
+
+            $skuId = trim((string) $sourceSkuId);
+            $skuKey = $this->normalizeSkuId($skuId);
+            if ($skuKey === '' || preg_match('/^-\d+$/D', $skuId) === 1 || isset($seenSkuIds[$skuKey])) {
                 throw new RuntimeException('Detail SKU TikTok tidak lengkap atau memiliki ID duplikat.');
             }
             $seenSkuIds[$skuKey] = true;
@@ -94,91 +105,95 @@ class TiktokPartialEditSkuPayloadBuilder
     private function buildPrice(array $sku): ?array
     {
         $priceNode = data_get($sku, 'price');
-        $salePrice = is_array($priceNode)
-            ? data_get($priceNode, 'sale_price', data_get($priceNode, 'amount', data_get($priceNode, 'tax_exclusive_price')))
-            : $priceNode;
-        $salePrice = $this->normalizePriceValue($salePrice);
-
-        if ($salePrice === '') {
+        if (! is_array($priceNode) || $priceNode === [] || array_is_list($priceNode)) {
             return null;
         }
 
-        $currency = is_array($priceNode)
-            ? trim((string) data_get($priceNode, 'currency', 'IDR'))
-            : 'IDR';
-        $taxExclusivePrice = is_array($priceNode)
-            ? $this->normalizePriceValue(data_get($priceNode, 'tax_exclusive_price', $salePrice))
-            : $salePrice;
-        $amount = is_array($priceNode)
-            ? $this->normalizePriceValue(data_get($priceNode, 'amount', $salePrice))
-            : $salePrice;
-
-        return array_filter([
-            'currency' => $currency !== '' ? $currency : 'IDR',
-            'sale_price' => $salePrice,
-            'tax_exclusive_price' => $taxExclusivePrice !== '' ? $taxExclusivePrice : $salePrice,
-            'amount' => $amount !== '' ? $amount : $salePrice,
-        ], fn (mixed $value): bool => $value !== null && $value !== '');
-    }
-
-    private function normalizePriceValue(mixed $value): string
-    {
-        if (is_array($value)) {
-            $value = data_get($value, 'sale_price', data_get($value, 'amount', data_get($value, 'tax_exclusive_price')));
+        $supportedKeys = ['currency', 'sale_price', 'tax_exclusive_price', 'amount'];
+        if (array_diff(array_keys($priceNode), $supportedKeys) !== []
+            || ! array_key_exists('sale_price', $priceNode)
+            || ! $this->isCanonicalPriceValue($priceNode['sale_price'])) {
+            throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
         }
 
-        if ($value === null || $value === '') {
-            return '';
+        foreach (['tax_exclusive_price', 'amount'] as $key) {
+            if (array_key_exists($key, $priceNode) && ! $this->isCanonicalPriceValue($priceNode[$key])) {
+                throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
+            }
         }
 
-        if (is_numeric($value)) {
-            return (string) $value;
+        if (array_key_exists('currency', $priceNode)) {
+            $currency = $priceNode['currency'];
+            if (! is_string($currency) || $currency === '' || trim($currency) !== $currency) {
+                throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
+            }
+        } else {
+            $priceNode = ['currency' => 'IDR', ...$priceNode];
         }
 
-        return trim(preg_replace('/[^\d.]/', '', (string) $value) ?: '');
+        if (! array_key_exists('tax_exclusive_price', $priceNode)) {
+            $priceNode['tax_exclusive_price'] = $priceNode['sale_price'];
+        }
+        if (! array_key_exists('amount', $priceNode)) {
+            $priceNode['amount'] = $priceNode['sale_price'];
+        }
+
+        return $priceNode;
     }
 
     private function buildInventory(array $sku): array
     {
-        $inventoryRows = data_get($sku, 'inventory', data_get($sku, 'inventories', []));
-        if (! is_array($inventoryRows) || $inventoryRows === []) {
-            $stock = data_get($sku, 'stock', data_get($sku, 'stock_qty'));
-            if ($stock === null || $stock === '') {
-                return [];
-            }
-
-            $row = ['quantity' => max(0, (int) $stock)];
-            $warehouseId = trim((string) config('tiktok.default_warehouse_id', ''));
-            if ($warehouseId === '') {
-                throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
-            }
-            $row['warehouse_id'] = $warehouseId;
-
-            return [$row];
+        $inventoryRows = data_get($sku, 'inventory');
+        if (! is_array($inventoryRows) || $inventoryRows === [] || ! array_is_list($inventoryRows)) {
+            return [];
         }
 
         $rows = [];
         foreach ($inventoryRows as $inventory) {
-            if (! is_array($inventory)) {
+            if (! is_array($inventory) || $inventory === [] || array_is_list($inventory)) {
                 throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
             }
 
-            $quantity = data_get($inventory, 'quantity', data_get($inventory, 'stock'));
-            if ($quantity === null || $quantity === '') {
+            if (array_diff(array_keys($inventory), ['warehouse_id', 'quantity']) !== []
+                || ! array_key_exists('warehouse_id', $inventory)
+                || ! array_key_exists('quantity', $inventory)) {
                 throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
             }
 
-            $row = ['quantity' => max(0, (int) $quantity)];
-            $warehouseId = trim((string) data_get($inventory, 'warehouse_id', data_get($inventory, 'warehouse.id', '')));
-            if ($warehouseId === '') {
+            $warehouseId = $inventory['warehouse_id'];
+            if (! is_string($warehouseId) || $warehouseId === '' || trim($warehouseId) !== $warehouseId) {
                 throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
             }
-            $row['warehouse_id'] = $warehouseId;
 
-            $rows[] = $row;
+            if (! $this->isCanonicalInventoryQuantity($inventory['quantity'])) {
+                throw new RuntimeException('Kontrak SKU TikTok tersisa tidak lengkap.');
+            }
+
+            $rows[] = $inventory;
         }
 
         return $rows;
+    }
+
+    private function isCanonicalPriceValue(mixed $value): bool
+    {
+        if (is_int($value)) {
+            return $value >= 0;
+        }
+        if (is_float($value)) {
+            return is_finite($value) && $value >= 0;
+        }
+
+        return is_string($value) && preg_match('/^\d+(?:\.\d+)?$/D', $value) === 1;
+    }
+
+    private function isCanonicalInventoryQuantity(mixed $value): bool
+    {
+        if (is_int($value)) {
+            return $value >= 0;
+        }
+
+        return is_string($value) && preg_match('/^\d+$/D', $value) === 1;
     }
 
     private function normalizeSkuList(array $data): array
@@ -217,11 +232,10 @@ class TiktokPartialEditSkuPayloadBuilder
         return null;
     }
 
-    private function normalizeSkuMatchValue(mixed $value): string
+    private function normalizeSkuId(mixed $value): string
     {
         $value = strtolower(trim((string) ($value ?? '')));
-        $value = preg_replace('/[^a-z0-9]+/i', ' ', $value) ?? '';
 
-        return trim(preg_replace('/\s+/', ' ', $value) ?? '');
+        return preg_match('/[a-z0-9]/i', $value) === 1 ? $value : '';
     }
 }
