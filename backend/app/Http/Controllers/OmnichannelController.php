@@ -9410,7 +9410,7 @@ class OmnichannelController extends Controller
         $availableSkuKeys = collect($this->normalizeTiktokSkuList($productDetail))
             ->filter(fn (mixed $sku): bool => is_array($sku))
             ->map(fn (array $sku): string => $this->normalizeTiktokSkuIdIdentity($sku['id'] ?? $sku['sku_id'] ?? null))
-            ->filter()
+            ->filter(fn (string $skuId): bool => $skuId !== '')
             ->flip()
             ->all();
         $presentExclusions = collect($excludedSkuIds)

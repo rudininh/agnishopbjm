@@ -1086,6 +1086,22 @@ class OmnichannelControllerTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_tiktok_delete_helper_keeps_present_zero_string_historical_exclusion(): void
+    {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => '0']),
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-green', 'seller_sku' => 'INT-42-GREEN']),
+            ],
+        ], 'tt-old-red', ['0']]);
+
+        $this->assertSame(['tt-green'], array_column($rows, 'id'));
+        Http::assertNothingSent();
+    }
+
     /**
      * @dataProvider distinctHistoricalExclusionProvider
      */
