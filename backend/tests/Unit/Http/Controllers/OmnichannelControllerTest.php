@@ -536,6 +536,20 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkSubmitTiktokMissingVariants', $submit->getActionName());
     }
 
+    public function test_shopee_sku_tiktok_cleanup_routes_are_registered(): void
+    {
+        $routes = collect(app('router')->getRoutes()->getRoutes());
+        $preview = $routes->first(fn ($route) => in_array('POST', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/bulk-missing-variants/sku-cleanup/preview');
+        $submit = $routes->first(fn ($route) => in_array('POST', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/bulk-missing-variants/sku-cleanup/{runId}/submit');
+
+        $this->assertNotNull($preview);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@previewShopeeSkuTiktokCleanup', $preview->getActionName());
+        $this->assertNotNull($submit);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@submitShopeeSkuTiktokCleanup', $submit->getActionName());
+    }
+
     public function test_tiktok_variant_reconciliation_routes_are_registered(): void
     {
         $routes = collect(app('router')->getRoutes()->getRoutes());

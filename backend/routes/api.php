@@ -51,6 +51,8 @@ Route::post('sku-mapping/bulk-update-empty-shopee-variant-skus', [OmnichannelCon
 Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
 Route::get('tiktok/bulk-missing-variants', [OmnichannelController::class, 'bulkTiktokMissingVariantsPreview']);
 Route::post('tiktok/bulk-missing-variants/submit', [OmnichannelController::class, 'bulkSubmitTiktokMissingVariants']);
+Route::post('tiktok/bulk-missing-variants/sku-cleanup/preview', [OmnichannelController::class, 'previewShopeeSkuTiktokCleanup']);
+Route::post('tiktok/bulk-missing-variants/sku-cleanup/{runId}/submit', [OmnichannelController::class, 'submitShopeeSkuTiktokCleanup']);
 Route::get('tiktok/variant-reconciliation/products', [OmnichannelController::class, 'tiktokVariantReconciliationProducts']);
 Route::get('tiktok/variant-reconciliation/overview', [OmnichannelController::class, 'tiktokVariantReconciliationOverview']);
 Route::get('tiktok/variant-reconciliation/preview', [OmnichannelController::class, 'tiktokVariantReconciliationPreview']);
