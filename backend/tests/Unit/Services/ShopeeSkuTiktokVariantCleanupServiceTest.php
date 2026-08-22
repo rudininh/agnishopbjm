@@ -1181,13 +1181,36 @@ class ShopeeSkuTiktokVariantCleanupServiceTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_an_unexpired_product_lease_in_another_run_blocks_a_duplicate_run(): void
+    public function test_an_unexpired_product_lease_in_another_run_blocks_a_different_cleanup_on_the_same_product(): void
     {
-        $this->seedCandidate();
-        $groups = $this->mappingGroups();
-        $firstPreview = $this->service()->createPreview($groups);
-        $secondPreview = $this->service()->createPreview($groups);
+        $this->seedCandidate(
+            modelId: 'model-a',
+            tiktokSkuId: 'tt-sku-a',
+            oldSku: 'INT-54256579274-OLD-A',
+            variantName: 'Target A',
+            tiktokVariantName: 'Old A',
+            addSurvivor: false,
+        );
+        $this->seedCandidate(
+            modelId: 'model-b',
+            tiktokSkuId: 'tt-sku-b',
+            oldSku: 'INT-54256579274-OLD-B',
+            variantName: 'Target B',
+            tiktokVariantName: 'Old B',
+            addSurvivor: false,
+        );
+        $this->insertTiktokSku('tt-1', 'tt-sku-survivor', 'INT-SURVIVOR', 'Survivor');
+        $firstPreview = $this->service()->createPreview(collect([
+            $this->group('54256579274', 'model-a', 'tt-1', 'tt-sku-a'),
+        ]));
+        $secondPreview = $this->service()->createPreview(collect([
+            $this->group('54256579274', 'model-b', 'tt-1', 'tt-sku-b'),
+        ]));
         $otherOwner = (string) \Illuminate\Support\Str::uuid();
+        DB::table('tiktok_reconciliation_runs')->where('id', $firstPreview['run_id'])->update([
+            'status' => 'claimed',
+            'submitted_at' => now()->subMinutes(16),
+        ]);
         DB::table('tiktok_reconciliation_run_items')
             ->where('run_id', $firstPreview['run_id'])
             ->where('action_type', 'shopee_sku_tiktok_delete')
@@ -1221,6 +1244,94 @@ class ShopeeSkuTiktokVariantCleanupServiceTest extends TestCase
         $this->api->shouldNotHaveReceived('partialEditTiktokProduct');
         $this->api->shouldNotHaveReceived('updateShopeeModelSku');
         Http::assertNothingSent();
+    }
+
+    public function test_an_active_cross_run_shopee_target_collision_blocks_a_different_tiktok_product(): void
+    {
+        $this->seedCandidate(
+            modelId: 'model-a',
+            productId: 'tt-a',
+            tiktokSkuId: 'tt-sku-a',
+            oldSku: 'INT-54256579274-OLD-A',
+            variantName: 'Soft Dusty',
+            tiktokVariantName: 'Old A',
+        );
+        $this->seedCandidate(
+            modelId: 'model-b',
+            productId: 'tt-b',
+            tiktokSkuId: 'tt-sku-b',
+            oldSku: 'INT-54256579274-OLD-B',
+            variantName: 'Soft Dusty!',
+            tiktokVariantName: 'Old B',
+        );
+        $firstGroups = collect([$this->group('54256579274', 'model-a', 'tt-a', 'tt-sku-a')]);
+        $secondGroups = collect([$this->group('54256579274', 'model-b', 'tt-b', 'tt-sku-b')]);
+        $firstPreview = $this->service()->createPreview($firstGroups);
+        $secondPreview = $this->service()->createPreview($secondGroups);
+        $firstOwner = (string) \Illuminate\Support\Str::uuid();
+        DB::table('tiktok_reconciliation_runs')->where('id', $firstPreview['run_id'])->update([
+            'status' => 'claimed',
+            'submitted_at' => now()->subMinutes(16),
+        ]);
+        DB::table('tiktok_reconciliation_run_items')
+            ->where('run_id', $firstPreview['run_id'])
+            ->where('action_type', 'shopee_sku_tiktok_delete')
+            ->update([
+                'execution_owner' => $firstOwner,
+                'execution_lease_until' => now()->addMinutes(10),
+                'execution_attempts' => 1,
+            ]);
+        DB::table('tiktok_reconciliation_runs')->where('id', $secondPreview['run_id'])->update([
+            'status' => 'claimed',
+            'submitted_at' => now(),
+        ]);
+
+        $result = $this->service()->submit($secondPreview['run_id'], $secondPreview['revision'], collect());
+
+        $firstRow = DB::table('tiktok_reconciliation_run_items')
+            ->where('run_id', $firstPreview['run_id'])
+            ->where('action_type', 'shopee_sku_tiktok_delete')
+            ->first();
+        $secondRow = DB::table('tiktok_reconciliation_run_items')
+            ->where('run_id', $secondPreview['run_id'])
+            ->where('action_type', 'shopee_sku_tiktok_delete')
+            ->first();
+        $this->assertSame('failed', $result['status']);
+        $this->assertSame($firstOwner, $firstRow->execution_owner);
+        $this->assertSame('ready', $firstRow->status);
+        $this->assertSame('failed', $secondRow->status);
+        $this->assertSame('cross_run_shopee_target_collision', $secondRow->block_reason);
+        $this->assertNull($secondRow->execution_owner);
+        $this->assertSame(0, (int) $secondRow->execution_attempts);
+        $this->api->shouldNotHaveReceived('fetchTiktokProduct');
+        $this->api->shouldNotHaveReceived('fetchShopeeModels');
+        $this->api->shouldNotHaveReceived('partialEditTiktokProduct');
+        $this->api->shouldNotHaveReceived('updateShopeeModelSku');
+        Http::assertNothingSent();
+    }
+
+    public function test_prior_subset_delete_intent_blocks_a_superset_cleanup_before_marketplace_access(): void
+    {
+        $this->assertOverlappingPriorRunBlocks(['tt-sku-a'], ['tt-sku-a', 'tt-sku-b']);
+    }
+
+    public function test_prior_superset_delete_intent_blocks_a_subset_cleanup_before_marketplace_access(): void
+    {
+        $this->assertOverlappingPriorRunBlocks(['tt-sku-a', 'tt-sku-b'], ['tt-sku-a']);
+    }
+
+    public function test_prior_partial_overlap_delete_intent_blocks_a_new_cleanup_before_marketplace_access(): void
+    {
+        $this->assertOverlappingPriorRunBlocks(['tt-sku-a', 'tt-sku-b'], ['tt-sku-b', 'tt-sku-c']);
+    }
+
+    public function test_unexpired_prior_overlap_still_persists_the_manual_reconciliation_block(): void
+    {
+        $this->assertOverlappingPriorRunBlocks(
+            ['tt-sku-a'],
+            ['tt-sku-a', 'tt-sku-b'],
+            priorHasUnexpiredLease: true,
+        );
     }
 
     public function test_expired_cross_run_takeover_inherits_delete_evidence_and_never_redeletes(): void
@@ -1974,6 +2085,96 @@ class ShopeeSkuTiktokVariantCleanupServiceTest extends TestCase
     private function service(): ShopeeSkuTiktokVariantCleanupService
     {
         return app(ShopeeSkuTiktokVariantCleanupService::class);
+    }
+
+    private function assertOverlappingPriorRunBlocks(
+        array $priorTargetIds,
+        array $currentTargetIds,
+        bool $priorHasUnexpiredLease = false,
+    ): void
+    {
+        $definitions = [
+            'tt-sku-a' => ['model-a', 'INT-54256579274-OLD-A', 'Target A', 'Old A'],
+            'tt-sku-b' => ['model-b', 'INT-54256579274-OLD-B', 'Target B', 'Old B'],
+            'tt-sku-c' => ['model-c', 'INT-54256579274-OLD-C', 'Target C', 'Old C'],
+        ];
+        foreach ($definitions as $tiktokSkuId => [$modelId, $oldSku, $variantName, $tiktokVariantName]) {
+            $this->seedCandidate(
+                modelId: $modelId,
+                tiktokSkuId: $tiktokSkuId,
+                oldSku: $oldSku,
+                variantName: $variantName,
+                tiktokVariantName: $tiktokVariantName,
+                addSurvivor: false,
+            );
+        }
+        $this->insertTiktokSku('tt-1', 'tt-sku-survivor', 'INT-SURVIVOR', 'Survivor');
+        $groupsFor = fn (array $targetIds): Collection => collect(array_map(
+            fn (string $targetId): array => $this->group(
+                '54256579274',
+                $definitions[$targetId][0],
+                'tt-1',
+                $targetId,
+            ),
+            $targetIds,
+        ));
+        $priorPreview = $this->service()->createPreview($groupsFor($priorTargetIds));
+        $currentPreview = $this->service()->createPreview($groupsFor($currentTargetIds));
+        DB::table('tiktok_reconciliation_runs')->where('id', $priorPreview['run_id'])->update([
+            'status' => 'partial',
+            'submitted_at' => now()->subMinutes(20),
+        ]);
+        $priorValues = [
+            'status' => 'submitted_unverified',
+            'block_reason' => 'tiktok_delete_unverified',
+            'result' => json_encode([
+                'tiktok_delete_attempted' => true,
+                'expected_non_target_sku_ids' => ['tt-sku-survivor'],
+                'tiktok_delete' => $this->writeResult(true, 'Possibly dispatched in prior run'),
+            ], JSON_THROW_ON_ERROR),
+        ];
+        if ($priorHasUnexpiredLease) {
+            $priorValues['execution_owner'] = (string) \Illuminate\Support\Str::uuid();
+            $priorValues['execution_lease_until'] = now()->addMinutes(10);
+            $priorValues['execution_attempts'] = 1;
+        }
+        DB::table('tiktok_reconciliation_run_items')
+            ->where('run_id', $priorPreview['run_id'])
+            ->where('action_type', 'shopee_sku_tiktok_delete')
+            ->update($priorValues);
+        DB::table('tiktok_reconciliation_runs')->where('id', $currentPreview['run_id'])->update([
+            'status' => 'claimed',
+            'submitted_at' => now(),
+        ]);
+
+        $result = $this->service()->submit($currentPreview['run_id'], $currentPreview['revision'], collect());
+
+        $currentRows = DB::table('tiktok_reconciliation_run_items')
+            ->where('run_id', $currentPreview['run_id'])
+            ->where('action_type', 'shopee_sku_tiktok_delete')
+            ->orderBy('id')
+            ->get();
+        $this->assertSame('failed', $result['status']);
+        $this->assertNotEmpty($currentRows);
+        $this->assertSame(
+            ['overlapping_tiktok_delete_history'],
+            $currentRows->pluck('block_reason')->unique()->values()->all(),
+        );
+        $this->assertSame([0], $currentRows->pluck('execution_attempts')->map(fn (mixed $value): int => (int) $value)->unique()->values()->all());
+        $this->assertSame([null], $currentRows->pluck('execution_owner')->unique()->values()->all());
+        $this->assertSame(
+            ['retry_original_run_or_manual_reconciliation'],
+            $currentRows
+                ->map(fn (object $row): mixed => data_get(json_decode($row->result, true), 'resolution'))
+                ->unique()
+                ->values()
+                ->all(),
+        );
+        $this->api->shouldNotHaveReceived('fetchTiktokProduct');
+        $this->api->shouldNotHaveReceived('fetchShopeeModels');
+        $this->api->shouldNotHaveReceived('partialEditTiktokProduct');
+        $this->api->shouldNotHaveReceived('updateShopeeModelSku');
+        Http::assertNothingSent();
     }
 
     private function group(string $itemId, string $modelId, string $productId, string $tiktokSkuId): array

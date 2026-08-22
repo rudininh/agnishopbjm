@@ -778,7 +778,7 @@ final class ShopeeSkuTiktokVariantCleanupService
                 return $this->stringValue($payload['tiktok_product_id'] ?? '') === $productId;
             });
             $now = now();
-            foreach ($productRows as $row) {
+            foreach ($rows as $row) {
                 $currentOwner = $this->stringValue($row->execution_owner ?? '');
                 $leaseUntil = $row->execution_lease_until ?? null;
                 if ($currentOwner !== ''
@@ -790,6 +790,41 @@ final class ShopeeSkuTiktokVariantCleanupService
             }
             foreach ($rows as $row) {
                 if (! in_array((string) $row->status, ['ready', 'partial', 'failed', 'submitted_unverified'], true)) {
+                    return null;
+                }
+            }
+
+            if ($this->hasOverlappingProductDeleteHistory($productRows, $rows)) {
+                $this->persistClaimBlock(
+                    $rows,
+                    'overlapping_tiktok_delete_history',
+                    'retry_original_run_or_manual_reconciliation',
+                    $now,
+                );
+
+                return null;
+            }
+            if ($this->hasCrossRunShopeeTargetCollision($allRows, $rows)) {
+                $this->persistClaimBlock(
+                    $rows,
+                    'cross_run_shopee_target_collision',
+                    'resolve_conflicting_cleanup_run_or_manual_reconciliation',
+                    $now,
+                );
+
+                return null;
+            }
+            foreach ($productRows as $row) {
+                if (in_array((int) $row->id, $ids, true)) {
+                    continue;
+                }
+
+                $currentOwner = $this->stringValue($row->execution_owner ?? '');
+                $leaseUntil = $row->execution_lease_until ?? null;
+                if ($currentOwner !== ''
+                    && $currentOwner !== $owner
+                    && $leaseUntil !== null
+                    && Carbon::parse($leaseUntil)->greaterThan($now)) {
                     return null;
                 }
             }
@@ -829,6 +864,181 @@ final class ShopeeSkuTiktokVariantCleanupService
         });
     }
 
+    private function hasCrossRunShopeeTargetCollision(Collection $allRows, Collection $rows): bool
+    {
+        $currentRunId = $this->stringValue($rows->first()->run_id ?? '');
+        $currentProductId = $this->stringValue(($this->decodeJson($rows->first()->payload) ?? [])['tiktok_product_id'] ?? '');
+        $currentOperationKeys = $this->operationIdentityKeys($rows);
+        $currentTargets = $rows->map(function (object $row): array {
+            $payload = $this->decodeJson($row->payload) ?? [];
+
+            return [
+                'item_id' => $this->stringValue($payload['shopee_item_id'] ?? ''),
+                'target_sku' => $this->normalizedSku($payload['target_sku'] ?? ''),
+            ];
+        });
+
+        return $allRows->contains(function (object $row) use (
+            $allRows,
+            $currentOperationKeys,
+            $currentProductId,
+            $currentRunId,
+            $currentTargets,
+        ): bool {
+            if ($this->stringValue($row->run_id ?? '') === $currentRunId
+                || ! in_array((string) $row->status, ['ready', 'partial', 'failed', 'submitted_unverified'], true)) {
+                return false;
+            }
+
+            $payload = $this->decodeJson($row->payload) ?? [];
+            $itemId = $this->stringValue($payload['shopee_item_id'] ?? '');
+            $targetSku = $this->normalizedSku($payload['target_sku'] ?? '');
+            if ($itemId === '' || $targetSku === '') {
+                return false;
+            }
+
+            $plannedKeyMatches = $currentTargets->contains(
+                fn (array $target): bool => $target['item_id'] === $itemId
+                    && $target['target_sku'] === $targetSku,
+            );
+            if (! $plannedKeyMatches) {
+                return false;
+            }
+
+            $otherRunId = $this->stringValue($row->run_id ?? '');
+            $otherProductId = $this->stringValue($payload['tiktok_product_id'] ?? '');
+            if ($otherProductId !== $currentProductId) {
+                return true;
+            }
+
+            $otherOperationRows = $this->cleanupOperationRows($allRows->filter(function (object $candidate) use (
+                $otherProductId,
+                $otherRunId,
+            ): bool {
+                $candidatePayload = $this->decodeJson($candidate->payload) ?? [];
+
+                return $this->stringValue($candidate->run_id ?? '') === $otherRunId
+                    && $this->stringValue($candidatePayload['tiktok_product_id'] ?? '') === $otherProductId;
+            }));
+
+            if ($this->operationIdentityKeys($otherOperationRows) !== $currentOperationKeys) {
+                return true;
+            }
+
+            return ! $otherOperationRows->contains(
+                fn (object $candidate): bool => $this->resultHasIrreversibleDeleteEvidence(
+                    $this->decodeJson($candidate->result) ?? [],
+                ),
+            );
+        });
+    }
+
+    private function hasOverlappingProductDeleteHistory(Collection $productRows, Collection $rows): bool
+    {
+        $currentRunId = $this->stringValue($rows->first()->run_id ?? '');
+        $currentTargetIds = $this->runTargetIds($rows);
+
+        foreach ($productRows->groupBy('run_id') as $runId => $runRows) {
+            if ($this->stringValue($runId) === $currentRunId) {
+                continue;
+            }
+
+            $operationRows = $this->cleanupOperationRows($runRows);
+            $priorTargetIds = $this->runTargetIds($operationRows);
+            if ($priorTargetIds === []
+                || $priorTargetIds === $currentTargetIds
+                || array_intersect($priorTargetIds, $currentTargetIds) === []) {
+                continue;
+            }
+
+            if ($operationRows->contains(
+                fn (object $row): bool => $this->resultHasIrreversibleDeleteEvidence(
+                    $this->decodeJson($row->result) ?? [],
+                ),
+            )) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function persistClaimBlock(
+        Collection $rows,
+        string $reason,
+        string $resolution,
+        Carbon $now,
+    ): void
+    {
+        $items = $rows->map(fn (object $row): array => $this->hydrateExecutionItem($row));
+        $status = $this->itemsHaveIrreversibleDeleteEvidence($items) ? 'partial' : 'failed';
+        foreach ($rows as $row) {
+            DB::table('tiktok_reconciliation_run_items')->where('id', $row->id)->update([
+                'status' => $status,
+                'block_reason' => $reason,
+                'result' => $this->encodeJson($this->mergeAuditResult(
+                    $this->decodeJson($row->result) ?? [],
+                    ['precondition' => $reason, 'resolution' => $resolution],
+                )),
+                'execution_owner' => null,
+                'execution_lease_until' => null,
+                'updated_at' => $now,
+            ]);
+        }
+    }
+
+    private function cleanupOperationRows(Collection $rows): Collection
+    {
+        return $rows->filter(
+            fn (object $row): bool => in_array(
+                (string) $row->status,
+                ['ready', 'partial', 'failed', 'submitted_unverified', 'updated'],
+                true,
+            ),
+        );
+    }
+
+    private function runTargetIds(Collection $rows): array
+    {
+        return $rows
+            ->map(fn (object $row): array => $this->decodeJson($row->payload) ?? [])
+            ->pluck('tiktok_sku_id')
+            ->map(fn (mixed $id): string => $this->stringValue($id))
+            ->filter()
+            ->uniqueStrict()
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    private function operationIdentityKeys(Collection $rows): array
+    {
+        return $rows
+            ->map(function (object $row): string {
+                $payload = $this->decodeJson($row->payload) ?? [];
+
+                return implode('|', [
+                    $this->stringValue($payload['shopee_item_id'] ?? ''),
+                    $this->stringValue($payload['shopee_model_id'] ?? ''),
+                    $this->stringValue($payload['tiktok_product_id'] ?? ''),
+                    $this->stringValue($payload['tiktok_sku_id'] ?? ''),
+                    $this->normalizedSku($payload['target_sku'] ?? ''),
+                ]);
+            })
+            ->filter()
+            ->uniqueStrict()
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    private function resultHasIrreversibleDeleteEvidence(array $result): bool
+    {
+        return ($result['tiktok_delete_attempted'] ?? false) === true
+            || ($result['tiktok_verified'] ?? false) === true
+            || is_array($result['tiktok_delete'] ?? null);
+    }
+
     private function matchingProductDeleteEvidence(Collection $productRows, Collection $items): array
     {
         $targetIds = $items
@@ -842,22 +1052,8 @@ final class ShopeeSkuTiktokVariantCleanupService
         $evidence = [];
 
         foreach ($productRows->groupBy('run_id') as $runRows) {
-            $operationRows = $runRows->filter(
-                fn (object $row): bool => in_array(
-                    (string) $row->status,
-                    ['ready', 'partial', 'failed', 'submitted_unverified', 'updated'],
-                    true,
-                ),
-            );
-            $runTargetIds = $operationRows
-                ->map(fn (object $row): array => $this->decodeJson($row->payload) ?? [])
-                ->pluck('tiktok_sku_id')
-                ->map(fn (mixed $id): string => $this->stringValue($id))
-                ->filter()
-                ->uniqueStrict()
-                ->sort()
-                ->values()
-                ->all();
+            $operationRows = $this->cleanupOperationRows($runRows);
+            $runTargetIds = $this->runTargetIds($operationRows);
             if ($runTargetIds !== $targetIds) {
                 continue;
             }
