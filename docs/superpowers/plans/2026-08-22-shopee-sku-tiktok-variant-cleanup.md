@@ -353,6 +353,8 @@ git commit -m "refactor: expose safe marketplace variant operations"
 
 - Modify: `backend/app/Services/ShopeeSkuTiktokVariantCleanupService.php`
 - Modify: `backend/tests/Unit/Services/ShopeeSkuTiktokVariantCleanupServiceTest.php`
+- Create: `backend/database/migrations/2026_08_22_000001_add_execution_lease_to_tiktok_reconciliation_run_items.php`
+- Modify: `backend/tests/Feature/TiktokReconciliationPersistenceTest.php`
 
 - [ ] **Step 1: Add failing stale-revision and idempotent claim tests**
 
@@ -374,7 +376,7 @@ public function test_submit_rejects_a_stale_ready_run_before_any_marketplace_wri
 
 Also assert a second submit on `completed` returns saved results without marketplace calls.
 
-- [ ] **Step 2: Implement atomic claim under a cache lock**
+- [ ] **Step 2: Implement atomic run claim plus renewable per-product ownership**
 
 Add:
 
@@ -384,7 +386,11 @@ public function submit(string $runId, string $revision, Collection $currentGroup
 
 Use `Cache::lock('shopee-sku-tiktok-cleanup', 900)->block(5, fn () => $this->submitLocked($runId, $revision, $currentGroups))`. Within a DB transaction, claim only `ready_for_review` with matching persisted and current revisions. Return an HTTP-neutral status (`stale_revision`, `busy`, `not_found`, `claimed`, `partial`, or `completed`) for the controller to map later.
 
+Add `execution_owner`, `execution_lease_until`, and `execution_attempts` to reconciliation run items. Before processing a product group, lock every scoped item row with `lockForUpdate()`, reject an unexpired owner, then atomically assign one UUID owner and a 15-minute lease to the whole group. Renew that lease inside a short transaction immediately before every marketplace network call and release it after the product reaches a persisted outcome. A later worker may take over only after lease expiry; persisted delete-intent and survivor evidence must still prevent a second TikTok delete after takeover.
+
 For a run already `claimed` or `partial`, use persisted ready/partial audit items and fresh remote verification rather than rebuilding a delete target from the changed local candidate list.
+
+Add concurrency regressions proving an expired global cache lock does not allow a second owner to claim the same unexpired product group, and that an expired product lease can be taken over without erasing previously persisted TikTok delete evidence.
 
 - [ ] **Step 3: Add failing TikTok group execution tests**
 
