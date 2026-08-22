@@ -10,7 +10,12 @@ final class ShopeeSellerSkuTemplate
         $fragment = preg_replace('/[^A-Z0-9_-]+/', '-', $fragment);
         $fragment = trim((string) $fragment, '-');
         $fragment = substr($fragment !== '' ? $fragment : 'X', 0, 30);
+        $sku = 'INT-'.trim($itemId).'-'.$fragment;
 
-        return 'INT-'.trim($itemId).'-'.$fragment;
+        if (mb_strlen($sku) > 100) {
+            throw new \InvalidArgumentException('Shopee seller SKU must not exceed 100 characters.');
+        }
+
+        return $sku;
     }
 }
