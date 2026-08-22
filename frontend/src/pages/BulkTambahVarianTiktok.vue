@@ -396,6 +396,7 @@ const submitSkuCleanup = async () => {
   if (!canSubmitCleanup.value) return
 
   const { run_id: runId, revision } = cleanupPreview.value
+  let shouldRestoreOpenerFocus = false
   cleanupSubmitting.value = true
   try {
     const { data } = await omnichannelService.submitShopeeSkuTiktokCleanup(runId, revision)
@@ -406,8 +407,8 @@ const submitSkuCleanup = async () => {
 
     if (next.shouldCloseModal) {
       cleanupModalOpen.value = false
+      shouldRestoreOpenerFocus = true
       await loadPreview({ preserveFeedback: true })
-      await restoreCleanupOpenerFocus()
     }
   } catch (error) {
     const response = error.response?.data
@@ -432,6 +433,7 @@ const submitSkuCleanup = async () => {
     messageTone.value = 'error'
   } finally {
     cleanupSubmitting.value = false
+    if (shouldRestoreOpenerFocus) await restoreCleanupOpenerFocus()
   }
 }
 
