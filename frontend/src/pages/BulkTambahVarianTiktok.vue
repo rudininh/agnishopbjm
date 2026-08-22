@@ -187,8 +187,8 @@
         </div>
       </section>
     </div>
-    <div v-if="cleanupModalOpen" class="modal-backdrop" @click.self="!cleanupSubmitting && closeSkuCleanupModal">
-      <section class="modal cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-confirmation-title" tabindex="-1" @keydown.esc="!cleanupSubmitting && closeSkuCleanupModal">
+    <div v-if="cleanupModalOpen" class="modal-backdrop" @click.self="!cleanupSubmitting && closeSkuCleanupModal()">
+      <section ref="cleanupDialog" class="modal cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-confirmation-title" tabindex="-1" @keydown.esc="!cleanupSubmitting && closeSkuCleanupModal()" @keydown.tab="trapSkuCleanupFocus">
         <h2 id="cleanup-confirmation-title">Normalisasi SKU &amp; hapus varian TikTok lama?</h2>
         <p class="cleanup-summary">{{ formatSkuCleanupSummary(cleanupPreview?.summary) }}</p>
         <div class="cleanup-counts" aria-label="Ringkasan baris preview">
@@ -222,7 +222,7 @@
           </table>
         </div>
         <div class="modal-actions">
-          <button class="ghost" type="button" :disabled="cleanupSubmitting" @click="closeSkuCleanupModal">Tutup</button>
+          <button class="ghost" type="button" :disabled="cleanupSubmitting" @click="closeSkuCleanupModal()">Tutup</button>
           <button v-if="cleanupPreview.canRetry" class="danger" type="button" :disabled="!canSubmitCleanup" @click="submitSkuCleanup">
             {{ cleanupSubmitting ? 'Memproses...' : 'Coba Lagi yang Belum Selesai' }}
           </button>
@@ -236,7 +236,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
 import { buildBulkSubmitFeedback, mergeBulkPreviewState } from './bulkTiktokSubmitState'
 import {
@@ -260,6 +260,8 @@ const cleanupLoading = ref(false)
 const cleanupSubmitting = ref(false)
 const cleanupModalOpen = ref(false)
 const cleanupPreview = ref(null)
+const cleanupDialog = ref(null)
+const cleanupOpener = ref(null)
 const message = ref('')
 const messageTone = ref('info')
 const execution = reactive({ scope: 'selected', priceMode: 'majority', manualPrice: null })
@@ -323,13 +325,50 @@ const toggleAll = (event) => {
   selectedProductIds.value = event.target.checked ? candidates.value.map((group) => group.tiktok_product_id) : []
 }
 
-const closeSkuCleanupModal = () => {
-  if (!cleanupSubmitting.value) cleanupModalOpen.value = false
+const cleanupDialogControls = () => Array.from(cleanupDialog.value?.querySelectorAll('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])
+  .filter((control) => !control.hasAttribute('disabled') && control.getAttribute('aria-hidden') !== 'true')
+
+const restoreCleanupOpenerFocus = async () => {
+  await nextTick()
+  cleanupOpener.value?.focus?.()
+  cleanupOpener.value = null
 }
 
-const openSkuCleanupPreview = async () => {
+const focusSkuCleanupDialog = async () => {
+  await nextTick()
+  const [firstControl] = cleanupDialogControls()
+  ;(firstControl || cleanupDialog.value)?.focus?.()
+}
+
+const closeSkuCleanupModal = async () => {
+  if (cleanupSubmitting.value) return
+  cleanupModalOpen.value = false
+  await restoreCleanupOpenerFocus()
+}
+
+const trapSkuCleanupFocus = (event) => {
+  const controls = cleanupDialogControls()
+  if (controls.length === 0) {
+    event.preventDefault()
+    cleanupDialog.value?.focus?.()
+    return
+  }
+
+  const first = controls[0]
+  const last = controls[controls.length - 1]
+  if (event.shiftKey && (document.activeElement === first || !cleanupDialog.value?.contains(document.activeElement))) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (document.activeElement === last || !cleanupDialog.value?.contains(document.activeElement))) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+const openSkuCleanupPreview = async (event) => {
   if (loading.value || submitting.value || cleanupLoading.value || cleanupSubmitting.value) return
 
+  cleanupOpener.value = event?.currentTarget || null
   cleanupLoading.value = true
   try {
     const { data } = await omnichannelService.previewShopeeSkuTiktokCleanup()
@@ -344,6 +383,7 @@ const openSkuCleanupPreview = async () => {
       canRetry: false
     }
     cleanupModalOpen.value = true
+    await focusSkuCleanupDialog()
   } catch (error) {
     message.value = error.response?.data?.message || 'Preview normalisasi SKU gagal dimuat.'
     messageTone.value = 'error'
@@ -367,6 +407,7 @@ const submitSkuCleanup = async () => {
     if (next.shouldCloseModal) {
       cleanupModalOpen.value = false
       await loadPreview({ preserveFeedback: true })
+      await restoreCleanupOpenerFocus()
     }
   } catch (error) {
     const response = error.response?.data
