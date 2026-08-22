@@ -69,6 +69,32 @@ class TiktokReconciliationPersistenceTest extends TestCase
         );
     }
 
+    public function test_cleanup_execution_lease_columns_persist_owner_expiry_and_attempts(): void
+    {
+        $this->assertTrue(Schema::hasColumn('tiktok_reconciliation_run_items', 'execution_owner'));
+        $this->assertTrue(Schema::hasColumn('tiktok_reconciliation_run_items', 'execution_lease_until'));
+        $this->assertTrue(Schema::hasColumn('tiktok_reconciliation_run_items', 'execution_attempts'));
+
+        $runId = '50d728f3-62e6-419f-8725-611821664081';
+        $this->insertRun($runId);
+        DB::table('tiktok_reconciliation_run_items')->insert([
+            'run_id' => $runId,
+            'item_key' => 'sku-cleanup:item:model:product:lease',
+            'action_type' => 'shopee_sku_tiktok_delete',
+            'status' => 'ready',
+            'source_fingerprint' => str_repeat('e', 64),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->assertDatabaseHas('tiktok_reconciliation_run_items', [
+            'run_id' => $runId,
+            'execution_owner' => null,
+            'execution_lease_until' => null,
+            'execution_attempts' => 0,
+        ]);
+    }
+
     public function test_reconciliation_rejects_a_duplicate_run_item_key(): void
     {
         $runId = 'be1ea18e-4e1f-470d-b357-d5cf2d75f4f8';

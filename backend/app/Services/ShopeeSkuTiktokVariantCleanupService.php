@@ -3,16 +3,20 @@
 namespace App\Services;
 
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 final class ShopeeSkuTiktokVariantCleanupService
 {
     private const ACTION_TYPE = 'shopee_sku_tiktok_delete';
+
+    private const EXECUTION_LEASE_SECONDS = 900;
 
     private const SECRET_KEYS = [
         'access_token',
@@ -178,17 +182,38 @@ final class ShopeeSkuTiktokVariantCleanupService
             ->orderBy('item_key')
             ->get();
 
-        $items = $rows->map(function (object $row): array {
-            $payload = $this->decodeJson($row->payload) ?? [];
-            $payload['_row_id'] = (int) $row->id;
-            $payload['_persisted_status'] = (string) $row->status;
-            $payload['_persisted_result'] = $this->decodeJson($row->result) ?? [];
+        $items = $rows->map(fn (object $row): array => $this->hydrateExecutionItem($row));
 
-            return $payload;
-        });
+        $collidingItems = $this->plannedTargetCollisionItems($items);
+        $blockedProductIds = $collidingItems->pluck('tiktok_product_id')->uniqueStrict();
 
         foreach ($items->groupBy('tiktok_product_id') as $productItems) {
-            $this->executeProductGroup($productItems->values());
+            $owner = (string) Str::uuid();
+            $claimedItems = $this->claimProductGroup($productItems->values(), $owner);
+            if ($claimedItems === null) {
+                continue;
+            }
+
+            try {
+                if ($blockedProductIds->containsStrict($claimedItems->first()['tiktok_product_id'] ?? null)) {
+                    $status = $this->itemsHaveIrreversibleDeleteEvidence($claimedItems) ? 'partial' : 'failed';
+                    $this->persistProductFailure(
+                        $claimedItems,
+                        $status,
+                        'planned_shopee_target_collision',
+                        ['precondition' => 'planned_shopee_target_collision'],
+                        $owner,
+                    );
+
+                    continue;
+                }
+
+                $this->executeProductGroup($claimedItems, $owner);
+            } catch (Throwable) {
+                $this->persistUnexpectedProductExceptionIfOwned($claimedItems, $owner);
+            } finally {
+                $this->releaseProductLease($claimedItems, $owner);
+            }
         }
 
         $this->updateRunStatus($runId);
@@ -196,7 +221,7 @@ final class ShopeeSkuTiktokVariantCleanupService
         return $this->loadRun($runId);
     }
 
-    private function executeProductGroup(Collection $items): void
+    private function executeProductGroup(Collection $items, string $owner): void
     {
         $productId = $this->stringValue($items->first()['tiktok_product_id'] ?? '');
         $targetIds = $items
@@ -207,12 +232,16 @@ final class ShopeeSkuTiktokVariantCleanupService
             ->values()
             ->all();
 
-        $tiktokBeforeResult = $this->marketplaceApi->fetchTiktokProduct($productId);
+        $tiktokBeforeResult = $this->marketplaceCall(
+            $items,
+            $owner,
+            fn (): array => $this->marketplaceApi->fetchTiktokProduct($productId),
+        );
         $productBefore = data_get($tiktokBeforeResult, 'data.product');
         if (! ($tiktokBeforeResult['ok'] ?? false) || ! is_array($productBefore)) {
             $this->persistProductFailure($items, 'failed', 'fresh_tiktok_unavailable', [
                 'tiktok_before' => $tiktokBeforeResult,
-            ]);
+            ], $owner);
 
             return;
         }
@@ -220,14 +249,18 @@ final class ShopeeSkuTiktokVariantCleanupService
         $modelsByItem = [];
         $modelFetchResults = [];
         foreach ($items->pluck('shopee_item_id')->map(fn (mixed $id): string => $this->stringValue($id))->uniqueStrict() as $itemId) {
-            $result = $this->marketplaceApi->fetchShopeeModels($itemId);
+            $result = $this->marketplaceCall(
+                $items,
+                $owner,
+                fn (): array => $this->marketplaceApi->fetchShopeeModels($itemId),
+            );
             $models = data_get($result, 'data.models');
             $modelFetchResults[$itemId] = $result;
             if (! ($result['ok'] ?? false) || ! is_array($models)) {
                 $this->persistProductFailure($items, 'failed', 'fresh_shopee_unavailable', [
                     'tiktok_before' => $tiktokBeforeResult,
                     'shopee_before' => $modelFetchResults,
-                ]);
+                ], $owner);
 
                 return;
             }
@@ -243,7 +276,7 @@ final class ShopeeSkuTiktokVariantCleanupService
             $this->persistProductFailure($items, $failureStatus, $preconditionFailure, [
                 'tiktok_before' => $tiktokBeforeResult,
                 'shopee_before' => $modelFetchResults,
-            ]);
+            ], $owner);
 
             return;
         }
@@ -259,7 +292,7 @@ final class ShopeeSkuTiktokVariantCleanupService
             $this->persistProductFailure($items, 'failed', 'tiktok_targets_missing_before_submit', [
                 'tiktok_before' => $tiktokBeforeResult,
                 'shopee_before' => $modelFetchResults,
-            ]);
+            ], $owner);
 
             return;
         } elseif ($presentIds === []) {
@@ -267,7 +300,7 @@ final class ShopeeSkuTiktokVariantCleanupService
                 $this->persistProductFailure($items, 'failed', 'tiktok_targets_missing_before_submit', [
                     'tiktok_before' => $tiktokBeforeResult,
                     'shopee_before' => $modelFetchResults,
-                ]);
+                ], $owner);
 
                 return;
             }
@@ -278,7 +311,7 @@ final class ShopeeSkuTiktokVariantCleanupService
                     'tiktok_delete_attempted' => true,
                     'tiktok_before' => $tiktokBeforeResult,
                     'shopee_before' => $modelFetchResults,
-                ]);
+                ], $owner);
 
                 return;
             }
@@ -291,13 +324,22 @@ final class ShopeeSkuTiktokVariantCleanupService
                     'message' => $exception->getMessage(),
                     'tiktok_before' => $tiktokBeforeResult,
                     'shopee_before' => $modelFetchResults,
-                ]);
+                ], $owner);
 
                 return;
             }
 
-            $this->persistDeleteIntent($items, $expectedNonTargetIds, $tiktokBeforeResult);
-            $deleteResult = $this->marketplaceApi->partialEditTiktokProduct($productId, $payload);
+            $this->persistDeleteIntent($items, $expectedNonTargetIds, $tiktokBeforeResult, $owner);
+            $deleteResult = $this->marketplaceCall(
+                $items,
+                $owner,
+                fn (): array => $this->marketplaceApi->partialEditTiktokProduct($productId, $payload),
+            );
+            $this->persistProductEvidence($items, [
+                'tiktok_delete_attempted' => true,
+                'expected_non_target_sku_ids' => $expectedNonTargetIds,
+                'tiktok_delete' => $deleteResult,
+            ], $owner);
             if (! ($deleteResult['ok'] ?? false)) {
                 $this->persistProductFailure($items, 'failed', 'tiktok_delete_failed', [
                     'tiktok_delete_attempted' => true,
@@ -305,12 +347,16 @@ final class ShopeeSkuTiktokVariantCleanupService
                     'tiktok_before' => $tiktokBeforeResult,
                     'tiktok_delete' => $deleteResult,
                     'shopee_before' => $modelFetchResults,
-                ]);
+                ], $owner);
 
                 return;
             }
 
-            $verificationResult = $this->marketplaceApi->fetchTiktokProduct($productId);
+            $verificationResult = $this->marketplaceCall(
+                $items,
+                $owner,
+                fn (): array => $this->marketplaceApi->fetchTiktokProduct($productId),
+            );
         }
 
         $verifiedProduct = data_get($verificationResult, 'data.product');
@@ -328,30 +374,44 @@ final class ShopeeSkuTiktokVariantCleanupService
                 'tiktok_delete' => $deleteResult,
                 'tiktok_verification' => $verificationResult,
                 'shopee_before' => $modelFetchResults,
-            ]);
+            ], $owner);
 
             return;
         }
 
+        $baseResult = [
+            'tiktok_verified' => true,
+            'tiktok_delete_attempted' => true,
+            'expected_non_target_sku_ids' => $expectedNonTargetIds,
+            'tiktok_delete' => $deleteResult,
+            'tiktok_verification' => $verificationResult,
+        ];
+        $this->persistProductOutcome($items, 'partial', 'shopee_update_pending', $baseResult, $owner);
+
         foreach ($items as $item) {
-            $baseResult = [
-                'tiktok_verified' => true,
-                'tiktok_delete_attempted' => true,
-                'expected_non_target_sku_ids' => $expectedNonTargetIds,
-                'tiktok_delete' => $deleteResult,
-                'tiktok_verification' => $verificationResult,
-            ];
-            $this->persistItemOutcome($item, 'partial', 'shopee_update_pending', $baseResult);
-            if (! $this->reflectVerifiedTiktokDeletion($item)) {
-                $this->persistItemOutcome($item, 'partial', 'local_identity_changed', $baseResult);
+            $reflectionFailure = $this->reflectVerifiedTiktokDeletion($item, $owner);
+            if ($reflectionFailure !== null) {
+                $this->persistItemOutcome($item, 'partial', $reflectionFailure, $baseResult, $owner);
 
                 continue;
             }
-            $this->executeShopeeUpdate($item, $modelsByItem[$item['shopee_item_id']] ?? [], $baseResult);
+            $this->executeShopeeUpdate(
+                $item,
+                $modelsByItem[$item['shopee_item_id']] ?? [],
+                $baseResult,
+                $items,
+                $owner,
+            );
         }
     }
 
-    private function executeShopeeUpdate(array $item, array $modelsBefore, array $baseResult): void
+    private function executeShopeeUpdate(
+        array $item,
+        array $modelsBefore,
+        array $baseResult,
+        Collection $productItems,
+        string $owner,
+    ): void
     {
         $itemId = $this->stringValue($item['shopee_item_id'] ?? '');
         $modelId = $this->stringValue($item['shopee_model_id'] ?? '');
@@ -363,22 +423,30 @@ final class ShopeeSkuTiktokVariantCleanupService
 
         if ($freshSku !== $targetSku) {
             if ($freshSku !== $oldSku) {
-                $this->persistItemOutcome($item, 'partial', 'shopee_source_changed', $baseResult);
+                $this->persistItemOutcome($item, 'partial', 'shopee_source_changed', $baseResult, $owner);
 
                 return;
             }
 
-            $updateResult = $this->marketplaceApi->updateShopeeModelSku($itemId, $modelId, $targetSku);
+            $updateResult = $this->marketplaceCall(
+                $productItems,
+                $owner,
+                fn (): array => $this->marketplaceApi->updateShopeeModelSku($itemId, $modelId, $targetSku),
+            );
             if (! ($updateResult['ok'] ?? false)) {
                 $this->persistItemOutcome($item, 'partial', 'shopee_update_failed', [
                     ...$baseResult,
                     'shopee_update' => $updateResult,
-                ]);
+                ], $owner);
 
                 return;
             }
 
-            $verificationResult = $this->marketplaceApi->fetchShopeeModels($itemId);
+            $verificationResult = $this->marketplaceCall(
+                $productItems,
+                $owner,
+                fn (): array => $this->marketplaceApi->fetchShopeeModels($itemId),
+            );
             $verifiedModels = data_get($verificationResult, 'data.models');
             $verifiedModel = is_array($verifiedModels) ? $this->findShopeeModel($verifiedModels, $modelId) : null;
             if (! ($verificationResult['ok'] ?? false)
@@ -388,7 +456,7 @@ final class ShopeeSkuTiktokVariantCleanupService
                     ...$baseResult,
                     'shopee_update' => $updateResult,
                     'shopee_verification' => $verificationResult,
-                ]);
+                ], $owner);
 
                 return;
             }
@@ -400,12 +468,13 @@ final class ShopeeSkuTiktokVariantCleanupService
             ];
         }
 
-        if (! $this->reconcileVerifiedShopeeUpdate($item)) {
-            $this->persistItemOutcome($item, 'partial', 'local_identity_changed', [
+        $reconciliationFailure = $this->reconcileVerifiedShopeeUpdate($item, $owner);
+        if ($reconciliationFailure !== null) {
+            $this->persistItemOutcome($item, 'partial', $reconciliationFailure, [
                 ...$baseResult,
                 'shopee_update' => $updateResult,
                 'shopee_verification' => $verificationResult,
-            ]);
+            ], $owner);
 
             return;
         }
@@ -413,7 +482,7 @@ final class ShopeeSkuTiktokVariantCleanupService
             ...$baseResult,
             'shopee_update' => $updateResult,
             'shopee_verification' => $verificationResult,
-        ]);
+        ], $owner);
     }
 
     private function productPreconditionFailure(Collection $items, array $freshSkus, array $modelsByItem): ?string
@@ -450,7 +519,8 @@ final class ShopeeSkuTiktokVariantCleanupService
             }
 
             $freshSourceSku = $this->stringValue($model['model_sku'] ?? '');
-            $canAlreadyBeTarget = in_array($item['_persisted_status'], ['partial', 'submitted_unverified'], true);
+            $canAlreadyBeTarget = data_get($item, '_persisted_result.tiktok_verified') === true
+                || in_array($item['_persisted_status'], ['partial', 'submitted_unverified'], true);
             if ($freshSourceSku !== $oldSku && (! $canAlreadyBeTarget || $freshSourceSku !== $targetSku)) {
                 return 'shopee_source_changed';
             }
@@ -546,20 +616,41 @@ final class ShopeeSkuTiktokVariantCleanupService
         return true;
     }
 
-    private function reflectVerifiedTiktokDeletion(array $item): bool
+    private function reflectVerifiedTiktokDeletion(array $item, string $owner): ?string
     {
-        return DB::transaction(function () use ($item): bool {
+        return DB::transaction(function () use ($item, $owner): ?string {
+            if (! $this->executionItemIsOwned($item, $owner)) {
+                return 'execution_lease_lost';
+            }
+
+            $productId = $this->stringValue($item['tiktok_product_id'] ?? '');
+            $skuId = $this->stringValue($item['tiktok_sku_id'] ?? '');
+            $oldSku = $this->stringValue($item['old_sku'] ?? '');
+            $tiktokRow = DB::table('tiktok_products')
+                ->where('product_id', $productId)
+                ->where('sku_id', $skuId)
+                ->lockForUpdate()
+                ->first();
+            if (! $tiktokRow
+                || $this->normalizedSku($tiktokRow->seller_sku ?? '') !== $this->normalizedSku($oldSku)) {
+                return 'tiktok_cache_identity_changed';
+            }
+
             $tiktokUpdate = ['is_active' => DB::raw('false'), 'updated_at' => now()];
             if (Schema::hasColumn('tiktok_products', 'stock_qty')) {
                 $tiktokUpdate['stock_qty'] = 0;
             }
-            DB::table('tiktok_products')
-                ->where('product_id', $this->stringValue($item['tiktok_product_id'] ?? ''))
-                ->where('sku_id', $this->stringValue($item['tiktok_sku_id'] ?? ''))
-                ->update($tiktokUpdate);
+            $affected = DB::table('tiktok_products')->where('id', $tiktokRow->id)->update($tiktokUpdate);
+            $reflectedRow = DB::table('tiktok_products')->where('id', $tiktokRow->id)->first();
+            if ($affected !== 1
+                || ! $reflectedRow
+                || (bool) ($reflectedRow->is_active ?? true)
+                || (Schema::hasColumn('tiktok_products', 'stock_qty') && (int) $reflectedRow->stock_qty !== 0)) {
+                return 'tiktok_cache_identity_changed';
+            }
 
             if (! $this->localIdentityIsCurrent($item, true)) {
-                return false;
+                return 'local_identity_changed';
             }
 
             $stockMasterIds = array_values(array_filter(array_map('intval', $item['stock_master_ids'] ?? [])));
@@ -568,26 +659,53 @@ final class ShopeeSkuTiktokVariantCleanupService
                 DB::table('sku_mappings')->whereIn('stock_master_id', $stockMasterIds)->update($this->mappingTiktokClearValues());
             }
 
-            return true;
+            return null;
         });
     }
 
-    private function reconcileVerifiedShopeeUpdate(array $item): bool
+    private function reconcileVerifiedShopeeUpdate(array $item, string $owner): ?string
     {
-        return DB::transaction(function () use ($item): bool {
-            if (! $this->localIdentityIsCurrent($item, true, true)) {
-                return false;
+        return DB::transaction(function () use ($item, $owner): ?string {
+            if (! $this->executionItemIsOwned($item, $owner)) {
+                return 'execution_lease_lost';
             }
 
+            $itemId = $this->stringValue($item['shopee_item_id'] ?? '');
+            $modelId = $this->stringValue($item['shopee_model_id'] ?? '');
+            $oldSku = $this->stringValue($item['old_sku'] ?? '');
             $targetSku = $this->stringValue($item['target_sku'] ?? '');
-            DB::table('shopee_product_model')
-                ->where('item_id', $this->stringValue($item['shopee_item_id'] ?? ''))
-                ->where('model_id', $this->stringValue($item['shopee_model_id'] ?? ''))
+            $expectedName = $this->stringValue($item['shopee_variant_name'] ?? '');
+            $modelRow = DB::table('shopee_product_model')
+                ->where('item_id', $itemId)
+                ->where('model_id', $modelId)
+                ->lockForUpdate()
+                ->first();
+            if (! $modelRow
+                || $this->stringValue($modelRow->name ?? '') !== $expectedName
+                || ! in_array($this->stringValue($modelRow->model_sku ?? ''), [$oldSku, $targetSku], true)) {
+                return 'shopee_cache_identity_changed';
+            }
+
+            if (! $this->localIdentityIsCurrent($item, true, true)) {
+                return 'local_identity_changed';
+            }
+
+            $affected = DB::table('shopee_product_model')
+                ->where('item_id', $itemId)
+                ->where('model_id', $modelId)
+                ->whereIn('model_sku', [$oldSku, $targetSku])
                 ->update(['model_sku' => $targetSku, 'updated_at' => now()]);
+            $persistedSku = DB::table('shopee_product_model')
+                ->where('item_id', $itemId)
+                ->where('model_id', $modelId)
+                ->value('model_sku');
+            if ($affected !== 1 || $this->stringValue($persistedSku) !== $targetSku) {
+                return 'shopee_cache_identity_changed';
+            }
 
             $stockMasterIds = array_values(array_filter(array_map('intval', $item['stock_master_ids'] ?? [])));
             if ($stockMasterIds === []) {
-                return true;
+                return null;
             }
 
             DB::table('stock_master')->whereIn('id', $stockMasterIds)->update([
@@ -599,7 +717,7 @@ final class ShopeeSkuTiktokVariantCleanupService
                 'seller_sku' => $targetSku,
             ]);
 
-            return true;
+            return null;
         });
     }
 
@@ -627,36 +745,359 @@ final class ShopeeSkuTiktokVariantCleanupService
         return $values;
     }
 
-    private function persistProductFailure(Collection $items, string $status, string $reason, array $result): void
+    private function hydrateExecutionItem(object $row): array
     {
-        foreach ($items as $item) {
-            $this->persistItemOutcome($item, $status, $reason, $result);
-        }
+        $payload = $this->decodeJson($row->payload) ?? [];
+        $payload['_row_id'] = (int) $row->id;
+        $payload['_persisted_status'] = (string) $row->status;
+        $payload['_persisted_result'] = $this->decodeJson($row->result) ?? [];
+
+        return $payload;
     }
 
-    private function persistDeleteIntent(Collection $items, array $expectedNonTargetIds, array $tiktokBeforeResult): void
+    private function claimProductGroup(Collection $items, string $owner): ?Collection
     {
-        $result = $this->encodeJson($this->redact([
-            'tiktok_delete_attempted' => true,
-            'expected_non_target_sku_ids' => $expectedNonTargetIds,
-            'tiktok_before' => $tiktokBeforeResult,
-        ]));
+        return DB::transaction(function () use ($items, $owner): ?Collection {
+            $ids = $items->pluck('_row_id')->map(fn (mixed $id): int => (int) $id)->sort()->values()->all();
+            $productId = $this->stringValue($items->first()['tiktok_product_id'] ?? '');
+            $allRows = DB::table('tiktok_reconciliation_run_items')
+                ->where('action_type', self::ACTION_TYPE)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $rows = $allRows
+                ->filter(fn (object $row): bool => in_array((int) $row->id, $ids, true))
+                ->values();
+            if ($rows->count() !== count($ids)) {
+                throw new RuntimeException('Cleanup execution rows changed before claim.');
+            }
 
-        DB::transaction(function () use ($items, $result): void {
-            DB::table('tiktok_reconciliation_run_items')
-                ->whereIn('id', $items->pluck('_row_id')->map(fn (mixed $id): int => (int) $id)->all())
-                ->update(['result' => $result, 'updated_at' => now()]);
+            $productRows = $allRows->filter(function (object $row) use ($productId): bool {
+                $payload = $this->decodeJson($row->payload) ?? [];
+
+                return $this->stringValue($payload['tiktok_product_id'] ?? '') === $productId;
+            });
+            $now = now();
+            foreach ($productRows as $row) {
+                $currentOwner = $this->stringValue($row->execution_owner ?? '');
+                $leaseUntil = $row->execution_lease_until ?? null;
+                if ($currentOwner !== ''
+                    && $currentOwner !== $owner
+                    && $leaseUntil !== null
+                    && Carbon::parse($leaseUntil)->greaterThan($now)) {
+                    return null;
+                }
+            }
+            foreach ($rows as $row) {
+                if (! in_array((string) $row->status, ['ready', 'partial', 'failed', 'submitted_unverified'], true)) {
+                    return null;
+                }
+            }
+
+            $expiredOwnerIds = $productRows
+                ->filter(fn (object $row): bool => $this->stringValue($row->execution_owner ?? '') !== ''
+                    && $this->stringValue($row->execution_owner ?? '') !== $owner)
+                ->pluck('id')
+                ->all();
+            if ($expiredOwnerIds !== []) {
+                DB::table('tiktok_reconciliation_run_items')->whereIn('id', $expiredOwnerIds)->update([
+                    'execution_owner' => null,
+                    'execution_lease_until' => null,
+                    'updated_at' => $now,
+                ]);
+            }
+
+            $sharedEvidence = $this->matchingProductDeleteEvidence($productRows, $items);
+            foreach ($rows as $row) {
+                DB::table('tiktok_reconciliation_run_items')->where('id', $row->id)->update([
+                    'result' => $this->encodeJson($this->mergeAuditResult(
+                        $this->decodeJson($row->result) ?? [],
+                        $sharedEvidence,
+                    )),
+                    'execution_owner' => $owner,
+                    'execution_lease_until' => $now->copy()->addSeconds(self::EXECUTION_LEASE_SECONDS),
+                    'execution_attempts' => DB::raw('execution_attempts + 1'),
+                    'updated_at' => $now,
+                ]);
+            }
+
+            return DB::table('tiktok_reconciliation_run_items')
+                ->whereIn('id', $ids)
+                ->orderBy('id')
+                ->get()
+                ->map(fn (object $row): array => $this->hydrateExecutionItem($row));
         });
     }
 
-    private function persistItemOutcome(array $item, string $status, ?string $reason, array $result): void
+    private function matchingProductDeleteEvidence(Collection $productRows, Collection $items): array
     {
-        DB::table('tiktok_reconciliation_run_items')->where('id', (int) $item['_row_id'])->update([
-            'status' => $status,
-            'block_reason' => $reason,
-            'result' => $this->encodeJson($this->redact($result)),
-            'updated_at' => now(),
-        ]);
+        $targetIds = $items
+            ->pluck('tiktok_sku_id')
+            ->map(fn (mixed $id): string => $this->stringValue($id))
+            ->filter()
+            ->uniqueStrict()
+            ->sort()
+            ->values()
+            ->all();
+        $evidence = [];
+
+        foreach ($productRows->groupBy('run_id') as $runRows) {
+            $operationRows = $runRows->filter(
+                fn (object $row): bool => in_array(
+                    (string) $row->status,
+                    ['ready', 'partial', 'failed', 'submitted_unverified', 'updated'],
+                    true,
+                ),
+            );
+            $runTargetIds = $operationRows
+                ->map(fn (object $row): array => $this->decodeJson($row->payload) ?? [])
+                ->pluck('tiktok_sku_id')
+                ->map(fn (mixed $id): string => $this->stringValue($id))
+                ->filter()
+                ->uniqueStrict()
+                ->sort()
+                ->values()
+                ->all();
+            if ($runTargetIds !== $targetIds) {
+                continue;
+            }
+
+            foreach ($operationRows as $row) {
+                $result = $this->decodeJson($row->result) ?? [];
+                $incoming = [];
+                if (($result['tiktok_delete_attempted'] ?? false) === true) {
+                    $incoming['tiktok_delete_attempted'] = true;
+                }
+                if (is_array($result['expected_non_target_sku_ids'] ?? null)
+                    && $result['expected_non_target_sku_ids'] !== []) {
+                    $incoming['expected_non_target_sku_ids'] = $result['expected_non_target_sku_ids'];
+                }
+                if (is_array($result['tiktok_delete'] ?? null)) {
+                    $incoming['tiktok_delete'] = $result['tiktok_delete'];
+                }
+                if (($result['tiktok_verified'] ?? false) === true) {
+                    $incoming['tiktok_verified'] = true;
+                }
+                $evidence = $this->mergeAuditResult($evidence, $incoming);
+            }
+        }
+
+        return $evidence;
+    }
+
+    private function marketplaceCall(Collection $items, string $owner, callable $call): array
+    {
+        $this->renewProductLease($items, $owner);
+
+        return $call();
+    }
+
+    private function renewProductLease(Collection $items, string $owner): void
+    {
+        DB::transaction(function () use ($items, $owner): void {
+            $rows = $this->lockedItemRows($items, $owner);
+            DB::table('tiktok_reconciliation_run_items')
+                ->whereIn('id', $rows->pluck('id')->all())
+                ->where('execution_owner', $owner)
+                ->update([
+                    'execution_lease_until' => now()->addSeconds(self::EXECUTION_LEASE_SECONDS),
+                    'updated_at' => now(),
+                ]);
+        });
+    }
+
+    private function releaseProductLease(Collection $items, string $owner): void
+    {
+        DB::transaction(function () use ($items, $owner): void {
+            $ids = $items->pluck('_row_id')->map(fn (mixed $id): int => (int) $id)->sort()->values()->all();
+            $ownedIds = DB::table('tiktok_reconciliation_run_items')
+                ->whereIn('id', $ids)
+                ->where('execution_owner', $owner)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->pluck('id')
+                ->all();
+            if ($ownedIds === []) {
+                return;
+            }
+
+            DB::table('tiktok_reconciliation_run_items')
+                ->whereIn('id', $ownedIds)
+                ->where('execution_owner', $owner)
+                ->update([
+                    'execution_owner' => null,
+                    'execution_lease_until' => null,
+                    'updated_at' => now(),
+                ]);
+        });
+    }
+
+    private function executionItemIsOwned(array $item, string $owner): bool
+    {
+        $row = DB::table('tiktok_reconciliation_run_items')
+            ->where('id', (int) ($item['_row_id'] ?? 0))
+            ->lockForUpdate()
+            ->first();
+
+        return $row && (string) ($row->execution_owner ?? '') === $owner;
+    }
+
+    private function persistUnexpectedProductExceptionIfOwned(Collection $items, string $owner): void
+    {
+        DB::transaction(function () use ($items, $owner): void {
+            try {
+                $rows = $this->lockedItemRows($items, $owner);
+            } catch (RuntimeException) {
+                return;
+            }
+
+            $freshItems = $rows->map(fn (object $row): array => $this->hydrateExecutionItem($row));
+            $status = $this->itemsHaveIrreversibleDeleteEvidence($freshItems) ? 'partial' : 'failed';
+            foreach ($rows as $row) {
+                $result = $this->mergeAuditResult($this->decodeJson($row->result) ?? [], [
+                    'execution_error' => ['type' => 'unexpected_product_exception'],
+                ]);
+                DB::table('tiktok_reconciliation_run_items')->where('id', $row->id)->update([
+                    'status' => $status,
+                    'block_reason' => 'product_execution_exception',
+                    'result' => $this->encodeJson($result),
+                    'updated_at' => now(),
+                ]);
+            }
+        });
+    }
+
+    private function persistProductFailure(
+        Collection $items,
+        string $status,
+        string $reason,
+        array $result,
+        string $owner,
+    ): void
+    {
+        $this->persistProductOutcome($items, $status, $reason, $result, $owner);
+    }
+
+    private function persistDeleteIntent(
+        Collection $items,
+        array $expectedNonTargetIds,
+        array $tiktokBeforeResult,
+        string $owner,
+    ): void
+    {
+        $this->persistProductEvidence($items, [
+            'tiktok_delete_attempted' => true,
+            'expected_non_target_sku_ids' => $expectedNonTargetIds,
+            'tiktok_before' => $tiktokBeforeResult,
+        ], $owner);
+    }
+
+    private function persistProductEvidence(Collection $items, array $result, string $owner): void
+    {
+        DB::transaction(function () use ($items, $result, $owner): void {
+            $rows = $this->lockedItemRows($items, $owner);
+            foreach ($rows as $row) {
+                $merged = $this->mergeAuditResult($this->decodeJson($row->result) ?? [], $result);
+                DB::table('tiktok_reconciliation_run_items')->where('id', $row->id)->update([
+                    'result' => $this->encodeJson($merged),
+                    'updated_at' => now(),
+                ]);
+            }
+        });
+    }
+
+    private function persistItemOutcome(
+        array $item,
+        string $status,
+        ?string $reason,
+        array $result,
+        string $owner,
+    ): void
+    {
+        DB::transaction(function () use ($item, $status, $reason, $result, $owner): void {
+            $row = DB::table('tiktok_reconciliation_run_items')
+                ->where('id', (int) $item['_row_id'])
+                ->lockForUpdate()
+                ->first();
+            if (! $row || (string) ($row->execution_owner ?? '') !== $owner) {
+                throw new RuntimeException('Cleanup execution lease was lost.');
+            }
+
+            DB::table('tiktok_reconciliation_run_items')->where('id', $row->id)->update([
+                'status' => $status,
+                'block_reason' => $reason,
+                'result' => $this->encodeJson($this->mergeAuditResult($this->decodeJson($row->result) ?? [], $result)),
+                'updated_at' => now(),
+            ]);
+        });
+    }
+
+    private function persistProductOutcome(
+        Collection $items,
+        string $status,
+        ?string $reason,
+        array $result,
+        string $owner,
+    ): void
+    {
+        DB::transaction(function () use ($items, $status, $reason, $result, $owner): void {
+            $rows = $this->lockedItemRows($items, $owner);
+            if ($status === 'failed') {
+                $freshItems = $rows->map(fn (object $row): array => $this->hydrateExecutionItem($row));
+                if ($this->itemsHaveIrreversibleDeleteEvidence($freshItems)) {
+                    $status = 'partial';
+                }
+            }
+            foreach ($rows as $row) {
+                DB::table('tiktok_reconciliation_run_items')->where('id', $row->id)->update([
+                    'status' => $status,
+                    'block_reason' => $reason,
+                    'result' => $this->encodeJson($this->mergeAuditResult($this->decodeJson($row->result) ?? [], $result)),
+                    'updated_at' => now(),
+                ]);
+            }
+        });
+    }
+
+    private function lockedItemRows(Collection $items, ?string $owner = null): Collection
+    {
+        $ids = $items->pluck('_row_id')->map(fn (mixed $id): int => (int) $id)->sort()->values()->all();
+
+        $rows = DB::table('tiktok_reconciliation_run_items')
+            ->whereIn('id', $ids)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+        if ($rows->count() !== count($ids)
+            || ($owner !== null && $rows->contains(
+                fn (object $row): bool => (string) ($row->execution_owner ?? '') !== $owner,
+            ))) {
+            throw new RuntimeException('Cleanup execution lease was lost.');
+        }
+
+        return $rows;
+    }
+
+    private function mergeAuditResult(array $existing, array $incoming): array
+    {
+        $existing = $this->redact($existing);
+        $merged = array_replace_recursive($existing, $this->redact($incoming));
+
+        if (($existing['tiktok_delete_attempted'] ?? false) === true) {
+            $merged['tiktok_delete_attempted'] = true;
+        }
+        if (is_array($existing['expected_non_target_sku_ids'] ?? null)
+            && $existing['expected_non_target_sku_ids'] !== []) {
+            $merged['expected_non_target_sku_ids'] = $existing['expected_non_target_sku_ids'];
+        }
+        if (is_array($existing['tiktok_delete'] ?? null)) {
+            $merged['tiktok_delete'] = $existing['tiktok_delete'];
+        }
+        if (($existing['tiktok_verified'] ?? false) === true) {
+            $merged['tiktok_verified'] = true;
+        }
+
+        return $merged;
     }
 
     private function updateRunStatus(string $runId): void
@@ -668,8 +1109,11 @@ final class ShopeeSkuTiktokVariantCleanupService
         $updated = $statuses->filter(fn (mixed $status): bool => $status === 'updated')->count();
         $failed = $statuses->filter(fn (mixed $status): bool => $status === 'failed')->count();
         $partial = $statuses->contains(fn (mixed $status): bool => in_array($status, ['partial', 'submitted_unverified'], true));
+        $pending = $statuses->contains(fn (mixed $status): bool => $status === 'ready');
 
-        if ($partial || ($failed > 0 && $updated > 0)) {
+        if ($pending) {
+            $status = ($partial || $failed > 0 || $updated > 0) ? 'partial' : 'claimed';
+        } elseif ($partial || ($failed > 0 && $updated > 0)) {
             $status = 'partial';
         } elseif ($failed > 0) {
             $status = 'failed';
@@ -805,6 +1249,7 @@ final class ShopeeSkuTiktokVariantCleanupService
 
         ksort($itemsByKey, SORT_STRING);
         $items = array_values($itemsByKey);
+        $this->blockPlannedTargetCollisions($items);
         $this->blockProductsWithoutSurvivors($items);
 
         $revisionItems = array_map(
@@ -960,6 +1405,47 @@ final class ShopeeSkuTiktokVariantCleanupService
             }
             unset($item);
         }
+    }
+
+    private function blockPlannedTargetCollisions(array &$items): void
+    {
+        $readyItems = collect($items)->filter(fn (array $item): bool => $item['status'] === 'ready');
+        $collidingKeys = $this->plannedTargetCollisionItems($readyItems)
+            ->pluck('item_key')
+            ->flip();
+
+        foreach ($items as &$item) {
+            if ($collidingKeys->has($item['item_key'])) {
+                $item['status'] = 'blocked';
+                $item['block_reason'] = 'planned_shopee_target_collision';
+            }
+        }
+        unset($item);
+    }
+
+    private function plannedTargetCollisionItems(Collection $items): Collection
+    {
+        return $items
+            ->groupBy(fn (array $item): string => $this->stringValue($item['shopee_item_id'] ?? '')
+                .'|'.$this->normalizedSku($item['target_sku'] ?? ''))
+            ->filter(function (Collection $group, string $key): bool {
+                [$itemId, $targetSku] = array_pad(explode('|', $key, 2), 2, '');
+
+                return $itemId !== '' && $targetSku !== '' && $group->pluck('item_key')->uniqueStrict()->count() > 1;
+            })
+            ->flatten(1)
+            ->values();
+    }
+
+    private function itemsHaveIrreversibleDeleteEvidence(Collection $items): bool
+    {
+        return $items->contains(function (array $item): bool {
+            $result = $item['_persisted_result'] ?? [];
+
+            return ($result['tiktok_delete_attempted'] ?? false) === true
+                || ($result['tiktok_verified'] ?? false) === true
+                || is_array($result['tiktok_delete'] ?? null);
+        });
     }
 
     private function hasShopeeTargetCollision(string $itemId, string $modelId, string $targetSku): bool
