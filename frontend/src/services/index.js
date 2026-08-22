@@ -165,6 +165,14 @@ export const omnichannelService = {
     return api.post('/tiktok/bulk-missing-variants/submit', data)
   },
 
+  previewShopeeSkuTiktokCleanup() {
+    return api.post('/tiktok/bulk-missing-variants/sku-cleanup/preview')
+  },
+
+  submitShopeeSkuTiktokCleanup(runId, revision) {
+    return api.post(`/tiktok/bulk-missing-variants/sku-cleanup/${encodeURIComponent(runId)}/submit`, { revision })
+  },
+
   tiktokVariantReconciliationProducts() { return api.get('/tiktok/variant-reconciliation/products') },
   tiktokVariantReconciliationOverview() { return api.get('/tiktok/variant-reconciliation/overview') },
   tiktokVariantReconciliationPreview(params) { return api.get('/tiktok/variant-reconciliation/preview', { params }) },
