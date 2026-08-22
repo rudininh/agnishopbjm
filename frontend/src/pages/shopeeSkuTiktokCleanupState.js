@@ -17,7 +17,40 @@ export const formatSkuCleanupSummary = (summary = {}) => (
 )
 
 export const formatSkuCleanupResultSummary = (summary = {}) => (
-  `Berhasil ${count(summary.updated)} | Sebagian ${count(summary.partial) + count(summary.submitted_unverified)} | Terblokir ${count(summary.blocked)} | Gagal ${count(summary.failed)}`
+  `Berhasil ${count(summary.updated)} | Sebagian ${count(summary.partial) + count(summary.submitted_unverified)} | Terblokir ${count(summary.blocked)} | Gagal ${count(summary.failed)} | Kedaluwarsa ${count(summary.stale_revision)}`
+)
+
+export const partitionSkuCleanupPreview = (items = []) => {
+  const buckets = { ready: [], unchanged: [], blocked: [] }
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item?.status === 'ready') buckets.ready.push(item)
+    else if (item?.status === 'unchanged') buckets.unchanged.push(item)
+    else buckets.blocked.push(item)
+  }
+
+  return buckets
+}
+
+export const skuCleanupStatusLabel = (status) => ({
+  ready: 'Siap',
+  ready_for_review: 'Siap ditinjau',
+  unchanged: 'Tidak berubah',
+  completed: 'Selesai',
+  updated: 'Berhasil',
+  partial: 'Sebagian',
+  submitted_unverified: 'Belum terverifikasi',
+  blocked: 'Terblokir',
+  stale_revision: 'Preview kedaluwarsa',
+  failed: 'Gagal'
+}[status] || 'Gagal')
+
+export const summarizeSkuCleanupItems = (items = []) => (
+  (Array.isArray(items) ? items : []).reduce((summary, item) => {
+    const status = item?.status
+    if (Object.hasOwn(summary, status)) summary[status] += 1
+    return summary
+  }, { updated: 0, partial: 0, submitted_unverified: 0, blocked: 0, stale_revision: 0, failed: 0 })
 )
 
 export const canSubmitSkuCleanup = ({
@@ -92,15 +125,29 @@ export const mergeSkuCleanupResult = (current = {}, result = {}) => {
   const status = typeof result.status === 'string' ? result.status : 'error'
   const summary = result.summary || current.summary || {}
   const isStale = status === 'stale_revision'
+  const resultItems = Array.isArray(result.items) ? result.items : (current.items || [])
+  const items = isStale
+    ? resultItems.map((item) => ({
+      ...item,
+      status: 'stale_revision',
+      block_reason: result.message || 'Data katalog berubah setelah preview.'
+    }))
+    : resultItems
+  const resultSummary = (isStale || Array.isArray(result.items))
+    ? summarizeSkuCleanupItems(items)
+    : (current.resultSummary || summary)
   const next = {
     ...current,
     status,
     summary,
-    items: Array.isArray(result.items) ? result.items : (current.items || []),
-    message: result.message || resultMessage(status, summary),
+    items,
+    resultSummary,
+    message: result.message || resultMessage(status, resultSummary),
     tone: skuCleanupTone(status),
     run_id: isStale ? null : (result.run_id ?? current.run_id ?? null),
     revision: isStale ? null : (result.revision ?? current.revision ?? null),
+    shouldCloseModal: status === 'completed',
+    shouldRefreshCandidates: status === 'completed',
     canRetry: false
   }
 

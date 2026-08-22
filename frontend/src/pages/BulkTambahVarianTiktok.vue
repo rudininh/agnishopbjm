@@ -93,6 +93,14 @@
           <strong>SKU TikTok Sudah Ada, Mapping Belum Tersambung</strong>
           <small>{{ `${mappingOnlyCandidates.length} produk | ${mappingOnlyVariantCount} varian tidak dapat ditambahkan ulang` }}</small>
         </div>
+        <button
+          class="danger"
+          type="button"
+          :disabled="loading || submitting || cleanupLoading || cleanupSubmitting"
+          @click="openSkuCleanupPreview"
+        >
+          {{ cleanupLoading ? 'Menyiapkan preview...' : 'Normalisasi SKU & Hapus Varian TikTok Lama' }}
+        </button>
       </div>
       <table>
         <thead>
@@ -127,6 +135,29 @@
         </tbody>
       </table>
     </section>
+    <section v-if="cleanupHasResults" class="table-wrap results cleanup-results">
+      <div class="table-head">
+        <div>
+          <strong>Hasil Normalisasi SKU TikTok</strong>
+          <small>{{ cleanupResultSummary }}</small>
+        </div>
+        <span :class="['badge', cleanupPreview.tone]">{{ cleanupStatusLabel(cleanupPreview.status) }}</span>
+      </div>
+      <table>
+        <thead><tr><th>Produk TikTok</th><th>Shopee item / model</th><th>Varian Shopee</th><th>SKU lama → target</th><th>SKU TikTok</th><th>Status</th><th>Keterangan</th></tr></thead>
+        <tbody>
+          <tr v-for="item in cleanupPreview.items" :key="`cleanup-result-${item.item_key}`">
+            <td>{{ item.tiktok_product_id || '-' }}</td>
+            <td>{{ item.shopee_item_id || '-' }} / {{ item.shopee_model_id || '-' }}</td>
+            <td>{{ item.shopee_variant_name || '-' }}</td>
+            <td>{{ item.old_sku || '-' }} → {{ item.target_sku || '-' }}</td>
+            <td>{{ item.tiktok_sku_id || '-' }}<small>{{ item.tiktok_variant_name || '-' }}</small></td>
+            <td><span :class="['badge', cleanupTone(item.status)]">{{ cleanupStatusLabel(item.status) }}</span></td>
+            <td>{{ item.block_reason || item.result?.message || '-' }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
     <section v-if="results.length" class="table-wrap results">
       <div class="table-head"><div><strong>Hasil Proses</strong><small>{{ resultSummary }}</small></div></div>
       <table>
@@ -156,6 +187,51 @@
         </div>
       </section>
     </div>
+    <div v-if="cleanupModalOpen" class="modal-backdrop" @click.self="!cleanupSubmitting && closeSkuCleanupModal">
+      <section class="modal cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-confirmation-title" tabindex="-1" @keydown.esc="!cleanupSubmitting && closeSkuCleanupModal">
+        <h2 id="cleanup-confirmation-title">Normalisasi SKU &amp; hapus varian TikTok lama?</h2>
+        <p class="cleanup-summary">{{ formatSkuCleanupSummary(cleanupPreview?.summary) }}</p>
+        <div class="cleanup-counts" aria-label="Ringkasan baris preview">
+          <span class="badge ready">Siap {{ cleanupPreviewBuckets.ready.length }}</span>
+          <span class="badge unchanged">Tidak berubah {{ cleanupPreviewBuckets.unchanged.length }}</span>
+          <span class="badge blocked">Terblokir {{ cleanupPreviewBuckets.blocked.length }}</span>
+        </div>
+        <ul class="cleanup-warnings">
+          <li>Hanya <code>model_sku</code> Shopee yang diubah.</li>
+          <li>Hanya varian TikTok yang tercantum sebagai <strong>Siap</strong> yang dihapus.</li>
+          <li>Varian TikTok lain dipertahankan.</li>
+          <li>Varian tidak dibuat ulang otomatis.</li>
+          <li>Submit dapat ditolak bila katalog berubah setelah preview.</li>
+        </ul>
+        <p v-if="cleanupPreview.message" :class="['notice', cleanupPreview.tone]">{{ cleanupPreview.message }}</p>
+        <div class="cleanup-preview-table" tabindex="0" aria-label="Rincian preview normalisasi SKU">
+          <table>
+            <thead><tr><th>Produk TikTok</th><th>Shopee item / model</th><th>Varian saat ini</th><th>SKU lama</th><th>SKU target</th><th>SKU TikTok</th><th>Status / alasan</th></tr></thead>
+            <tbody>
+              <tr v-for="item in cleanupPreview.items" :key="item.item_key">
+                <td>{{ item.tiktok_product_id || '-' }}</td>
+                <td>{{ item.shopee_item_id || '-' }} / {{ item.shopee_model_id || '-' }}</td>
+                <td>{{ item.shopee_variant_name || '-' }}</td>
+                <td>{{ item.old_sku || '-' }}</td>
+                <td>{{ item.target_sku || '-' }}</td>
+                <td>{{ item.tiktok_sku_id || '-' }}<small>{{ item.tiktok_variant_name || '-' }}</small></td>
+                <td><span :class="['badge', cleanupTone(item.status)]">{{ cleanupStatusLabel(item.status) }}</span><small>{{ item.block_reason || item.result?.message || '-' }}</small></td>
+              </tr>
+              <tr v-if="!cleanupPreview.items?.length"><td colspan="7" class="empty">Tidak ada varian untuk dinormalisasi pada preview ini.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" type="button" :disabled="cleanupSubmitting" @click="closeSkuCleanupModal">Tutup</button>
+          <button v-if="cleanupPreview.canRetry" class="danger" type="button" :disabled="!canSubmitCleanup" @click="submitSkuCleanup">
+            {{ cleanupSubmitting ? 'Memproses...' : 'Coba Lagi yang Belum Selesai' }}
+          </button>
+          <button v-else class="danger" type="button" :disabled="!canSubmitCleanup" @click="submitSkuCleanup">
+            {{ cleanupSubmitting ? 'Memproses...' : 'Konfirmasi Normalisasi & Hapus' }}
+          </button>
+        </div>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -163,6 +239,15 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
 import { buildBulkSubmitFeedback, mergeBulkPreviewState } from './bulkTiktokSubmitState'
+import {
+  canSubmitSkuCleanup,
+  formatSkuCleanupResultSummary,
+  formatSkuCleanupSummary,
+  mergeSkuCleanupResult,
+  partitionSkuCleanupPreview,
+  skuCleanupStatusLabel,
+  skuCleanupTone
+} from './shopeeSkuTiktokCleanupState'
 
 const candidates = ref([])
 const mappingOnlyCandidates = ref([])
@@ -171,6 +256,10 @@ const selectedProductIds = ref([])
 const loading = ref(false)
 const submitting = ref(false)
 const confirmationOpen = ref(false)
+const cleanupLoading = ref(false)
+const cleanupSubmitting = ref(false)
+const cleanupModalOpen = ref(false)
+const cleanupPreview = ref(null)
 const message = ref('')
 const messageTone = ref('info')
 const execution = reactive({ scope: 'selected', priceMode: 'majority', manualPrice: null })
@@ -183,6 +272,20 @@ const mappingOnlyVariantCount = computed(() => mappingOnlyCandidates.value.reduc
 const allSelected = computed(() => candidates.value.length > 0 && selectedProductIds.value.length === candidates.value.length)
 const canSubmit = computed(() => !loading.value && !submitting.value && targetVariantCount.value > 0
   && (execution.priceMode === 'majority' || Number(execution.manualPrice) > 0))
+const cleanupPreviewBuckets = computed(() => partitionSkuCleanupPreview(cleanupPreview.value?.previewItems || cleanupPreview.value?.items))
+const canSubmitCleanup = computed(() => canSubmitSkuCleanup({
+  loading: loading.value,
+  submitting: submitting.value,
+  cleanupLoading: cleanupLoading.value,
+  cleanupSubmitting: cleanupSubmitting.value,
+  preview: cleanupPreview.value
+}))
+const cleanupResultSummary = computed(() => formatSkuCleanupResultSummary(cleanupPreview.value?.resultSummary))
+const cleanupHasResults = computed(() => Boolean(
+  cleanupPreview.value
+  && ['completed', 'partial', 'failed', 'stale_revision'].includes(cleanupPreview.value.status)
+  && cleanupPreview.value.items?.length
+))
 const resultSummary = computed(() => {
   const totals = results.value.reduce((summary, item) => ({
     updated: summary.updated + Number(item.updated || 0),
@@ -218,6 +321,77 @@ const loadPreview = async ({ preserveFeedback = false } = {}) => {
 
 const toggleAll = (event) => {
   selectedProductIds.value = event.target.checked ? candidates.value.map((group) => group.tiktok_product_id) : []
+}
+
+const closeSkuCleanupModal = () => {
+  if (!cleanupSubmitting.value) cleanupModalOpen.value = false
+}
+
+const openSkuCleanupPreview = async () => {
+  if (loading.value || submitting.value || cleanupLoading.value || cleanupSubmitting.value) return
+
+  cleanupLoading.value = true
+  try {
+    const { data } = await omnichannelService.previewShopeeSkuTiktokCleanup()
+    const items = Array.isArray(data.items) ? data.items : []
+    cleanupPreview.value = {
+      ...data,
+      items,
+      previewItems: items,
+      summary: data.summary || {},
+      message: '',
+      tone: 'info',
+      canRetry: false
+    }
+    cleanupModalOpen.value = true
+  } catch (error) {
+    message.value = error.response?.data?.message || 'Preview normalisasi SKU gagal dimuat.'
+    messageTone.value = 'error'
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
+const submitSkuCleanup = async () => {
+  if (!canSubmitCleanup.value) return
+
+  const { run_id: runId, revision } = cleanupPreview.value
+  cleanupSubmitting.value = true
+  try {
+    const { data } = await omnichannelService.submitShopeeSkuTiktokCleanup(runId, revision)
+    const next = mergeSkuCleanupResult(cleanupPreview.value, data)
+    cleanupPreview.value = next
+    message.value = next.message
+    messageTone.value = next.tone
+
+    if (next.shouldCloseModal) {
+      cleanupModalOpen.value = false
+      await loadPreview({ preserveFeedback: true })
+    }
+  } catch (error) {
+    const response = error.response?.data
+    const stale = error.response?.status === 409 || response?.status === 'stale_revision'
+    if (stale) {
+      const next = mergeSkuCleanupResult(cleanupPreview.value, { status: 'stale_revision', ...response })
+      cleanupPreview.value = next
+      message.value = next.message
+      messageTone.value = next.tone
+      return
+    }
+
+    if (response?.status) {
+      const next = mergeSkuCleanupResult(cleanupPreview.value, response)
+      cleanupPreview.value = next
+      message.value = next.message
+      messageTone.value = next.tone
+      return
+    }
+
+    message.value = response?.message || 'Normalisasi SKU TikTok gagal diproses.'
+    messageTone.value = 'error'
+  } finally {
+    cleanupSubmitting.value = false
+  }
 }
 
 const submitBulk = async () => {
@@ -260,13 +434,14 @@ h1 { margin:0; font-size:26px; line-height:1.2; } small { display:block; color:#
 fieldset,.run-panel,.table-wrap { min-width:0; border:1px solid #d9e2ec; border-radius:6px; background:#fff; }
 fieldset { display:grid; gap:8px; padding:12px; } legend { padding:0 4px; color:#475569; font-size:12px; font-weight:800; } label { display:flex; gap:8px; align-items:center; font-size:13px; } input[type='number'] { width:100%; min-height:36px; border:1px solid #cbd5e1; border-radius:4px; padding:0 9px; }
 .run-panel { display:grid; align-content:center; gap:7px; padding:12px; } .run-panel strong { font-size:16px; }
-.primary,.ghost { border-radius:6px; padding:9px 12px; border:1px solid transparent; cursor:pointer; font-weight:700; } .primary { background:#0f5fc7; color:#fff; } .ghost { background:#fff; border-color:#cbd5e1; color:#334155; } button:disabled { cursor:not-allowed; opacity:.56; }
+.primary,.ghost,.danger { border-radius:6px; padding:9px 12px; border:1px solid transparent; cursor:pointer; font-weight:700; } .primary { background:#0f5fc7; color:#fff; } .ghost { background:#fff; border-color:#cbd5e1; color:#334155; } .danger { background:#b42318; color:#fff; border-color:#991b1b; } button:disabled { cursor:not-allowed; opacity:.56; }
 .notice { margin:0 0 14px; padding:10px 12px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; } .notice.success { color:#166534; background:#f0fdf4; border-color:#86efac; } .notice.error { color:#991b1b; background:#fef2f2; border-color:#fecaca; } .notice.warning { color:#92400e; background:#fffbeb; border-color:#fcd34d; }
 .table-wrap { overflow:auto; margin-bottom:16px; } .table-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border-bottom:1px solid #d9e2ec; } .table-head strong { display:block; } .select-all { white-space:nowrap; }
 table { width:100%; min-width:860px; border-collapse:collapse; } th,td { padding:10px; border-bottom:1px solid #e5eaf0; text-align:left; vertical-align:top; font-size:13px; } th { color:#475569; background:#f8fafc; font-size:11px; text-transform:uppercase; } td:first-child,th:first-child { width:42px; text-align:center; } .empty { padding:30px; color:#64748b; text-align:center; }
 .variant-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; min-width:260px; } .variant-list li { display:grid; grid-template-columns:36px minmax(0,1fr); gap:8px; align-items:center; } .variant-list img,.image-fallback { width:36px; height:36px; object-fit:cover; border-radius:4px; background:#e2e8f0; } .image-fallback { display:grid; place-items:center; color:#64748b; } .variant-list strong { display:block; overflow-wrap:anywhere; }
-.badge { display:inline-flex; width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-weight:800; } .ready,.updated { color:#166534; background:#dcfce7; } .warning,.skipped,.submitted_unverified { color:#92400e; background:#fef3c7; } .mapping { color:#1d4ed8; background:#dbeafe; } .failed { color:#991b1b; background:#fee2e2; }
-.modal-backdrop { position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:18px; background:rgba(15,23,42,.45); } .modal { width:min(520px,100%); border-radius:6px; background:#fff; padding:20px; box-shadow:0 20px 45px rgba(15,23,42,.25); } .modal h2 { margin:0 0 12px; font-size:19px; } .modal p { margin:8px 0; color:#475569; line-height:1.5; } .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+.badge { display:inline-flex; width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-weight:800; } .ready,.updated,.success { color:#166534; background:#dcfce7; } .warning,.skipped,.submitted_unverified,.partial { color:#92400e; background:#fef3c7; } .unchanged,.neutral { color:#475569; background:#e2e8f0; } .blocked,.failed,.stale_revision,.error { color:#991b1b; background:#fee2e2; } .mapping { color:#1d4ed8; background:#dbeafe; }
+.modal-backdrop { position:fixed; inset:0; z-index:50; display:grid; place-items:center; padding:18px; background:rgba(15,23,42,.45); } .modal { width:min(520px,100%); max-height:calc(100vh - 36px); overflow:auto; border-radius:6px; background:#fff; padding:20px; box-shadow:0 20px 45px rgba(15,23,42,.25); } .modal h2 { margin:0 0 12px; font-size:19px; } .modal p { margin:8px 0; color:#475569; line-height:1.5; } .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+.cleanup-modal { width:min(1180px,100%); } .cleanup-summary { font-weight:800; } .cleanup-counts { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; } .cleanup-warnings { display:grid; gap:6px; margin:12px 0; padding:12px 12px 12px 30px; color:#7c2d12; background:#fff7ed; border:1px solid #fdba74; border-radius:5px; font-size:13px; line-height:1.45; } .cleanup-warnings code { font-weight:800; } .cleanup-preview-table { overflow:auto; margin-top:12px; border:1px solid #d9e2ec; border-radius:5px; } .cleanup-preview-table:focus { outline:3px solid #93c5fd; outline-offset:2px; } .cleanup-preview-table table { min-width:1080px; } .cleanup-results .table-head { align-items:flex-start; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
 @media (max-width: 980px) { .page-shell { margin-left:0; padding:16px; } .controls { grid-template-columns:1fr; } .page-header { align-items:flex-start; flex-direction:column; } }
 </style>
