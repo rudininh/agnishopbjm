@@ -27,4 +27,25 @@
 
 ## Concern
 
-- SQLite support is limited to the controller's existing runtime schema-provisioning responsibilities; the production PostgreSQL paths remain intact.
+- SQLite feature fixtures and existing migrations provide test schema; production controller schema behavior is unchanged apart from narrow portable read/guard handling.
+
+## Fix round 1/5
+
+### RED
+
+- Added endpoint regressions for a leased `claimed` run and an unexpected persisted run status. Both initially returned HTTP 200, proving the default status mapping was unsafe.
+
+### GREEN
+
+- Removed the Task 5 SQLite runtime schema helpers and auth-to-SKU schema coupling from `OmnichannelController`; feature schema remains in `ShopeeSkuTiktokVariantCleanupApiTest` and existing migrations.
+- Kept only narrow SQLite guards around existing PostgreSQL-only schema/auto-hide paths and the existing portable candidate-read SQL.
+- Mapped `busy` and `claimed` to 423; only `partial`, `failed`, and `completed` map to 200; all other service statuses now fail closed with 500.
+
+### Evidence
+
+- RED: `php backend/vendor/bin/phpunit --filter "(test_submit_maps_a_claimed_run_to_locked_without_sending_http|test_submit_fails_closed_for_an_unexpected_service_status)" backend/tests/Feature/ShopeeSkuTiktokVariantCleanupApiTest.php` — 2 expected HTTP-status failures (received 200).
+- GREEN mapping regression: 2 tests, 6 assertions.
+- Task 5 API feature suite: 8 tests, 50 assertions.
+- Controller bulk/cleanup/tiktok_delete regressions: 22 tests, 67 assertions.
+- Full backend suite: 269 tests, 1358 assertions, exit 0.
+- Changed files: `backend/app/Http/Controllers/OmnichannelController.php`, `backend/tests/Feature/ShopeeSkuTiktokVariantCleanupApiTest.php`, and this report.

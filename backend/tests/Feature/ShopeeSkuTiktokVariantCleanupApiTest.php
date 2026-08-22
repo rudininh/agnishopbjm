@@ -138,101 +138,6 @@ class ShopeeSkuTiktokVariantCleanupApiTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_preview_provisions_the_sqlite_candidate_schema_when_it_is_missing(): void
-    {
-        foreach ([
-            'shopee_sync_logs',
-            'tiktok_sync_logs',
-            'sku_variant_actions',
-            'shopee_product_image',
-            'shopee_product_model',
-            'shopee_product',
-            'tiktok_products',
-            'sku_mappings',
-            'stock_master',
-        ] as $table) {
-            Schema::dropIfExists($table);
-        }
-        Http::fake();
-
-        $this->postJson('/api/tiktok/bulk-missing-variants/sku-cleanup/preview')
-            ->assertOk()
-            ->assertJsonPath('status', 'ready_for_review');
-
-        foreach (['stock_master', 'shopee_product', 'shopee_product_model', 'tiktok_products', 'sku_mappings'] as $table) {
-            $this->assertTrue(Schema::hasTable($table));
-        }
-        Http::assertNothingSent();
-    }
-
-    public function test_preview_upgrades_a_legacy_sqlite_candidate_schema(): void
-    {
-        foreach ([
-            'shopee_sync_logs',
-            'tiktok_sync_logs',
-            'sku_variant_actions',
-            'shopee_product_image',
-            'shopee_product_model',
-            'shopee_product',
-            'tiktok_products',
-            'sku_mappings',
-            'stock_master',
-        ] as $table) {
-            Schema::dropIfExists($table);
-        }
-        Schema::create('stock_master', function (Blueprint $table): void {
-            $table->id();
-            $table->string('internal_sku')->unique();
-        });
-        Schema::create('shopee_product', fn (Blueprint $table) => $table->unsignedBigInteger('item_id')->primary());
-        Schema::create('shopee_product_model', function (Blueprint $table): void {
-            $table->unsignedBigInteger('item_id');
-            $table->string('model_id');
-            $table->primary(['model_id', 'item_id']);
-        });
-        Schema::create('shopee_product_image', function (Blueprint $table): void {
-            $table->id();
-            $table->unsignedBigInteger('item_id');
-            $table->string('image_url');
-        });
-        Schema::create('tiktok_products', function (Blueprint $table): void {
-            $table->id();
-            $table->string('product_id');
-        });
-        Schema::create('sku_variant_actions', function (Blueprint $table): void {
-            $table->id();
-            $table->unsignedBigInteger('stock_master_id');
-            $table->string('target_channel');
-            $table->string('action_type');
-            $table->string('status');
-        });
-        Schema::create('sku_mappings', function (Blueprint $table): void {
-            $table->id();
-            $table->unsignedBigInteger('stock_master_id')->unique();
-        });
-        Http::fake();
-
-        $this->postJson('/api/tiktok/bulk-missing-variants/sku-cleanup/preview')
-            ->assertOk()
-            ->assertJsonPath('status', 'ready_for_review');
-
-        $this->postJson('/api/tiktok/bulk-missing-variants/sku-cleanup/00000000-0000-4000-8000-000000000001/submit', [
-            'revision' => str_repeat('a', 64),
-        ])->assertNotFound();
-
-        foreach ([
-            ['stock_master', 'is_hidden_from_mapping'],
-            ['shopee_product_model', 'model_sku'],
-            ['tiktok_products', 'sku_id'],
-            ['sku_variant_actions', 'payload'],
-            ['tiktok_tokens', 'access_token_expire_at'],
-            ['tiktok_tokens', 'account_key'],
-        ] as [$table, $column]) {
-            $this->assertTrue(Schema::hasColumn($table, $column));
-        }
-        Http::assertNothingSent();
-    }
-
     public function test_submit_maps_a_missing_run_to_not_found_without_sending_http(): void
     {
         Http::fake();
@@ -287,6 +192,43 @@ class ShopeeSkuTiktokVariantCleanupApiTest extends TestCase
         ])
             ->assertStatus(423)
             ->assertJsonPath('status', 'busy');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_submit_maps_a_claimed_run_to_locked_without_sending_http(): void
+    {
+        Http::fake();
+        $runId = '00000000-0000-4000-8000-000000000004';
+        $revision = str_repeat('e', 64);
+        $this->insertRun($runId, $revision, 'claimed');
+        $this->insertCleanupItem($runId, 'leased-item', 'ready', 'tt-claimed');
+        DB::table('tiktok_reconciliation_run_items')->where('run_id', $runId)->update([
+            'execution_owner' => '00000000-0000-4000-8000-000000000005',
+            'execution_lease_until' => now()->addMinutes(5),
+        ]);
+
+        $this->postJson('/api/tiktok/bulk-missing-variants/sku-cleanup/'.$runId.'/submit', [
+            'revision' => $revision,
+        ])
+            ->assertStatus(423)
+            ->assertJsonPath('status', 'claimed');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_submit_fails_closed_for_an_unexpected_service_status(): void
+    {
+        Http::fake();
+        $runId = '00000000-0000-4000-8000-000000000006';
+        $revision = str_repeat('f', 64);
+        $this->insertRun($runId, $revision, 'unexpected');
+
+        $this->postJson('/api/tiktok/bulk-missing-variants/sku-cleanup/'.$runId.'/submit', [
+            'revision' => $revision,
+        ])
+            ->assertStatus(500)
+            ->assertJsonPath('status', 'unexpected');
 
         Http::assertNothingSent();
     }

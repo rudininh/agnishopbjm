@@ -14,7 +14,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Database\Schema\Blueprint;
 
 class OmnichannelController extends Controller
 {
@@ -6691,8 +6690,6 @@ class OmnichannelController extends Controller
     private function ensureSkuMappingTables(): void
     {
         if (DB::connection()->getDriverName() === 'sqlite') {
-            $this->ensureSqliteSkuMappingTables();
-
             return;
         }
 
@@ -6728,238 +6725,6 @@ class OmnichannelController extends Controller
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS tiktok_seller_sku TEXT NULL");
         DB::statement("ALTER TABLE sku_mappings ADD COLUMN IF NOT EXISTS seller_sku TEXT NULL");
         $this->ensureSkuMappingVisibilityColumns();
-    }
-
-    private function ensureSqliteSkuMappingTables(): void
-    {
-        if (! Schema::hasTable('stock_master')) {
-            Schema::create('stock_master', function (Blueprint $table): void {
-                $table->id();
-                $table->string('internal_sku')->unique();
-                $table->string('shopee_product_id')->nullable();
-                $table->string('shopee_sku')->nullable();
-                $table->string('shopee_seller_sku')->nullable();
-                $table->string('product_name')->nullable();
-                $table->string('variant_name')->nullable();
-                $table->integer('stock_qty')->default(0);
-                $table->string('tiktok_product_id')->nullable();
-                $table->string('tiktok_sku')->nullable();
-                $table->string('tiktok_seller_sku')->nullable();
-                $table->boolean('is_hidden_from_mapping')->default(false);
-                $table->string('hidden_from_mapping_reason')->nullable();
-                $table->timestamp('hidden_from_mapping_at')->nullable();
-                $table->string('hidden_from_mapping_by')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('shopee_product')) {
-            Schema::create('shopee_product', function (Blueprint $table): void {
-                $table->unsignedBigInteger('item_id')->primary();
-                $table->string('name')->nullable();
-                $table->string('status')->nullable();
-                $table->boolean('is_active')->default(true);
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('shopee_product_model')) {
-            Schema::create('shopee_product_model', function (Blueprint $table): void {
-                $table->unsignedBigInteger('item_id');
-                $table->string('model_id');
-                $table->string('name')->nullable();
-                $table->string('model_sku')->nullable();
-                $table->unsignedBigInteger('price')->default(0);
-                $table->unsignedBigInteger('original_price')->default(0);
-                $table->integer('stock')->default(0);
-                $table->timestamps();
-                $table->primary(['model_id', 'item_id']);
-            });
-        }
-
-        if (! Schema::hasTable('shopee_product_image')) {
-            Schema::create('shopee_product_image', function (Blueprint $table): void {
-                $table->id();
-                $table->unsignedBigInteger('item_id');
-                $table->string('model_id')->nullable();
-                $table->string('image_url');
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('tiktok_products')) {
-            Schema::create('tiktok_products', function (Blueprint $table): void {
-                $table->id();
-                $table->string('product_id');
-                $table->string('sku_id')->nullable();
-                $table->string('product_name')->nullable();
-                $table->string('image_url')->nullable();
-                $table->string('sku_name')->nullable();
-                $table->string('seller_sku')->nullable();
-                $table->string('warehouse_id')->nullable();
-                $table->integer('stock_qty')->default(0);
-                $table->unsignedBigInteger('price')->default(0);
-                $table->unsignedBigInteger('subtotal')->default(0);
-                $table->string('product_status')->nullable();
-                $table->string('audit_status')->nullable();
-                $table->boolean('is_active')->default(true);
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('sku_variant_actions')) {
-            Schema::create('sku_variant_actions', function (Blueprint $table): void {
-                $table->id();
-                $table->unsignedBigInteger('stock_master_id');
-                $table->string('target_channel');
-                $table->string('source_channel')->nullable();
-                $table->string('action_type');
-                $table->json('payload')->nullable();
-                $table->string('status')->default('ready_to_create');
-                $table->timestamps();
-                $table->unique(['stock_master_id', 'target_channel', 'action_type']);
-            });
-        }
-
-        if (! Schema::hasTable('sku_mappings')) {
-            Schema::create('sku_mappings', function (Blueprint $table): void {
-                $table->id();
-                $table->unsignedBigInteger('stock_master_id')->unique();
-                $table->string('shopee_item_id')->nullable();
-                $table->string('shopee_model_id')->nullable();
-                $table->string('tiktok_product_id')->nullable();
-                $table->string('tiktok_sku_id')->nullable();
-                $table->string('tiktok_sku_name')->nullable();
-                $table->string('seller_sku')->nullable();
-                $table->string('internal_image_url')->nullable();
-                $table->string('shopee_image_url')->nullable();
-                $table->string('tiktok_image_url')->nullable();
-                $table->text('notes')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        foreach (['shopee_sync_logs', 'tiktok_sync_logs'] as $tableName) {
-            if (! Schema::hasTable($tableName)) {
-                Schema::create($tableName, function (Blueprint $table): void {
-                    $table->id();
-                    $table->string('status')->nullable();
-                    $table->text('message')->nullable();
-                    $table->integer('product_count')->default(0);
-                    $table->integer('variant_count')->default(0);
-                    $table->timestamp('synced_at')->nullable();
-                    $table->timestamps();
-                });
-            }
-        }
-
-        $this->ensureSqliteColumns('stock_master', [
-            'shopee_product_id' => fn (Blueprint $table) => $table->string('shopee_product_id')->nullable(),
-            'shopee_sku' => fn (Blueprint $table) => $table->string('shopee_sku')->nullable(),
-            'shopee_seller_sku' => fn (Blueprint $table) => $table->string('shopee_seller_sku')->nullable(),
-            'product_name' => fn (Blueprint $table) => $table->string('product_name')->nullable(),
-            'variant_name' => fn (Blueprint $table) => $table->string('variant_name')->nullable(),
-            'stock_qty' => fn (Blueprint $table) => $table->integer('stock_qty')->default(0),
-            'tiktok_product_id' => fn (Blueprint $table) => $table->string('tiktok_product_id')->nullable(),
-            'tiktok_sku' => fn (Blueprint $table) => $table->string('tiktok_sku')->nullable(),
-            'tiktok_seller_sku' => fn (Blueprint $table) => $table->string('tiktok_seller_sku')->nullable(),
-            'is_hidden_from_mapping' => fn (Blueprint $table) => $table->boolean('is_hidden_from_mapping')->default(false),
-            'hidden_from_mapping_reason' => fn (Blueprint $table) => $table->string('hidden_from_mapping_reason')->nullable(),
-            'hidden_from_mapping_at' => fn (Blueprint $table) => $table->timestamp('hidden_from_mapping_at')->nullable(),
-            'hidden_from_mapping_by' => fn (Blueprint $table) => $table->string('hidden_from_mapping_by')->nullable(),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('shopee_product', [
-            'shop_id' => fn (Blueprint $table) => $table->unsignedBigInteger('shop_id')->nullable(),
-            'name' => fn (Blueprint $table) => $table->string('name')->nullable(),
-            'description' => fn (Blueprint $table) => $table->text('description')->nullable(),
-            'category_id' => fn (Blueprint $table) => $table->unsignedBigInteger('category_id')->nullable(),
-            'price_min' => fn (Blueprint $table) => $table->unsignedBigInteger('price_min')->default(0),
-            'price_max' => fn (Blueprint $table) => $table->unsignedBigInteger('price_max')->default(0),
-            'price_before_discount' => fn (Blueprint $table) => $table->unsignedBigInteger('price_before_discount')->default(0),
-            'currency' => fn (Blueprint $table) => $table->string('currency')->nullable(),
-            'stock' => fn (Blueprint $table) => $table->integer('stock')->default(0),
-            'sold' => fn (Blueprint $table) => $table->integer('sold')->default(0),
-            'liked_count' => fn (Blueprint $table) => $table->integer('liked_count')->default(0),
-            'rating' => fn (Blueprint $table) => $table->decimal('rating', 8, 2)->default(0),
-            'historical_sold' => fn (Blueprint $table) => $table->integer('historical_sold')->default(0),
-            'status' => fn (Blueprint $table) => $table->string('status')->nullable(),
-            'create_time' => fn (Blueprint $table) => $table->timestamp('create_time')->nullable(),
-            'update_time' => fn (Blueprint $table) => $table->timestamp('update_time')->nullable(),
-            'is_active' => fn (Blueprint $table) => $table->boolean('is_active')->default(true),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('shopee_product_model', [
-            'name' => fn (Blueprint $table) => $table->string('name')->nullable(),
-            'model_sku' => fn (Blueprint $table) => $table->string('model_sku')->nullable(),
-            'price' => fn (Blueprint $table) => $table->unsignedBigInteger('price')->default(0),
-            'original_price' => fn (Blueprint $table) => $table->unsignedBigInteger('original_price')->default(0),
-            'stock' => fn (Blueprint $table) => $table->integer('stock')->default(0),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('shopee_product_image', [
-            'model_id' => fn (Blueprint $table) => $table->string('model_id')->nullable(),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('tiktok_products', [
-            'sku_id' => fn (Blueprint $table) => $table->string('sku_id')->nullable(),
-            'product_name' => fn (Blueprint $table) => $table->string('product_name')->nullable(),
-            'image_url' => fn (Blueprint $table) => $table->string('image_url')->nullable(),
-            'sku_name' => fn (Blueprint $table) => $table->string('sku_name')->nullable(),
-            'seller_sku' => fn (Blueprint $table) => $table->string('seller_sku')->nullable(),
-            'warehouse_id' => fn (Blueprint $table) => $table->string('warehouse_id')->nullable(),
-            'stock_qty' => fn (Blueprint $table) => $table->integer('stock_qty')->default(0),
-            'price' => fn (Blueprint $table) => $table->unsignedBigInteger('price')->default(0),
-            'subtotal' => fn (Blueprint $table) => $table->unsignedBigInteger('subtotal')->default(0),
-            'product_status' => fn (Blueprint $table) => $table->string('product_status')->nullable(),
-            'audit_status' => fn (Blueprint $table) => $table->string('audit_status')->nullable(),
-            'is_active' => fn (Blueprint $table) => $table->boolean('is_active')->default(true),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('sku_variant_actions', [
-            'source_channel' => fn (Blueprint $table) => $table->string('source_channel')->nullable(),
-            'payload' => fn (Blueprint $table) => $table->json('payload')->nullable(),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('sku_mappings', [
-            'shopee_item_id' => fn (Blueprint $table) => $table->string('shopee_item_id')->nullable(),
-            'shopee_model_id' => fn (Blueprint $table) => $table->string('shopee_model_id')->nullable(),
-            'tiktok_product_id' => fn (Blueprint $table) => $table->string('tiktok_product_id')->nullable(),
-            'tiktok_sku_id' => fn (Blueprint $table) => $table->string('tiktok_sku_id')->nullable(),
-            'tiktok_sku_name' => fn (Blueprint $table) => $table->string('tiktok_sku_name')->nullable(),
-            'seller_sku' => fn (Blueprint $table) => $table->string('seller_sku')->nullable(),
-            'internal_image_url' => fn (Blueprint $table) => $table->string('internal_image_url')->nullable(),
-            'shopee_image_url' => fn (Blueprint $table) => $table->string('shopee_image_url')->nullable(),
-            'tiktok_image_url' => fn (Blueprint $table) => $table->string('tiktok_image_url')->nullable(),
-            'notes' => fn (Blueprint $table) => $table->text('notes')->nullable(),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-    }
-
-    private function ensureSqliteColumns(string $tableName, array $columns): void
-    {
-        $missing = array_filter(
-            $columns,
-            fn (mixed $column, string $name): bool => ! Schema::hasColumn($tableName, $name),
-            ARRAY_FILTER_USE_BOTH,
-        );
-
-        if ($missing === []) {
-            return;
-        }
-
-        Schema::table($tableName, function (Blueprint $table) use ($missing): void {
-            foreach ($missing as $addColumn) {
-                $addColumn($table);
-            }
-        });
     }
 
     private function syncTiktokProductToDatabase(string $productId): array
@@ -8843,8 +8608,9 @@ class OmnichannelController extends Controller
         $status = match ($result['status'] ?? null) {
             'not_found' => 404,
             'stale_revision' => 409,
-            'busy' => 423,
-            default => 200,
+            'busy', 'claimed' => 423,
+            'partial', 'failed', 'completed' => 200,
+            default => 500,
         };
 
         return response()->json($result, $status);
@@ -13025,9 +12791,6 @@ class OmnichannelController extends Controller
     private function ensureTiktokAuthTables(): void
     {
         if (DB::connection()->getDriverName() === 'sqlite') {
-            $this->ensureSqliteSkuMappingTables();
-            $this->ensureSqliteTiktokAuthTables();
-
             return;
         }
 
@@ -13163,132 +12926,6 @@ class OmnichannelController extends Controller
                 DB::statement('ALTER TABLE '.$table.' ADD COLUMN IF NOT EXISTS '.$definition);
             }
         }
-    }
-
-    private function ensureSqliteTiktokAuthTables(): void
-    {
-        if (! Schema::hasTable('tiktok_config')) {
-            Schema::create('tiktok_config', function (Blueprint $table): void {
-                $table->id();
-                $table->string('app_key');
-                $table->string('app_secret');
-                $table->string('auth_host')->nullable();
-                $table->string('api_host')->nullable();
-                $table->string('redirect_url')->nullable();
-                $table->boolean('is_active')->default(true);
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('tiktok_callbacks')) {
-            Schema::create('tiktok_callbacks', function (Blueprint $table): void {
-                $table->id();
-                $table->string('account_key')->nullable();
-                $table->string('account_name')->nullable();
-                $table->text('code')->nullable();
-                $table->string('app_key')->nullable();
-                $table->string('shop_region')->nullable();
-                $table->string('state')->nullable();
-                $table->json('query_payload')->nullable();
-                $table->timestamp('used_at')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('tiktok_tokens')) {
-            Schema::create('tiktok_tokens', function (Blueprint $table): void {
-                $table->id();
-                $table->string('account_key')->nullable();
-                $table->string('account_name')->nullable();
-                $table->string('open_id')->nullable();
-                $table->string('seller_name')->nullable();
-                $table->string('seller_region')->nullable();
-                $table->text('access_token')->nullable();
-                $table->text('refresh_token')->nullable();
-                $table->timestamp('expire_at')->nullable();
-                $table->integer('expire_in')->nullable();
-                $table->timestamp('access_token_expire_at')->nullable();
-                $table->timestamp('refresh_token_expire_at')->nullable();
-                $table->json('granted_scopes')->nullable();
-                $table->string('shop_id')->nullable();
-                $table->string('request_id')->nullable();
-                $table->text('message')->nullable();
-                $table->json('raw_response')->nullable();
-                $table->boolean('is_active')->default(true);
-                $table->timestamps();
-            });
-        }
-
-        if (! Schema::hasTable('tiktok_shops')) {
-            Schema::create('tiktok_shops', function (Blueprint $table): void {
-                $table->string('id')->primary();
-                $table->string('shop_id')->nullable();
-                $table->string('code')->nullable();
-                $table->string('name')->nullable();
-                $table->string('region')->nullable();
-                $table->string('seller_type')->nullable();
-                $table->string('cipher')->nullable();
-                $table->string('shop_cipher')->nullable();
-                $table->json('raw_response')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        $this->ensureSqliteColumns('tiktok_config', [
-            'app_key' => fn (Blueprint $table) => $table->string('app_key')->nullable(),
-            'app_secret' => fn (Blueprint $table) => $table->string('app_secret')->nullable(),
-            'auth_host' => fn (Blueprint $table) => $table->string('auth_host')->nullable(),
-            'api_host' => fn (Blueprint $table) => $table->string('api_host')->nullable(),
-            'redirect_url' => fn (Blueprint $table) => $table->string('redirect_url')->nullable(),
-            'is_active' => fn (Blueprint $table) => $table->boolean('is_active')->default(true),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('tiktok_callbacks', [
-            'account_key' => fn (Blueprint $table) => $table->string('account_key')->nullable(),
-            'account_name' => fn (Blueprint $table) => $table->string('account_name')->nullable(),
-            'code' => fn (Blueprint $table) => $table->text('code')->nullable(),
-            'app_key' => fn (Blueprint $table) => $table->string('app_key')->nullable(),
-            'shop_region' => fn (Blueprint $table) => $table->string('shop_region')->nullable(),
-            'state' => fn (Blueprint $table) => $table->string('state')->nullable(),
-            'query_payload' => fn (Blueprint $table) => $table->json('query_payload')->nullable(),
-            'used_at' => fn (Blueprint $table) => $table->timestamp('used_at')->nullable(),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('tiktok_tokens', [
-            'account_key' => fn (Blueprint $table) => $table->string('account_key')->nullable(),
-            'account_name' => fn (Blueprint $table) => $table->string('account_name')->nullable(),
-            'open_id' => fn (Blueprint $table) => $table->string('open_id')->nullable(),
-            'seller_name' => fn (Blueprint $table) => $table->string('seller_name')->nullable(),
-            'seller_region' => fn (Blueprint $table) => $table->string('seller_region')->nullable(),
-            'access_token' => fn (Blueprint $table) => $table->text('access_token')->nullable(),
-            'refresh_token' => fn (Blueprint $table) => $table->text('refresh_token')->nullable(),
-            'expire_at' => fn (Blueprint $table) => $table->timestamp('expire_at')->nullable(),
-            'expire_in' => fn (Blueprint $table) => $table->integer('expire_in')->nullable(),
-            'access_token_expire_at' => fn (Blueprint $table) => $table->timestamp('access_token_expire_at')->nullable(),
-            'refresh_token_expire_at' => fn (Blueprint $table) => $table->timestamp('refresh_token_expire_at')->nullable(),
-            'granted_scopes' => fn (Blueprint $table) => $table->json('granted_scopes')->nullable(),
-            'shop_id' => fn (Blueprint $table) => $table->string('shop_id')->nullable(),
-            'request_id' => fn (Blueprint $table) => $table->string('request_id')->nullable(),
-            'message' => fn (Blueprint $table) => $table->text('message')->nullable(),
-            'raw_response' => fn (Blueprint $table) => $table->json('raw_response')->nullable(),
-            'is_active' => fn (Blueprint $table) => $table->boolean('is_active')->default(true),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
-        $this->ensureSqliteColumns('tiktok_shops', [
-            'shop_id' => fn (Blueprint $table) => $table->string('shop_id')->nullable(),
-            'code' => fn (Blueprint $table) => $table->string('code')->nullable(),
-            'name' => fn (Blueprint $table) => $table->string('name')->nullable(),
-            'region' => fn (Blueprint $table) => $table->string('region')->nullable(),
-            'seller_type' => fn (Blueprint $table) => $table->string('seller_type')->nullable(),
-            'cipher' => fn (Blueprint $table) => $table->string('cipher')->nullable(),
-            'shop_cipher' => fn (Blueprint $table) => $table->string('shop_cipher')->nullable(),
-            'raw_response' => fn (Blueprint $table) => $table->json('raw_response')->nullable(),
-            'created_at' => fn (Blueprint $table) => $table->timestamp('created_at')->nullable(),
-            'updated_at' => fn (Blueprint $table) => $table->timestamp('updated_at')->nullable(),
-        ]);
     }
 
     private function shopeeConfig(): array
