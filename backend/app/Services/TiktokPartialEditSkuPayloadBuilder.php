@@ -10,11 +10,11 @@ class TiktokPartialEditSkuPayloadBuilder
     {
         $targets = [];
         foreach ($targetSkuIds as $targetSkuId) {
-            if (! is_string($targetSkuId) && ! is_int($targetSkuId)) {
+            if (! is_string($targetSkuId)) {
                 throw new RuntimeException('ID target SKU TikTok tidak valid.');
             }
 
-            $targetSkuId = trim((string) $targetSkuId);
+            $targetSkuId = trim($targetSkuId);
             $key = $this->normalizeSkuId($targetSkuId);
             if ($key === '' || preg_match('/^-\d+$/D', $targetSkuId) === 1) {
                 throw new RuntimeException('ID target SKU TikTok tidak valid.');
@@ -32,11 +32,11 @@ class TiktokPartialEditSkuPayloadBuilder
             }
 
             $sourceSkuId = $sku['id'] ?? $sku['sku_id'] ?? null;
-            if (! is_string($sourceSkuId) && ! is_int($sourceSkuId)) {
+            if (! is_string($sourceSkuId)) {
                 throw new RuntimeException('Detail SKU TikTok tidak lengkap atau memiliki ID duplikat.');
             }
 
-            $skuId = trim((string) $sourceSkuId);
+            $skuId = trim($sourceSkuId);
             $skuKey = $this->normalizeSkuId($skuId);
             if ($skuKey === '' || preg_match('/^-\d+$/D', $skuId) === 1 || isset($seenSkuIds[$skuKey])) {
                 throw new RuntimeException('Detail SKU TikTok tidak lengkap atau memiliki ID duplikat.');
@@ -234,7 +234,7 @@ class TiktokPartialEditSkuPayloadBuilder
 
     private function normalizeSkuId(mixed $value): string
     {
-        $value = strtolower(trim((string) ($value ?? '')));
+        $value = is_string($value) ? trim($value) : '';
 
         return preg_match('/[a-z0-9]/i', $value) === 1 ? $value : '';
     }

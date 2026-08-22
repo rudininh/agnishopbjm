@@ -64,11 +64,11 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_delete_sku_ids_normalizes_duplicate_targets_and_removes_each_target_once(): void
+    public function test_delete_sku_ids_trims_duplicate_targets_and_removes_each_target_once(): void
     {
         $payload = app(TiktokPartialEditSkuPayloadBuilder::class)->deleteSkuIds(
             $this->productDetail(),
-            [' tt-old-red ', 'TT-OLD-RED', 'tt-old-blue', ' TT-OLD-BLUE ']
+            [' tt-old-red ', 'tt-old-red', 'tt-old-blue', ' tt-old-blue ']
         );
 
         $this->assertSame(['tt-green'], array_column($payload['skus'], 'id'));
@@ -102,6 +102,7 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
             'object' => [(object) ['id' => 'tt-old-blue']],
             'boolean' => [true],
             'float' => [123.45],
+            'integer' => [123],
         ];
     }
 
@@ -154,6 +155,27 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_delete_sku_ids_does_not_fold_distinct_id_case_when_matching_targets(): void
+    {
+        $detail = $this->productDetail();
+        $detail['skus'][0]['id'] = 'abc';
+        $detail['skus'][0]['price'] = [
+            'currency' => 'IDR',
+            'sale_price' => '25000',
+            'tax_exclusive_price' => '25000',
+            'amount' => '25000',
+        ];
+
+        try {
+            app(TiktokPartialEditSkuPayloadBuilder::class)->deleteSkuIds($detail, ['ABC']);
+            $this->fail('Expected case-distinct SKU IDs not to match.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('SKU TikTok target tidak ditemukan di detail produk terbaru.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_delete_sku_ids_fails_closed_instead_of_silently_omitting_a_source_sku_without_an_id(): void
     {
         $detail = $this->productDetail();
@@ -195,6 +217,7 @@ class TiktokPartialEditSkuPayloadBuilderTest extends TestCase
             'object' => [(object) ['id' => 'tt-green']],
             'boolean' => [true],
             'float' => [123.45],
+            'positive integer' => [123],
             'negative integer' => [-1],
             'negative numeric string' => ['-1'],
         ];

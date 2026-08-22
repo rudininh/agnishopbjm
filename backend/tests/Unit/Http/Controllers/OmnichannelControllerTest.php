@@ -1024,7 +1024,7 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('', $blank);
     }
 
-    public function test_tiktok_delete_helper_delegates_normalized_multi_target_payload_building_without_changing_row_contract(): void
+    public function test_tiktok_delete_helper_delegates_trimmed_multi_target_payload_building_without_changing_row_contract(): void
     {
         Http::fake();
         $greenSku = $this->tiktokPartialEditFixtureSku([
@@ -1039,7 +1039,7 @@ class OmnichannelControllerTest extends TestCase
                 $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-blue']),
                 $greenSku,
             ],
-        ], ' TT-OLD-RED ', ['tt-old-blue', 'TT-OLD-BLUE']]);
+        ], ' tt-old-red ', ['tt-old-blue', ' tt-old-blue ']]);
 
         $this->assertSame([[
             'id' => 'tt-green',
@@ -1084,6 +1084,34 @@ class OmnichannelControllerTest extends TestCase
 
         $this->assertSame(['tt-green'], array_column($rows, 'id'));
         Http::assertNothingSent();
+    }
+
+    /**
+     * @dataProvider distinctHistoricalExclusionProvider
+     */
+    public function test_tiktok_delete_helper_ignores_case_or_punctuation_distinct_historical_exclusions(
+        string $freshSkuId,
+        string $historicalExclusion
+    ): void {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => $freshSkuId]),
+            ],
+        ], 'tt-old-red', [$historicalExclusion]]);
+
+        $this->assertSame([$freshSkuId], array_column($rows, 'id'));
+        Http::assertNothingSent();
+    }
+
+    public static function distinctHistoricalExclusionProvider(): array
+    {
+        return [
+            'punctuation-distinct' => ['a-b', 'a_b'],
+            'case-distinct' => ['ABC', 'abc'],
+        ];
     }
 
     public function test_tiktok_existing_product_partial_edit_batch_mutation_appends_all_new_skus(): void

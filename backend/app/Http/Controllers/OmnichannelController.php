@@ -9409,12 +9409,12 @@ class OmnichannelController extends Controller
     {
         $availableSkuKeys = collect($this->normalizeTiktokSkuList($productDetail))
             ->filter(fn (mixed $sku): bool => is_array($sku))
-            ->map(fn (array $sku): string => $this->normalizeSkuMatchValue($sku['id'] ?? $sku['sku_id'] ?? ''))
+            ->map(fn (array $sku): string => $this->normalizeTiktokSkuIdIdentity($sku['id'] ?? $sku['sku_id'] ?? null))
             ->filter()
             ->flip()
             ->all();
         $presentExclusions = collect($excludedSkuIds)
-            ->filter(fn (mixed $skuId): bool => isset($availableSkuKeys[$this->normalizeSkuMatchValue($skuId)]))
+            ->filter(fn (mixed $skuId): bool => isset($availableSkuKeys[$this->normalizeTiktokSkuIdIdentity($skuId)]))
             ->values()
             ->all();
 
@@ -9424,6 +9424,13 @@ class OmnichannelController extends Controller
         } catch (\RuntimeException) {
             return [];
         }
+    }
+
+    private function normalizeTiktokSkuIdIdentity(mixed $value): string
+    {
+        $value = is_string($value) ? trim($value) : '';
+
+        return preg_match('/[a-z0-9]/i', $value) === 1 ? $value : '';
     }
 
     private function buildTiktokPartialEditSkuKeepRow(array $sku, ?string $sellerSkuOverride = null, string $productId = ''): array
