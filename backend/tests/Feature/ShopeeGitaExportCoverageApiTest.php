@@ -90,6 +90,36 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
         $this->assertArrayHasKey('target_variant_name', $mapping);
     }
 
+    public function test_sales_target_mapping_forward_fills_parent_source_item_for_variant_rows(): void
+    {
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_update_sales_info.xlsx', [
+            [
+                'A' => 'target-1', 'B' => 'Produk 1', 'C' => 'model-1', 'D' => 'Red',
+                'E' => 'P100', 'F' => 'INT-100-RED',
+            ],
+            [
+                'A' => 'target-1', 'B' => 'Produk 1', 'C' => 'model-2', 'D' => 'Blue',
+                'F' => 'INT-100-BLUE',
+            ],
+            [
+                'A' => 'target-2', 'B' => 'Produk 2', 'C' => 'model-3', 'D' => 'Black',
+                'E' => 'P200', 'F' => 'INT-200-BLACK',
+            ],
+            [
+                'A' => 'target-3', 'B' => 'Produk 3', 'C' => 'model-4', 'D' => 'White',
+                'F' => 'INT-300-WHITE',
+            ],
+        ]);
+
+        $mappings = collect(app(MarketplaceImportController::class)->shopeeGitaSalesTargetMappings());
+
+        $this->assertSame(['100', '100', '200', ''], $mappings->pluck('source_item_id')->all());
+        $this->assertSame(
+            ['INT-100-RED', 'INT-100-BLUE', 'INT-200-BLACK', 'INT-300-WHITE'],
+            $mappings->pluck('source_seller_sku')->all(),
+        );
+    }
+
     public function test_coverage_endpoint_returns_revision_summary_and_exceptions(): void
     {
         $controller = Mockery::mock(MarketplaceImportController::class, [

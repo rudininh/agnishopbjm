@@ -117,6 +117,8 @@ class MarketplaceImportController extends Controller
         $xpath = new \DOMXPath($dom);
         $xpath->registerNamespace('x', self::XLSX_NS);
         $mappings = collect();
+        $currentSourceItemId = '';
+        $currentTargetItemId = '';
 
         foreach ($xpath->query('//x:sheetData/x:row') as $rowNode) {
             if ((int) $rowNode->getAttribute('r') < 7) {
@@ -124,10 +126,20 @@ class MarketplaceImportController extends Controller
             }
 
             $row = $this->readRowValues($rowNode, $sharedStrings);
+            $targetItemId = trim((string) ($row['A'] ?? ''));
+            $parentSku = trim((string) ($row['E'] ?? ''));
+            if ($parentSku !== '') {
+                $currentSourceItemId = $this->sourceItemIdFromParentSku($parentSku);
+                $currentTargetItemId = $targetItemId;
+            } elseif ($targetItemId !== $currentTargetItemId) {
+                $currentSourceItemId = '';
+                $currentTargetItemId = $targetItemId;
+            }
+
             $mappings->push([
-                'source_item_id' => $this->sourceItemIdFromParentSku($row['E'] ?? ''),
+                'source_item_id' => $currentSourceItemId,
                 'source_seller_sku' => trim((string) ($row['F'] ?? '')),
-                'target_item_id' => trim((string) ($row['A'] ?? '')),
+                'target_item_id' => $targetItemId,
                 'target_model_id' => trim((string) ($row['C'] ?? '')),
                 'target_product_name' => trim((string) ($row['B'] ?? '')),
                 'target_variant_name' => trim((string) ($row['D'] ?? '')),

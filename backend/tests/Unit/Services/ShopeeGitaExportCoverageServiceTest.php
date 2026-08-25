@@ -55,6 +55,48 @@ class ShopeeGitaExportCoverageServiceTest extends TestCase
         $this->assertSame('duplicate_target_sku_mapping', $result['items'][0]['reason']);
     }
 
+    public function test_blocks_multiple_source_variants_claiming_the_same_target_identity(): void
+    {
+        $result = app(ShopeeGitaExportCoverageService::class)->analyze(
+            [
+                $this->source('100', '1', 'INT-100-SAND', 'Produk', 'Khakky'),
+                $this->source('100', '2', 'INT-100-SAND', 'Produk', 'Sand'),
+            ],
+            [$this->mapping('100', 'INT-100-SAND', '900', '91', 'Produk', 'Sand')],
+            $this->metadata(),
+        );
+
+        $this->assertSame(['blocked', 'blocked'], array_column($result['items'], 'status'));
+        $this->assertSame(
+            ['duplicate_target_identity', 'duplicate_target_identity'],
+            array_column($result['items'], 'reason'),
+        );
+        $this->assertSame([], $result['ready_targets']);
+        $this->assertSame(0, $result['summary']['ready_variants']);
+        $this->assertSame(2, $result['summary']['variants_by_status']['blocked']);
+    }
+
+    public function test_identity_keys_are_collision_free_when_values_contain_delimiters(): void
+    {
+        $result = app(ShopeeGitaExportCoverageService::class)->analyze(
+            [
+                $this->source('a|b', '1', 'c', 'Produk 1', 'Red'),
+                $this->source('a', '2', 'b|c', 'Produk 2', 'Blue'),
+            ],
+            [
+                $this->mapping('a|b', 'c', 'x|y', 'z', 'Produk 1', 'Red'),
+                $this->mapping('a', 'b|c', 'x', 'y|z', 'Produk 2', 'Blue'),
+            ],
+            $this->metadata(),
+        );
+
+        $this->assertSame(
+            ['mass_update_ready', 'mass_update_ready'],
+            array_column($result['items'], 'status'),
+        );
+        $this->assertCount(2, $result['ready_targets']);
+    }
+
     public function test_blocks_multiple_normalized_name_matches(): void
     {
         $result = app(ShopeeGitaExportCoverageService::class)->analyze(

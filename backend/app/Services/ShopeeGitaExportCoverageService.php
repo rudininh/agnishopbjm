@@ -29,7 +29,6 @@ final class ShopeeGitaExportCoverageService
         $targetIdentities = $this->countBy($canonicalMappings, fn (array $mapping): string => $this->targetIdentity($mapping));
 
         $items = [];
-        $readyTargets = [];
         foreach ($canonicalSources as $source) {
             [$status, $reason, $target] = $this->classify(
                 $source,
@@ -52,11 +51,32 @@ final class ShopeeGitaExportCoverageService
                 'target_model_id' => $target['target_model_id'] ?? '',
                 'target_seller_sku' => $target['source_seller_sku'] ?? '',
             ];
+        }
 
-            if ($status === 'mass_update_ready') {
-                $readyTargets[$this->targetIdentity($target)] = [
-                    'target_item_id' => $target['target_item_id'],
-                    'target_model_id' => $target['target_model_id'],
+        $targetClaims = $this->countBy(
+            array_values(array_filter(
+                $items,
+                fn (array $item): bool => in_array($item['status'], ['mass_update_ready', 'sku_changed'], true),
+            )),
+            fn (array $item): string => $this->targetIdentity($item),
+        );
+        foreach ($items as &$item) {
+            if (
+                in_array($item['status'], ['mass_update_ready', 'sku_changed'], true)
+                && ($targetClaims[$this->targetIdentity($item)] ?? 0) > 1
+            ) {
+                $item['status'] = 'blocked';
+                $item['reason'] = 'duplicate_target_identity';
+            }
+        }
+        unset($item);
+
+        $readyTargets = [];
+        foreach ($items as $item) {
+            if ($item['status'] === 'mass_update_ready') {
+                $readyTargets[$this->targetIdentity($item)] = [
+                    'target_item_id' => $item['target_item_id'],
+                    'target_model_id' => $item['target_model_id'],
                 ];
             }
         }
@@ -276,32 +296,37 @@ final class ShopeeGitaExportCoverageService
 
     private function sourceIdentity(array $source): string
     {
-        return $source['item_id'].'|'.$source['model_id'];
+        return $this->tuple($source['item_id'], $source['model_id']);
     }
 
     private function exactSourceKey(array $source): string
     {
-        return $this->lower($source['item_id']).'|'.$this->lower($source['seller_sku']);
+        return $this->tuple($this->lower($source['item_id']), $this->lower($source['seller_sku']));
     }
 
     private function exactMappingKey(array $mapping): string
     {
-        return $this->lower($mapping['source_item_id']).'|'.$this->lower($mapping['source_seller_sku']);
+        return $this->tuple($this->lower($mapping['source_item_id']), $this->lower($mapping['source_seller_sku']));
     }
 
     private function nameSourceKey(array $source): string
     {
-        return $source['item_id'].'|'.$this->normalizedName($source['variant_name']);
+        return $this->tuple($source['item_id'], $this->normalizedName($source['variant_name']));
     }
 
     private function nameMappingKey(array $mapping): string
     {
-        return $mapping['source_item_id'].'|'.$this->normalizedName($mapping['target_variant_name']);
+        return $this->tuple($mapping['source_item_id'], $this->normalizedName($mapping['target_variant_name']));
     }
 
     private function targetIdentity(array $mapping): string
     {
-        return $mapping['target_item_id'].'|'.$mapping['target_model_id'];
+        return $this->tuple($mapping['target_item_id'], $mapping['target_model_id']);
+    }
+
+    private function tuple(string ...$values): string
+    {
+        return json_encode($values, JSON_THROW_ON_ERROR);
     }
 
     private function normalizedName(string $name): string
