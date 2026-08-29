@@ -117,8 +117,11 @@ class ShopeeMassUploadService
                     'updated_at' => now(),
                 ]);
                 $this->generateFiles((int) $job->id);
-            } catch (\Throwable) {
-                $this->terminal((int) $job->id, 'dibatalkan_aman', 'Katalog sumber Shopee atau file Mass Update tidak dapat dibuat dengan aman.');
+            } catch (\Throwable $exception) {
+                $message = str_starts_with($exception->getMessage(), 'Template Gitashop belum mencakup')
+                    ? $exception->getMessage()
+                    : 'Katalog sumber Shopee atau file Mass Update tidak dapat dibuat dengan aman.';
+                $this->terminal((int) $job->id, 'dibatalkan_aman', $message);
                 return null;
             }
         }

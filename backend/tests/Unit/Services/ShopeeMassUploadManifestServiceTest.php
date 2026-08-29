@@ -120,6 +120,33 @@ class ShopeeMassUploadManifestServiceTest extends TestCase
         ]);
     }
 
+    public function test_manifest_reports_unmapped_counts_without_creating_a_partial_upload_job(): void
+    {
+        $now = now();
+        $jobId = DB::table('shopee_mass_upload_jobs')->insertGetId([
+            'account_key' => config('shopee_mass_upload.account_key'),
+            'expected_shop_name' => config('shopee_mass_upload.expected_shop_name'),
+            'status' => 'preflight',
+            'requested_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $omnichannel = Mockery::mock(OmnichannelController::class);
+        $imports = Mockery::mock(MarketplaceImportController::class);
+        $imports->shouldReceive('shopeeGitaSourceVariants')->once()->andReturn(collect([
+            (object) $this->sourceVariant('source-item-1', 'source-model-1', 'INT-1-RED'),
+            (object) $this->sourceVariant('source-item-2', 'source-model-2', 'INT-2-BLACK'),
+        ]));
+        $imports->shouldReceive('shopeeGitaSalesTargetMappings')->once()->andReturn(collect([
+            $this->targetMapping('source-item-1', 'INT-1-RED', 'target-item-1', 'target-model-1'),
+        ]));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Template Gitashop belum mencakup 1 dari 2 varian sumber; 0 baris target sudah tidak cocok. Periksa preflight Download Mass Update.');
+
+        (new ShopeeMassUploadManifestService($omnichannel, $imports))->buildForJob($jobId);
+    }
+
     public function test_rejects_a_source_variant_without_a_canonical_product_image(): void
     {
         $now = now();
@@ -149,5 +176,31 @@ class ShopeeMassUploadManifestServiceTest extends TestCase
         $this->expectExceptionMessage('Data gambar sumber Shopee tidak lengkap untuk manifest Mass Update.');
 
         (new ShopeeMassUploadManifestService(Mockery::mock(OmnichannelController::class), $imports))->buildForJob($jobId);
+    }
+
+    private function sourceVariant(string $itemId, string $modelId, string $sellerSku): array
+    {
+        return [
+            'item_id' => $itemId,
+            'model_id' => $modelId,
+            'seller_sku' => $sellerSku,
+            'product_name' => 'Produk '.$itemId,
+            'variant_name' => 'Varian '.$modelId,
+            'description' => 'Deskripsi aman',
+            'price' => 50000,
+            'stock_qty' => 1,
+            'raw_image_url' => 'https://cf.shopee.co.id/file/'.$modelId,
+            'product_image_urls' => ['https://cf.shopee.co.id/file/'.$itemId],
+        ];
+    }
+
+    private function targetMapping(string $sourceItemId, string $sellerSku, string $targetItemId, string $targetModelId): array
+    {
+        return [
+            'source_item_id' => $sourceItemId,
+            'source_seller_sku' => $sellerSku,
+            'target_item_id' => $targetItemId,
+            'target_model_id' => $targetModelId,
+        ];
     }
 }
