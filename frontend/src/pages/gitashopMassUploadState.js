@@ -36,6 +36,28 @@ export const massUploadPreflightWarning = (coverage) => coverage?.isPartial
   ? 'Export Mass Update ini parsial. Fase 1 tetap fail-closed dan tidak akan membuat listing baru.'
   : ''
 
+export const refreshCoverageSnapshot = async ({ request, normalize, replace }) => {
+  replace(null)
+
+  try {
+    const coverage = normalize(await request())
+    replace(coverage)
+
+    return { ok: true, coverage }
+  } catch (error) {
+    return { ok: false, error }
+  }
+}
+
+export const startMassUploadAfterPreflight = async ({ coverage, confirmPartial, onStart, request }) => {
+  const warning = massUploadPreflightWarning(coverage)
+  if (warning && !await confirmPartial(warning)) return { started: false, response: null }
+
+  onStart?.()
+
+  return { started: true, response: await request() }
+}
+
 export const formatMassUploadWita = (value) => {
   if (!value) return '-'
 

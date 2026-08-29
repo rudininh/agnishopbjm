@@ -146,7 +146,7 @@
         <button
           class="primary"
           type="button"
-          :disabled="downloadingKey === marketplace.key || (marketplace.key === 'shopee' && Boolean(downloadingShopeeCoverage))"
+          :disabled="downloadingKey === marketplace.key || (marketplace.key === 'shopee' && (!shopeeCoverage?.canDownloadMassUpdate || loadingShopeeCoverage || Boolean(downloadingShopeeCoverage)))"
           @click="downloadMassUpdate(marketplace)"
         >
           {{ downloadingKey === marketplace.key ? 'Menyiapkan...' : 'Download Mass Update' }}
@@ -360,7 +360,7 @@ npm run gitashop-mass-upload-worker</code></pre>
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { omnichannelService, posService } from '@/services'
-import { formatMassUploadWita, massUploadPreflightWarning, toMassUploadViewModel } from './gitashopMassUploadState'
+import { formatMassUploadWita, massUploadPreflightWarning, refreshCoverageSnapshot, startMassUploadAfterPreflight, toMassUploadViewModel } from './gitashopMassUploadState'
 import {
   coverageDownloadFilename,
   filterShopeeGitaExceptions,
@@ -449,13 +449,24 @@ const coverageReasonLabel = (reason) => SHOPEE_COVERAGE_REASON_LABELS[reason] ||
 const loadShopeeCoverage = async () => {
   loadingShopeeCoverage.value = true
   try {
-    const response = await omnichannelService.shopeeGitaExportCoverage()
-    shopeeCoverage.value = toShopeeGitaCoverageViewModel(response.data.data)
-  } catch (error) {
+    const result = await refreshCoverageSnapshot({
+      request: () => omnichannelService.shopeeGitaExportCoverage(),
+      normalize: (response) => {
+        const coverage = toShopeeGitaCoverageViewModel(response.data.data)
+        if (!coverage.revision) throw new Error('Coverage revision is missing.')
+
+        return coverage
+      },
+      replace: (coverage) => { shopeeCoverage.value = coverage }
+    })
+    if (result.ok) return true
+
+    const error = result.error
     notice.value = {
       type: 'warning',
-      message: error?.response?.data?.message || 'Preflight export Shopee Gitashopcollection gagal dimuat.'
+      message: error?.response?.data?.message || 'Preflight export Shopee Gitashopcollection gagal dimuat. Download Shopee tetap dinonaktifkan.'
     }
+    return false
   } finally {
     loadingShopeeCoverage.value = false
   }
@@ -506,8 +517,10 @@ const downloadCoverageBlob = async (kind, type = '') => {
     notice.value = { type: 'success', message: `${filename} berhasil disiapkan.` }
   } catch (error) {
     if (error?.response?.status === 409) {
-      await loadShopeeCoverage()
-      notice.value = { type: 'warning', message: 'Katalog berubah; preflight sudah diperbarui. Silakan download ulang.' }
+      const refreshed = await loadShopeeCoverage()
+      if (refreshed) {
+        notice.value = { type: 'warning', message: 'Katalog berubah; preflight sudah diperbarui. Silakan download ulang.' }
+      }
     } else {
       notice.value = { type: 'warning', message: await coverageBlobErrorMessage(error) }
     }
@@ -544,10 +557,19 @@ const ensureMassUploadPolling = () => {
 
 const startMassUpload = async () => {
   const preflightWarning = massUploadPreflightWarning(shopeeCoverage.value)
-  if (preflightWarning) notice.value = { type: 'warning', message: preflightWarning }
-  startingMassUpload.value = true
   try {
-    const response = await omnichannelService.startShopeeGitaMassUpload()
+    const startResult = await startMassUploadAfterPreflight({
+      coverage: shopeeCoverage.value,
+      confirmPartial: (message) => window.confirm(`${message}\n\nLanjutkan upload otomatis?`),
+      onStart: () => { startingMassUpload.value = true },
+      request: () => omnichannelService.startShopeeGitaMassUpload()
+    })
+    if (!startResult.started) {
+      notice.value = { type: 'warning', message: `Upload otomatis dibatalkan. ${preflightWarning}` }
+      return
+    }
+
+    const response = startResult.response
     massUploadCurrent.value = toMassUploadViewModel(response.data.data)
     const workerStatus = response.data.worker?.status
     notice.value = { type: 'success', message: workerStatus === 'manual_required' ? 'Job dibuat. Jalankan perintah PowerShell pada panduan Worker PC.' : 'Job dibuat dan worker PC sedang dijalankan otomatis.' }
