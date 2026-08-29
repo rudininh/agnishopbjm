@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use ZipArchive;
 
 class MarketplaceImportController extends Controller
@@ -174,42 +175,72 @@ class MarketplaceImportController extends Controller
 
     public function downloadShopeeGitaMassUpdate(Request $request): BinaryFileResponse
     {
+        $snapshot = $this->currentShopeeGitaCoverage();
+        $this->coverageService->assertRevision($snapshot, (string) $request->query('revision', ''));
+
         $templates = $this->shopeeGitaTemplates();
         $stamp = now()->format('Ymd_His');
-        $workDir = storage_path('app/import-marketplace/generated/shopee-gita-'.$stamp.'-'.bin2hex(random_bytes(3)));
+        $nonce = bin2hex(random_bytes(3));
+        $generatedDirectory = storage_path('app/import-marketplace/generated');
+        $workDir = $generatedDirectory.'/shopee-gita-'.$stamp.'-'.$nonce;
+        $partial = $snapshot['summary']['exception_variants'] > 0;
+        $archiveName = 'shopee_gita_mass_update_'.($partial ? 'partial_' : '').$stamp.'.zip';
+        $archivePath = $generatedDirectory.'/shopee-gita-download-'.$stamp.'-'.$nonce.'.zip';
+        File::ensureDirectoryExists($generatedDirectory);
         File::ensureDirectoryExists($workDir);
+        $archiveReady = false;
+        $zipOpen = false;
 
-        foreach ($templates as $template) {
-            $fileName = $template['file'];
-            $source = $this->shopeeGitaTemplatePath($fileName);
-            abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
+        try {
+            foreach ($templates as $type => $template) {
+                $fileName = $template['file'];
+                $source = $this->shopeeGitaTemplatePath($fileName);
+                abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
 
-            $target = $workDir.'/'.$fileName;
-            File::copy($source, $target);
-            $template['writer']($target);
+                $target = $workDir.'/'.$fileName;
+                File::copy($source, $target);
+                $template['writer']($target);
+                $this->filterShopeeGitaWorkbook($target, $type, $snapshot['ready_targets']);
+            }
+
+            $zip = new ZipArchive();
+            abort_if($zip->open($archivePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true, 500, 'Arsip Mass Update gagal dibuat.');
+            $zipOpen = true;
+
+            foreach ($templates as $template) {
+                $fileName = $template['file'];
+                $zip->addFile($workDir.'/'.$fileName, $fileName);
+            }
+            $zip->addFromString('coverage_report.csv', $this->shopeeGitaCoverageCsv($snapshot));
+            $closed = $zip->close();
+            $zipOpen = false;
+            abort_unless($closed, 500, 'Arsip Mass Update gagal diselesaikan.');
+            $archiveReady = true;
+        } finally {
+            if ($zipOpen) {
+                $zip->close();
+            }
+            File::deleteDirectory($workDir);
+            if (! $archiveReady) {
+                File::delete($archivePath);
+            }
         }
-
-        $archivePath = $workDir.'/shopee_gita_mass_update_'.$stamp.'.zip';
-        $zip = new ZipArchive();
-        abort_if($zip->open($archivePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true, 500, 'Arsip Mass Update gagal dibuat.');
-
-        foreach ($templates as $template) {
-            $fileName = $template['file'];
-            $zip->addFile($workDir.'/'.$fileName, $fileName);
-        }
-        $zip->close();
 
         return response()
-            ->download($archivePath, basename($archivePath), [
+            ->download($archivePath, $archiveName, [
                 'Content-Type' => 'application/zip',
                 'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
                 'Pragma' => 'no-cache',
+                ...$this->shopeeGitaCoverageHeaders($snapshot),
             ])
             ->deleteFileAfterSend(true);
     }
 
-    public function downloadShopeeGitaMassUpdateFile(string $type): BinaryFileResponse
+    public function downloadShopeeGitaMassUpdateFile(Request $request, string $type): BinaryFileResponse
     {
+        $snapshot = $this->currentShopeeGitaCoverage();
+        $this->coverageService->assertRevision($snapshot, (string) $request->query('revision', ''));
+
         $templates = $this->shopeeGitaTemplates();
         abort_if(! isset($templates[$type]), 404, 'Jenis Mass Update tidak dikenal.');
 
@@ -219,20 +250,48 @@ class MarketplaceImportController extends Controller
         abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
 
         $stamp = now()->format('Ymd_His');
-        $workDir = storage_path('app/import-marketplace/generated/shopee-gita-'.$type.'-'.$stamp.'-'.bin2hex(random_bytes(3)));
-        File::ensureDirectoryExists($workDir);
+        $generatedDirectory = storage_path('app/import-marketplace/generated');
+        $target = $generatedDirectory.'/shopee-gita-'.$type.'-'.$stamp.'-'.bin2hex(random_bytes(3)).'.xlsx';
+        File::ensureDirectoryExists($generatedDirectory);
+        $targetReady = false;
 
-        $target = $workDir.'/'.$fileName;
-        File::copy($source, $target);
-        $template['writer']($target);
+        try {
+            File::copy($source, $target);
+            $template['writer']($target);
+            $this->filterShopeeGitaWorkbook($target, $type, $snapshot['ready_targets']);
+            $targetReady = true;
+        } finally {
+            if (! $targetReady) {
+                File::delete($target);
+            }
+        }
 
         return response()
             ->download($target, $fileName, [
                 'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
                 'Pragma' => 'no-cache',
+                ...$this->shopeeGitaCoverageHeaders($snapshot),
             ])
             ->deleteFileAfterSend(true);
+    }
+
+    public function downloadShopeeGitaExceptions(Request $request): StreamedResponse
+    {
+        $snapshot = $this->currentShopeeGitaCoverage();
+        $this->coverageService->assertRevision($snapshot, (string) $request->query('revision', ''));
+        $csv = $this->shopeeGitaCoverageCsv($snapshot);
+        $filename = 'shopee_gita_exceptions_'.now()->format('Ymd_His').'.csv';
+
+        return response()->streamDownload(
+            static fn () => print $csv,
+            $filename,
+            [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Cache-Control' => 'no-store',
+                ...$this->shopeeGitaCoverageHeaders($snapshot),
+            ]
+        );
     }
 
     public function downloadLazadaMassUpdate(Request $request): BinaryFileResponse
@@ -1770,6 +1829,57 @@ class MarketplaceImportController extends Controller
 
         $zip->addFromString($sheetPath, $dom->saveXML());
         $zip->close();
+    }
+
+    private function shopeeGitaCoverageCsv(array $snapshot): string
+    {
+        $stream = fopen('php://temp', 'w+');
+        fputcsv($stream, [
+            'status',
+            'reason',
+            'source_item_id',
+            'source_model_id',
+            'product_name',
+            'variant_name',
+            'source_seller_sku',
+            'target_item_id',
+            'target_model_id',
+            'target_seller_sku',
+        ]);
+
+        foreach ($snapshot['items'] as $item) {
+            if ($item['status'] === 'mass_update_ready') {
+                continue;
+            }
+
+            fputcsv($stream, [
+                $item['status'],
+                $item['reason'],
+                $item['source_item_id'],
+                $item['source_model_id'],
+                $item['product_name'],
+                $item['variant_name'],
+                $item['source_seller_sku'],
+                $item['target_item_id'],
+                $item['target_model_id'],
+                $item['target_seller_sku'],
+            ]);
+        }
+
+        rewind($stream);
+        $csv = stream_get_contents($stream);
+        fclose($stream);
+
+        return "\xEF\xBB\xBF".$csv;
+    }
+
+    private function shopeeGitaCoverageHeaders(array $snapshot): array
+    {
+        return [
+            'X-Agni-Coverage-Status' => $snapshot['summary']['exception_variants'] > 0 ? 'partial' : 'complete',
+            'X-Agni-Ready-Variants' => (string) $snapshot['summary']['ready_variants'],
+            'X-Agni-Exception-Variants' => (string) $snapshot['summary']['exception_variants'],
+        ];
     }
 
     private function openWorkbookSheet(string $path, string $sheetFile = 'xl/worksheets/sheet1.xml'): array

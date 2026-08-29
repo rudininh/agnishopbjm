@@ -17,6 +17,43 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
 {
     use CreatesMinimalShopeeWorkbook;
 
+    private string $templateDirectory;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->templateDirectory = storage_path('framework/testing/shopee-gita-coverage-templates');
+        File::deleteDirectory($this->templateDirectory);
+        File::ensureDirectoryExists($this->templateDirectory);
+        config()->set('shopee_mass_upload.template_directory', $this->templateDirectory);
+
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_update_basic_info.xlsx', [
+            ['A' => 'target-1', 'B' => 'Psource-1', 'C' => 'Ready Product'],
+            ['A' => 'target-2', 'B' => 'Psource-2', 'C' => 'Rejected Product'],
+        ]);
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_update_sales_info.xlsx', [
+            ['A' => 'target-1', 'C' => 'model-1', 'E' => 'Psource-1', 'F' => 'INT-READY'],
+            ['A' => 'target-2', 'C' => 'model-2', 'E' => 'Psource-2', 'F' => 'INT-REJECTED'],
+        ]);
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_update_media_info.xlsx', [
+            ['A' => 'target-1', 'B' => 'Psource-1', 'C' => 'Ready Product'],
+            ['A' => 'target-2', 'B' => 'Psource-2', 'C' => 'Rejected Product'],
+        ]);
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_update_shipping_info.xlsx', [
+            ['A' => 'target-1', 'D' => 'model-1'],
+            ['A' => 'target-2', 'D' => 'model-2'],
+        ]);
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_update_dts_info.xlsx', [
+            ['A' => 'target-1', 'D' => 'model-1'],
+            ['A' => 'target-2', 'D' => 'model-2'],
+        ]);
+        $this->createMinimalShopeeWorkbook($this->templateDirectory.'/mass_republish_items.xlsx', [
+            ['A' => 'target-1'],
+            ['A' => 'target-2'],
+        ], 3);
+    }
+
     protected function tearDown(): void
     {
         File::delete([
@@ -35,7 +72,9 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             storage_path('framework/testing/coverage-unsupported-type.xlsx'),
             storage_path('framework/testing/coverage-tuple-collision.xlsx'),
             storage_path('framework/testing/coverage-in-place-formula.xlsx'),
+            storage_path('framework/testing/filtered-sales.xlsx'),
         ]);
+        File::deleteDirectory($this->templateDirectory);
         Mockery::close();
 
         parent::tearDown();
@@ -72,6 +111,206 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             ->assertJsonPath('data.summary.variants_by_status.new_product', 1)
             ->assertJsonPath('data.items.0.status', 'new_product')
             ->assertJsonStructure(['data' => ['revision', 'template', 'summary', 'items']]);
+    }
+
+    public function test_every_manual_download_rejects_missing_or_stale_revision(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $this->bindCoverageSnapshot($snapshot);
+        $paths = [
+            '/api/marketplace/import/shopee-gita/mass-update',
+            '/api/marketplace/import/shopee-gita/mass-update/basic-info',
+            '/api/marketplace/import/shopee-gita/mass-update/sales-info',
+            '/api/marketplace/import/shopee-gita/mass-update/media-info',
+            '/api/marketplace/import/shopee-gita/mass-update/shipping-info',
+            '/api/marketplace/import/shopee-gita/mass-update/dts-info',
+            '/api/marketplace/import/shopee-gita/mass-update/republish-items',
+            '/api/marketplace/import/shopee-gita/exceptions',
+        ];
+
+        foreach ($paths as $path) {
+            $this->get($path)->assertStatus(409);
+            $this->get($path.'?revision=stale')->assertStatus(409);
+        }
+    }
+
+    public function test_exception_csv_contains_every_non_ready_source_row_as_utf8_csv(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $this->bindCoverageSnapshot($snapshot);
+
+        $response = $this->get('/api/marketplace/import/shopee-gita/exceptions?revision='.$snapshot['revision']);
+        $response->assertOk()
+            ->assertHeader('content-type', 'text/csv; charset=UTF-8')
+            ->assertDownload();
+        $this->assertStringContainsString('no-store', (string) $response->headers->get('cache-control'));
+        $csv = $response->streamedContent();
+
+        $this->assertStringStartsWith("\xEF\xBB\xBF", $csv);
+        $this->assertStringContainsString('Khiban series', $csv);
+        $this->assertStringContainsString('NINJA NON RESLETING', $csv);
+        $this->assertStringNotContainsString('Ready Product', $csv);
+        $this->assertSame(2, substr_count($csv, 'new_product'));
+        $this->assertStringContainsString('"Khiban series, ""Premium"""', $csv);
+    }
+
+    public function test_download_headers_and_filenames_identify_partial_coverage(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $this->bindCoverageSnapshot($snapshot);
+
+        $exceptions = $this->get('/api/marketplace/import/shopee-gita/exceptions?revision='.$snapshot['revision']);
+        $exceptions->assertOk()
+            ->assertHeader('X-Agni-Coverage-Status', 'partial')
+            ->assertHeader('X-Agni-Ready-Variants', '1')
+            ->assertHeader('X-Agni-Exception-Variants', '2');
+        $this->assertMatchesRegularExpression(
+            '/attachment; filename=shopee_gita_exceptions_\d{8}_\d{6}\.csv/',
+            (string) $exceptions->headers->get('content-disposition')
+        );
+
+        $individual = $this->get('/api/marketplace/import/shopee-gita/mass-update/sales-info?revision='.$snapshot['revision']);
+        $individual->assertOk()
+            ->assertHeader('X-Agni-Coverage-Status', 'partial')
+            ->assertHeader('X-Agni-Ready-Variants', '1')
+            ->assertHeader('X-Agni-Exception-Variants', '2')
+            ->assertDownload('mass_update_sales_info.xlsx');
+    }
+
+    public function test_mass_update_zip_contains_filtered_workbooks_and_coverage_report(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $this->bindCoverageSnapshot($snapshot);
+
+        $response = $this->get('/api/marketplace/import/shopee-gita/mass-update?revision='.$snapshot['revision']);
+        $response->assertOk()
+            ->assertHeader('X-Agni-Coverage-Status', 'partial')
+            ->assertHeader('X-Agni-Ready-Variants', '1')
+            ->assertHeader('X-Agni-Exception-Variants', '2');
+        $this->assertMatchesRegularExpression(
+            '/attachment; filename=shopee_gita_mass_update_partial_\d{8}_\d{6}\.zip/',
+            (string) $response->headers->get('content-disposition')
+        );
+        $archivePath = $response->baseResponse->getFile()->getPathname();
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($archivePath) === true);
+        $entries = collect(range(0, $zip->numFiles - 1))
+            ->map(fn (int $index) => $zip->getNameIndex($index))
+            ->sort()
+            ->values()
+            ->all();
+        $this->assertSame([
+            'coverage_report.csv',
+            'mass_republish_items.xlsx',
+            'mass_update_basic_info.xlsx',
+            'mass_update_dts_info.xlsx',
+            'mass_update_media_info.xlsx',
+            'mass_update_sales_info.xlsx',
+            'mass_update_shipping_info.xlsx',
+        ], $entries);
+        $report = $zip->getFromName('coverage_report.csv');
+        $salesBytes = $zip->getFromName('mass_update_sales_info.xlsx');
+        $zip->close();
+
+        $this->assertStringStartsWith("\xEF\xBB\xBF", $report);
+        $this->assertStringContainsString('Khiban series', $report);
+        $this->assertStringContainsString('NINJA NON RESLETING', $report);
+        $salesPath = storage_path('framework/testing/filtered-sales.xlsx');
+        File::put($salesPath, $salesBytes);
+        $this->assertSame([
+            ['A' => 'target-1', 'C' => 'model-1', 'E' => 'Psource-1', 'F' => 'INT-READY'],
+        ], $this->readMinimalShopeeWorkbookRows($salesPath));
+    }
+
+    public function test_complete_download_uses_complete_coverage_headers_and_zip_filename(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $snapshot['items'] = [$snapshot['items'][0]];
+        $snapshot['summary']['exception_variants'] = 0;
+        $snapshot['summary']['ready_variants'] = 1;
+        $this->bindCoverageSnapshot($snapshot);
+
+        $response = $this->get('/api/marketplace/import/shopee-gita/mass-update?revision='.$snapshot['revision']);
+        $response->assertOk()
+            ->assertHeader('X-Agni-Coverage-Status', 'complete')
+            ->assertHeader('X-Agni-Ready-Variants', '1')
+            ->assertHeader('X-Agni-Exception-Variants', '0');
+        $this->assertMatchesRegularExpression(
+            '/attachment; filename=shopee_gita_mass_update_\d{8}_\d{6}\.zip/',
+            (string) $response->headers->get('content-disposition')
+        );
+    }
+
+    public function test_individual_sales_download_contains_only_ready_target_pairs(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $this->bindCoverageSnapshot($snapshot);
+
+        $response = $this->get('/api/marketplace/import/shopee-gita/mass-update/sales-info?revision='.$snapshot['revision']);
+        $response->assertOk();
+
+        $this->assertSame([
+            ['A' => 'target-1', 'C' => 'model-1', 'E' => 'Psource-1', 'F' => 'INT-READY'],
+        ], $this->readMinimalShopeeWorkbookRows($response->baseResponse->getFile()->getPathname()));
+    }
+
+    public function test_binary_downloads_leave_no_unique_temporary_workspaces_after_send(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $this->bindCoverageSnapshot($snapshot);
+        $before = $this->shopeeGitaTemporaryArtifacts();
+
+        $zip = $this->get('/api/marketplace/import/shopee-gita/mass-update?revision='.$snapshot['revision']);
+        $workbook = $this->get('/api/marketplace/import/shopee-gita/mass-update/sales-info?revision='.$snapshot['revision']);
+        $responsePaths = [
+            $zip->baseResponse->getFile()->getPathname(),
+            $workbook->baseResponse->getFile()->getPathname(),
+        ];
+
+        ob_start();
+        try {
+            $zip->baseResponse->sendContent();
+            $workbook->baseResponse->sendContent();
+        } finally {
+            ob_end_clean();
+        }
+
+        foreach ($responsePaths as $path) {
+            $this->assertFileDoesNotExist($path);
+        }
+
+        $after = $this->shopeeGitaTemporaryArtifacts();
+        $newArtifacts = array_values(array_diff($after, $before));
+        try {
+            $this->assertSame([], $newArtifacts);
+        } finally {
+            foreach ($newArtifacts as $artifact) {
+                File::isDirectory($artifact) ? File::deleteDirectory($artifact) : File::delete($artifact);
+            }
+        }
+    }
+
+    public function test_failed_binary_generation_leaves_no_temporary_artifacts(): void
+    {
+        $snapshot = $this->partialCoverageSnapshot();
+        $snapshot['ready_targets'][] = $snapshot['ready_targets'][0];
+        $this->bindCoverageSnapshot($snapshot);
+        $before = $this->shopeeGitaTemporaryArtifacts();
+
+        $this->get('/api/marketplace/import/shopee-gita/mass-update?revision='.$snapshot['revision'])
+            ->assertStatus(422);
+        $this->get('/api/marketplace/import/shopee-gita/mass-update/sales-info?revision='.$snapshot['revision'])
+            ->assertStatus(422);
+
+        $after = $this->shopeeGitaTemporaryArtifacts();
+        $newArtifacts = array_values(array_diff($after, $before));
+        try {
+            $this->assertSame([], $newArtifacts);
+        } finally {
+            foreach ($newArtifacts as $artifact) {
+                File::isDirectory($artifact) ? File::deleteDirectory($artifact) : File::delete($artifact);
+            }
+        }
     }
 
     public function test_sales_filter_keeps_only_ready_target_item_model_pairs(): void
@@ -324,6 +563,101 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             'product_name' => $productName,
             'variant_name' => $variantName,
         ];
+    }
+
+    private function bindCoverageSnapshot(array $snapshot): void
+    {
+        $controller = Mockery::mock(MarketplaceImportController::class, [
+            app(MarketplaceSyncService::class),
+            app(ShopeeGitaExportCoverageService::class),
+        ])->makePartial()->shouldAllowMockingProtectedMethods();
+        $controller->shouldReceive('currentShopeeGitaCoverage')->andReturn($snapshot);
+        $this->app->instance(MarketplaceImportController::class, $controller);
+    }
+
+    private function partialCoverageSnapshot(): array
+    {
+        return [
+            'revision' => str_repeat('b', 64),
+            'generated_at' => '2026-08-29T10:00:00+00:00',
+            'template' => [
+                'sales_sha256' => str_repeat('a', 64),
+                'sales_last_modified_at' => '2026-08-29T10:00:00+08:00',
+            ],
+            'summary' => [
+                'source_products' => 3,
+                'source_variants' => 3,
+                'ready_products' => 1,
+                'ready_variants' => 1,
+                'exception_products' => 2,
+                'exception_variants' => 2,
+                'products_by_status' => [
+                    'mass_update_ready' => 1,
+                    'new_product' => 2,
+                    'new_variant' => 0,
+                    'sku_changed' => 0,
+                    'blocked' => 0,
+                ],
+                'variants_by_status' => [
+                    'mass_update_ready' => 1,
+                    'new_product' => 2,
+                    'new_variant' => 0,
+                    'sku_changed' => 0,
+                    'blocked' => 0,
+                ],
+            ],
+            'items' => [
+                [
+                    'status' => 'mass_update_ready',
+                    'reason' => 'matched_target_sku',
+                    'source_item_id' => 'source-1',
+                    'source_model_id' => 'source-model-1',
+                    'product_name' => 'Ready Product',
+                    'variant_name' => 'Ready Variant',
+                    'source_seller_sku' => 'INT-READY',
+                    'target_item_id' => 'target-1',
+                    'target_model_id' => 'model-1',
+                    'target_seller_sku' => 'INT-READY',
+                ],
+                [
+                    'status' => 'new_product',
+                    'reason' => 'missing_target_product',
+                    'source_item_id' => 'source-2',
+                    'source_model_id' => 'source-model-2',
+                    'product_name' => 'Khiban series, "Premium"',
+                    'variant_name' => 'Maroon',
+                    'source_seller_sku' => 'INT-KHIBAN-MAROON',
+                    'target_item_id' => '',
+                    'target_model_id' => '',
+                    'target_seller_sku' => '',
+                ],
+                [
+                    'status' => 'new_product',
+                    'reason' => 'missing_target_product',
+                    'source_item_id' => 'source-3',
+                    'source_model_id' => 'source-model-3',
+                    'product_name' => 'NINJA NON RESLETING',
+                    'variant_name' => 'Hitam',
+                    'source_seller_sku' => 'INT-NINJA-HITAM',
+                    'target_item_id' => '',
+                    'target_model_id' => '',
+                    'target_seller_sku' => '',
+                ],
+            ],
+            'ready_targets' => [
+                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+            ],
+        ];
+    }
+
+    private function shopeeGitaTemporaryArtifacts(): array
+    {
+        $generatedDirectory = storage_path('app/import-marketplace/generated');
+
+        return collect(File::glob($generatedDirectory.'/shopee-gita-*'))
+            ->sort()
+            ->values()
+            ->all();
     }
 
     private function invokeWorkbookFilter(string $path, string $type, array $readyTargets): void

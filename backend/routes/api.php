@@ -114,6 +114,7 @@ Route::get('marketplace/import/shopee-gita/mass-update', [MarketplaceImportContr
 Route::get('marketplace/import/shopee-gita/mass-update/{type}', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdateFile'])
     ->where('type', 'basic-info|sales-info|media-info|shipping-info|dts-info|republish-items');
 Route::get('marketplace/import/shopee-gita/coverage', [MarketplaceImportController::class, 'shopeeGitaCoverage']);
+Route::get('marketplace/import/shopee-gita/exceptions', [MarketplaceImportController::class, 'downloadShopeeGitaExceptions']);
 Route::post('marketplace/import/shopee-gita/mass-upload/jobs', [ShopeeMassUploadController::class, 'create']);
 Route::post('marketplace/import/shopee-gita/mass-upload/worker/wake', [ShopeeMassUploadController::class, 'wake']);
 Route::get('marketplace/import/shopee-gita/mass-upload/jobs/current', [ShopeeMassUploadController::class, 'current']);
