@@ -244,7 +244,7 @@ final class ShopeeGitaExportCoverageService
     private function compare(array $left, array $right): int
     {
         foreach ($left as $key => $value) {
-            $comparison = $value <=> $right[$key];
+            $comparison = strcmp($value, $right[$key]);
             if ($comparison !== 0) {
                 return $comparison;
             }

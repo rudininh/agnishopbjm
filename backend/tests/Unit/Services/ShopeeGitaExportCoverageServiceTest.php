@@ -134,6 +134,24 @@ PHP;
         );
     }
 
+    public function test_revision_is_order_independent_for_distinct_numeric_equivalent_scalar_values(): void
+    {
+        $sources = [
+            $this->source('01', 'model', 'INT-100', 'Produk', 'A'),
+            $this->source('1', 'model', 'INT-100', 'Produk', 'A'),
+        ];
+        $mappings = [
+            $this->mapping('01', 'INT-100', '01', 'model', 'Produk', 'A'),
+            $this->mapping('1', 'INT-100', '1', 'model', 'Produk', 'A'),
+        ];
+        $service = app(ShopeeGitaExportCoverageService::class);
+
+        $this->assertSame(
+            $service->analyze($sources, $mappings, $this->metadata())['revision'],
+            $service->analyze(array_reverse($sources), array_reverse($mappings), $this->metadata())['revision'],
+        );
+    }
+
     public function test_revision_is_order_independent_and_changes_with_source_mapping_or_template_input(): void
     {
         $sources = [
