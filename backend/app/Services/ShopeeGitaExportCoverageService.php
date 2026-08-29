@@ -243,7 +243,14 @@ final class ShopeeGitaExportCoverageService
 
     private function compare(array $left, array $right): int
     {
-        return implode("\x1f", $left) <=> implode("\x1f", $right);
+        foreach ($left as $key => $value) {
+            $comparison = $value <=> $right[$key];
+            if ($comparison !== 0) {
+                return $comparison;
+            }
+        }
+
+        return 0;
     }
 
     private function countBy(array $rows, callable $key): array
@@ -299,9 +306,13 @@ final class ShopeeGitaExportCoverageService
 
     private function normalizedName(string $name): string
     {
-        $normalized = class_exists('Normalizer')
-            ? \Normalizer::normalize($name, \Normalizer::FORM_C)
-            : $name;
+        if (! function_exists('normalizer_normalize')) {
+            throw new LogicException('Unicode normalizer is required for Gitashop coverage classification.');
+        }
+        $normalized = normalizer_normalize($name);
+        if ($normalized === false) {
+            throw new LogicException('Gitashop coverage variant name is not valid Unicode.');
+        }
 
         return $this->lower(preg_replace('/\s+/u', ' ', trim($normalized)) ?? trim($normalized));
     }

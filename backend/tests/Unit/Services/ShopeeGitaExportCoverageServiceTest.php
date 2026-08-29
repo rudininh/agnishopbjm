@@ -3,6 +3,7 @@
 namespace Tests\Unit\Services;
 
 use App\Services\ShopeeGitaExportCoverageService;
+use Symfony\Component\Process\Process;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
@@ -79,6 +80,58 @@ class ShopeeGitaExportCoverageServiceTest extends TestCase
 
         $this->assertSame('new_variant', $result['items'][0]['status']);
         $this->assertSame('missing_target_variant', $result['items'][0]['reason']);
+    }
+
+    public function test_normalizes_canonically_equivalent_unicode_variant_names_without_intl(): void
+    {
+        $script = <<<'PHP'
+function normalizer_normalize(string $value): string
+{
+    return str_replace("e\u{0301}", 'é', $value);
+}
+
+require getcwd().'/backend/app/Services/ShopeeGitaExportCoverageService.php';
+
+$result = (new App\Services\ShopeeGitaExportCoverageService())->analyze(
+    [[
+        'item_id' => '100',
+        'model_id' => '1',
+        'seller_sku' => 'INT-100-BLUE-NEW',
+        'product_name' => 'Produk',
+        'variant_name' => "Bleu e\u{0301}",
+    ]],
+    [[
+        'source_item_id' => '100',
+        'source_seller_sku' => 'INT-100-BLUE-OLD',
+        'target_item_id' => '900',
+        'target_model_id' => '91',
+        'target_product_name' => 'Produk',
+        'target_variant_name' => 'bleu é',
+    ]],
+    ['sales_sha256' => str_repeat('a', 64), 'sales_last_modified_at' => '2026-08-29T10:00:00+08:00'],
+);
+
+echo $result['items'][0]['status'];
+PHP;
+        $process = new Process([PHP_BINARY, '-n', '-r', $script], dirname(base_path()));
+        $process->run();
+
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+        $this->assertSame('sku_changed', $process->getOutput());
+    }
+
+    public function test_revision_is_order_independent_when_scalar_values_contain_the_prior_sort_delimiter(): void
+    {
+        $sources = [
+            $this->source("100\x1f2", '3', 'INT-100', 'Produk', 'A'),
+            $this->source('100', "2\x1f3", 'INT-100', 'Produk', 'A'),
+        ];
+        $service = app(ShopeeGitaExportCoverageService::class);
+
+        $this->assertSame(
+            $service->analyze($sources, [], $this->metadata())['revision'],
+            $service->analyze(array_reverse($sources), [], $this->metadata())['revision'],
+        );
     }
 
     public function test_revision_is_order_independent_and_changes_with_source_mapping_or_template_input(): void
