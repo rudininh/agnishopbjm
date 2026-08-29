@@ -196,3 +196,68 @@ test('starts a complete-coverage upload without asking for acknowledgement', asy
   assert.equal(confirmations, 0)
   assert.equal(requests, 1)
 })
+
+test('coverage refresh coordinator ignores an older response that finishes last', async () => {
+  const refresh = massUploadState.createCoverageRefreshCoordinator?.()
+  assert.equal(typeof refresh, 'function')
+  let coverage = { revision: 'initial-revision' }
+  let loading = false
+  let resolveOlder
+  let resolveNewer
+  const olderRequest = new Promise((resolve) => { resolveOlder = resolve })
+  const newerRequest = new Promise((resolve) => { resolveNewer = resolve })
+  const options = (request) => ({
+    request: () => request,
+    normalize: (response) => ({ revision: response.revision }),
+    replace: (value) => { coverage = value },
+    setLoading: (value) => { loading = value }
+  })
+
+  const olderRefresh = refresh?.(options(olderRequest))
+  assert.equal(coverage, null)
+  assert.equal(loading, true)
+
+  const newerRefresh = refresh?.(options(newerRequest))
+  resolveNewer({ revision: 'newer-revision' })
+  const newerResult = await newerRefresh
+  assert.equal(newerResult?.ok, true)
+  assert.deepEqual(coverage, { revision: 'newer-revision' })
+  assert.equal(loading, false)
+
+  resolveOlder({ revision: 'older-revision' })
+  const olderResult = await olderRefresh
+  assert.equal(olderResult?.ignored, true)
+  assert.deepEqual(coverage, { revision: 'newer-revision' })
+  assert.equal(loading, false)
+})
+
+test('coverage refresh coordinator ignores an older error after newer success', async () => {
+  const refresh = massUploadState.createCoverageRefreshCoordinator?.()
+  assert.equal(typeof refresh, 'function')
+  let coverage = { revision: 'initial-revision' }
+  let loading = false
+  let rejectOlder
+  let resolveNewer
+  const errors = []
+  const olderRequest = new Promise((resolve, reject) => { rejectOlder = reject })
+  const newerRequest = new Promise((resolve) => { resolveNewer = resolve })
+  const options = (request) => ({
+    request: () => request,
+    normalize: (response) => ({ revision: response.revision }),
+    replace: (value) => { coverage = value },
+    setLoading: (value) => { loading = value },
+    onError: (error) => { errors.push(error.message) }
+  })
+
+  const olderRefresh = refresh?.(options(olderRequest))
+  const newerRefresh = refresh?.(options(newerRequest))
+  resolveNewer({ revision: 'newer-revision' })
+  await newerRefresh
+  rejectOlder(new Error('older refresh failed'))
+  const olderResult = await olderRefresh
+
+  assert.equal(olderResult?.ignored, true)
+  assert.deepEqual(coverage, { revision: 'newer-revision' })
+  assert.equal(loading, false)
+  assert.deepEqual(errors, [])
+})

@@ -360,7 +360,7 @@ npm run gitashop-mass-upload-worker</code></pre>
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { omnichannelService, posService } from '@/services'
-import { formatMassUploadWita, massUploadPreflightWarning, refreshCoverageSnapshot, startMassUploadAfterPreflight, toMassUploadViewModel } from './gitashopMassUploadState'
+import { createCoverageRefreshCoordinator, formatMassUploadWita, massUploadPreflightWarning, startMassUploadAfterPreflight, toMassUploadViewModel } from './gitashopMassUploadState'
 import {
   coverageDownloadFilename,
   filterShopeeGitaExceptions,
@@ -383,6 +383,7 @@ const shopeeCoverage = ref(null)
 const loadingShopeeCoverage = ref(false)
 const shopeeCoverageSearch = ref('')
 const downloadingShopeeCoverage = ref('')
+const coordinateShopeeCoverageRefresh = createCoverageRefreshCoordinator()
 let massUploadPolling = null
 
 const downloadingLazada = ref(false)
@@ -447,29 +448,25 @@ const coverageStatusLabel = (status) => SHOPEE_COVERAGE_STATUS_LABELS[status] ||
 const coverageReasonLabel = (reason) => SHOPEE_COVERAGE_REASON_LABELS[reason] || reason || '-'
 
 const loadShopeeCoverage = async () => {
-  loadingShopeeCoverage.value = true
-  try {
-    const result = await refreshCoverageSnapshot({
-      request: () => omnichannelService.shopeeGitaExportCoverage(),
-      normalize: (response) => {
-        const coverage = toShopeeGitaCoverageViewModel(response.data.data)
-        if (!coverage.revision) throw new Error('Coverage revision is missing.')
+  const result = await coordinateShopeeCoverageRefresh({
+    request: () => omnichannelService.shopeeGitaExportCoverage(),
+    normalize: (response) => {
+      const coverage = toShopeeGitaCoverageViewModel(response.data.data)
+      if (!coverage.revision) throw new Error('Coverage revision is missing.')
 
-        return coverage
-      },
-      replace: (coverage) => { shopeeCoverage.value = coverage }
-    })
-    if (result.ok) return true
-
-    const error = result.error
-    notice.value = {
-      type: 'warning',
-      message: error?.response?.data?.message || 'Preflight export Shopee Gitashopcollection gagal dimuat. Download Shopee tetap dinonaktifkan.'
+      return coverage
+    },
+    replace: (coverage) => { shopeeCoverage.value = coverage },
+    setLoading: (loading) => { loadingShopeeCoverage.value = loading },
+    onError: (error) => {
+      notice.value = {
+        type: 'warning',
+        message: error?.response?.data?.message || 'Preflight export Shopee Gitashopcollection gagal dimuat. Download Shopee tetap dinonaktifkan.'
+      }
     }
-    return false
-  } finally {
-    loadingShopeeCoverage.value = false
-  }
+  })
+
+  return result.ok
 }
 
 const coverageBlobErrorMessage = async (error) => {
