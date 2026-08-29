@@ -1637,6 +1637,84 @@ class MarketplaceImportController extends Controller
         $zip->close();
     }
 
+    private function filterShopeeGitaWorkbook(string $path, string $type, array $readyTargets): void
+    {
+        $rawVariantKeys = collect($readyTargets)
+            ->map(fn (array $row) => trim((string) $row['target_item_id']).'|'.trim((string) $row['target_model_id']))
+            ->all();
+        abort_if(count($rawVariantKeys) !== count(array_unique($rawVariantKeys)), 422, 'Target Mass Update duplikat.');
+        $variantKeys = array_fill_keys($rawVariantKeys, true);
+        $productKeys = array_fill_keys(collect($readyTargets)
+            ->pluck('target_item_id')
+            ->map(fn ($id) => trim((string) $id))
+            ->uniqueStrict()
+            ->all(), true);
+        $startRow = $type === 'republish-items' ? 4 : 7;
+
+        [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($path);
+        $dom = new \DOMDocument();
+        $dom->preserveWhiteSpace = false;
+        $dom->formatOutput = false;
+        $dom->loadXML($zip->getFromName($sheetPath));
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('x', self::XLSX_NS);
+        $kept = [];
+
+        foreach (iterator_to_array($xpath->query('//x:sheetData/x:row')) as $rowNode) {
+            if ((int) $rowNode->getAttribute('r') < $startRow) {
+                continue;
+            }
+
+            $values = $this->readRowValues($rowNode, $sharedStrings);
+            $allowed = match ($type) {
+                'basic-info', 'media-info' => isset($productKeys[trim((string) ($values['A'] ?? ''))]),
+                'sales-info' => isset($variantKeys[trim((string) ($values['A'] ?? '')).'|'.trim((string) ($values['C'] ?? ''))]),
+                'shipping-info', 'dts-info' => isset($variantKeys[trim((string) ($values['A'] ?? '')).'|'.trim((string) ($values['D'] ?? ''))]),
+                'republish-items' => false,
+                default => false,
+            };
+            if (! $allowed) {
+                $rowNode->parentNode->removeChild($rowNode);
+
+                continue;
+            }
+            $kept[] = $rowNode;
+        }
+
+        foreach ($kept as $offset => $rowNode) {
+            $rowIndex = $startRow + $offset;
+            $rowNode->setAttribute('r', (string) $rowIndex);
+            foreach ($rowNode->childNodes as $cell) {
+                if ($cell instanceof \DOMElement && $cell->localName === 'c') {
+                    $column = preg_replace('/\d+/', '', $cell->getAttribute('r'));
+                    $cell->setAttribute('r', $column.$rowIndex);
+                }
+            }
+        }
+
+        $lastRow = max($startRow - 1, $startRow - 1 + count($kept));
+        $lastColumnIndex = 1;
+        foreach ($xpath->query('//x:sheetData/x:row/x:c') as $cell) {
+            $column = preg_replace('/\d+/', '', $cell->getAttribute('r'));
+            if ($column !== '') {
+                $lastColumnIndex = max($lastColumnIndex, $this->columnNumber($column));
+            }
+        }
+        $lastColumn = $this->columnName($lastColumnIndex);
+        if ($dimension = $xpath->query('//x:dimension')->item(0)) {
+            $dimension->setAttribute('ref', 'A1:'.$lastColumn.$lastRow);
+        }
+        if ($autoFilter = $xpath->query('//x:autoFilter')->item(0)) {
+            preg_match('/^([^:]+):([A-Z]+)\d+$/', $autoFilter->getAttribute('ref'), $matches);
+            $firstCell = $matches[1] ?? 'A'.($startRow - 1);
+            $lastColumn = $matches[2] ?? 'A';
+            $autoFilter->setAttribute('ref', $firstCell.':'.$lastColumn.$lastRow);
+        }
+
+        $zip->addFromString($sheetPath, $dom->saveXML());
+        $zip->close();
+    }
+
     private function openWorkbookSheet(string $path, string $sheetFile = 'xl/worksheets/sheet1.xml'): array
     {
         $zip = new ZipArchive();
