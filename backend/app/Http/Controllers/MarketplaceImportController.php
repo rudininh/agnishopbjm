@@ -1639,16 +1639,44 @@ class MarketplaceImportController extends Controller
 
     private function filterShopeeGitaWorkbook(string $path, string $type, array $readyTargets): void
     {
-        $rawVariantKeys = collect($readyTargets)
-            ->map(fn (array $row) => trim((string) $row['target_item_id']).'|'.trim((string) $row['target_model_id']))
-            ->all();
-        abort_if(count($rawVariantKeys) !== count(array_unique($rawVariantKeys)), 422, 'Target Mass Update duplikat.');
-        $variantKeys = array_fill_keys($rawVariantKeys, true);
-        $productKeys = array_fill_keys(collect($readyTargets)
-            ->pluck('target_item_id')
-            ->map(fn ($id) => trim((string) $id))
-            ->uniqueStrict()
-            ->all(), true);
+        abort_unless(in_array($type, [
+            'basic-info',
+            'media-info',
+            'sales-info',
+            'shipping-info',
+            'dts-info',
+            'republish-items',
+        ], true), 422, 'Jenis workbook Mass Update tidak valid.');
+
+        $normalizedReadyTargets = [];
+        foreach ($readyTargets as $row) {
+            abort_unless(
+                is_array($row)
+                && array_key_exists('target_item_id', $row)
+                && array_key_exists('target_model_id', $row)
+                && is_scalar($row['target_item_id'])
+                && is_scalar($row['target_model_id']),
+                422,
+                'Identitas target Mass Update tidak valid.'
+            );
+            $itemId = trim((string) $row['target_item_id']);
+            $modelId = trim((string) $row['target_model_id']);
+            abort_if($itemId === '' || $modelId === '', 422, 'Identitas target Mass Update tidak valid.');
+            $normalizedReadyTargets[] = [
+                'target_item_id' => $itemId,
+                'target_model_id' => $modelId,
+            ];
+        }
+
+        $variantKeys = [];
+        $productKeys = [];
+        foreach ($normalizedReadyTargets as $row) {
+            $itemId = $row['target_item_id'];
+            $modelId = $row['target_model_id'];
+            abort_if(isset($variantKeys[$itemId][$modelId]), 422, 'Target Mass Update duplikat.');
+            $variantKeys[$itemId][$modelId] = true;
+            $productKeys[$itemId] = true;
+        }
         $startRow = $type === 'republish-items' ? 4 : 7;
 
         [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($path);
@@ -1659,6 +1687,9 @@ class MarketplaceImportController extends Controller
         $xpath = new \DOMXPath($dom);
         $xpath->registerNamespace('x', self::XLSX_NS);
         $kept = [];
+        $discarded = [];
+        $seenProductIdentities = [];
+        $seenVariantIdentities = [];
 
         foreach (iterator_to_array($xpath->query('//x:sheetData/x:row')) as $rowNode) {
             if ((int) $rowNode->getAttribute('r') < $startRow) {
@@ -1666,19 +1697,45 @@ class MarketplaceImportController extends Controller
             }
 
             $values = $this->readRowValues($rowNode, $sharedStrings);
+            $itemId = trim((string) ($values['A'] ?? ''));
+            $modelId = match ($type) {
+                'sales-info' => trim((string) ($values['C'] ?? '')),
+                'shipping-info', 'dts-info' => trim((string) ($values['D'] ?? '')),
+                default => '',
+            };
             $allowed = match ($type) {
-                'basic-info', 'media-info' => isset($productKeys[trim((string) ($values['A'] ?? ''))]),
-                'sales-info' => isset($variantKeys[trim((string) ($values['A'] ?? '')).'|'.trim((string) ($values['C'] ?? ''))]),
-                'shipping-info', 'dts-info' => isset($variantKeys[trim((string) ($values['A'] ?? '')).'|'.trim((string) ($values['D'] ?? ''))]),
+                'basic-info', 'media-info' => isset($productKeys[$itemId]),
+                'sales-info', 'shipping-info', 'dts-info' => isset($variantKeys[$itemId][$modelId]),
                 'republish-items' => false,
                 default => false,
             };
             if (! $allowed) {
-                $rowNode->parentNode->removeChild($rowNode);
+                $discarded[] = $rowNode;
 
                 continue;
             }
+            if ($type === 'basic-info' || $type === 'media-info') {
+                abort_if(isset($seenProductIdentities[$itemId]), 422, 'Baris target Mass Update duplikat.');
+                $seenProductIdentities[$itemId] = true;
+            } else {
+                abort_if(isset($seenVariantIdentities[$itemId][$modelId]), 422, 'Baris target Mass Update duplikat.');
+                $seenVariantIdentities[$itemId][$modelId] = true;
+            }
             $kept[] = $rowNode;
+        }
+
+        foreach ($kept as $offset => $rowNode) {
+            $rowIndex = $startRow + $offset;
+            $hasFormula = $xpath->query('.//x:f', $rowNode)->count() > 0;
+            abort_if(
+                $hasFormula && (int) $rowNode->getAttribute('r') !== $rowIndex,
+                422,
+                'Baris formula Mass Update tidak aman untuk dipindahkan.'
+            );
+        }
+
+        foreach ($discarded as $rowNode) {
+            $rowNode->parentNode->removeChild($rowNode);
         }
 
         foreach ($kept as $offset => $rowNode) {

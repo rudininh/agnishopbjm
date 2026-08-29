@@ -119,6 +119,56 @@ trait CreatesMinimalShopeeWorkbook
         return $rows;
     }
 
+    protected function setMinimalShopeeWorkbookFormula(string $path, string $cellReference, string $formula, string $value): void
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($path) !== true) {
+            throw new RuntimeException('Unable to update test workbook: '.$path);
+        }
+
+        $dom = new \DOMDocument();
+        $dom->loadXML((string) $zip->getFromName('xl/worksheets/sheet1.xml'));
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('x', self::WORKSHEET_NS);
+        $cell = $xpath->query('//x:c[@r="'.$cellReference.'"]')->item(0);
+        if (! $cell instanceof \DOMElement) {
+            $zip->close();
+
+            throw new RuntimeException('Formula cell does not exist: '.$cellReference);
+        }
+
+        while ($cell->firstChild) {
+            $cell->removeChild($cell->firstChild);
+        }
+        $cell->removeAttribute('t');
+        $formulaNode = $dom->createElementNS(self::WORKSHEET_NS, 'f');
+        $formulaNode->appendChild($dom->createTextNode($formula));
+        $valueNode = $dom->createElementNS(self::WORKSHEET_NS, 'v');
+        $valueNode->appendChild($dom->createTextNode($value));
+        $cell->appendChild($formulaNode);
+        $cell->appendChild($valueNode);
+
+        $zip->addFromString('xl/worksheets/sheet1.xml', $dom->saveXML());
+        $zip->close();
+    }
+
+    protected function readMinimalShopeeWorkbookFormula(string $path, string $cellReference): ?string
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($path) !== true) {
+            throw new RuntimeException('Unable to read test workbook: '.$path);
+        }
+
+        $dom = new \DOMDocument();
+        $dom->loadXML((string) $zip->getFromName('xl/worksheets/sheet1.xml'));
+        $zip->close();
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('x', self::WORKSHEET_NS);
+        $formula = $xpath->query('//x:c[@r="'.$cellReference.'"]/x:f')->item(0);
+
+        return $formula?->textContent;
+    }
+
     private function inlineStringCell(string $column, int $rowIndex, string $value, ?string $style = null): string
     {
         $styleAttribute = $style === null ? '' : ' s="'.$style.'"';

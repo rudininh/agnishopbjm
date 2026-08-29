@@ -28,6 +28,13 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             storage_path('framework/testing/coverage-republish-items.xlsx'),
             storage_path('framework/testing/coverage-duplicate.xlsx'),
             storage_path('framework/testing/coverage-package.xlsx'),
+            storage_path('framework/testing/coverage-invalid-ready.xlsx'),
+            storage_path('framework/testing/coverage-duplicate-product.xlsx'),
+            storage_path('framework/testing/coverage-duplicate-variant.xlsx'),
+            storage_path('framework/testing/coverage-moved-formula.xlsx'),
+            storage_path('framework/testing/coverage-unsupported-type.xlsx'),
+            storage_path('framework/testing/coverage-tuple-collision.xlsx'),
+            storage_path('framework/testing/coverage-in-place-formula.xlsx'),
         ]);
         Mockery::close();
 
@@ -143,15 +150,130 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
         $path = storage_path('framework/testing/coverage-duplicate.xlsx');
         $this->createMinimalShopeeWorkbook($path, [['A' => 'target-1', 'C' => 'model-1']]);
 
-        try {
-            $this->invokeWorkbookFilter($path, 'sales-info', [
-                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
-                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+        $this->assertWorkbookRejectedWithoutMutation($path, 'sales-info', [
+            ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+            ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+        ], 'duplicate ready target pair');
+    }
+
+    public function test_filter_rejects_malformed_ready_target_identities_without_mutating_workbook(): void
+    {
+        $path = storage_path('framework/testing/coverage-invalid-ready.xlsx');
+        $cases = [
+            'missing item' => [['target_model_id' => 'model-1']],
+            'missing model' => [['target_item_id' => 'target-1']],
+            'blank item' => [['target_item_id' => '  ', 'target_model_id' => 'model-1']],
+            'blank model' => [['target_item_id' => 'target-1', 'target_model_id' => "\t"]],
+            'array item' => [['target_item_id' => [], 'target_model_id' => 'model-1']],
+            'object model' => [['target_item_id' => 'target-1', 'target_model_id' => (object) ['id' => 'model-1']]],
+            'scalar row' => ['target-1|model-1'],
+            'object row' => [(object) ['target_item_id' => 'target-1', 'target_model_id' => 'model-1']],
+        ];
+
+        foreach ($cases as $case => $readyTargets) {
+            $this->createMinimalShopeeWorkbook($path, [
+                ['A' => '', 'C' => '', 'F' => 'blank-row'],
+                ['A' => 'target-1', 'C' => 'model-1', 'F' => 'valid-row'],
             ]);
-            $this->fail('Duplicate target pair was accepted.');
-        } catch (HttpException $exception) {
-            $this->assertSame(422, $exception->getStatusCode());
+
+            $this->assertWorkbookRejectedWithoutMutation($path, 'sales-info', $readyTargets, $case);
         }
+    }
+
+    public function test_product_filters_reject_duplicate_permitted_workbook_identities_without_mutation(): void
+    {
+        $path = storage_path('framework/testing/coverage-duplicate-product.xlsx');
+
+        foreach (['basic-info', 'media-info'] as $type) {
+            $this->createMinimalShopeeWorkbook($path, [
+                ['A' => 'target-1', 'C' => 'Produk 1'],
+                ['A' => 'target-1', 'C' => 'Produk 1 Duplikat'],
+                ['A' => 'target-2', 'C' => 'Produk 2'],
+            ]);
+
+            $this->assertWorkbookRejectedWithoutMutation($path, $type, [
+                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+            ], $type);
+        }
+    }
+
+    public function test_variant_filters_reject_duplicate_permitted_workbook_identities_without_mutation(): void
+    {
+        $path = storage_path('framework/testing/coverage-duplicate-variant.xlsx');
+
+        foreach (['sales-info' => 'C', 'shipping-info' => 'D', 'dts-info' => 'D'] as $type => $modelColumn) {
+            $this->createMinimalShopeeWorkbook($path, [
+                ['A' => 'target-1', $modelColumn => 'model-1', 'F' => 'first'],
+                ['A' => 'target-1', $modelColumn => 'model-1', 'F' => 'duplicate'],
+                ['A' => 'target-2', $modelColumn => 'model-2', 'F' => 'other'],
+            ]);
+
+            $this->assertWorkbookRejectedWithoutMutation($path, $type, [
+                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+            ], $type);
+        }
+    }
+
+    public function test_filter_rejects_a_retained_formula_data_row_that_would_move_without_mutating_workbook(): void
+    {
+        $path = storage_path('framework/testing/coverage-moved-formula.xlsx');
+        $this->createMinimalShopeeWorkbook($path, [
+            ['A' => 'target-1', 'C' => 'model-1', 'F' => 'discarded'],
+            ['A' => 'target-2', 'C' => 'model-2', 'F' => 'formula-result'],
+        ]);
+        $this->setMinimalShopeeWorkbookFormula($path, 'F8', 'A8&"-formula"', 'formula-result');
+
+        $this->assertWorkbookRejectedWithoutMutation($path, 'sales-info', [
+            ['target_item_id' => 'target-2', 'target_model_id' => 'model-2'],
+        ], 'moved formula row');
+    }
+
+    public function test_filter_preserves_a_retained_formula_data_row_that_stays_in_place(): void
+    {
+        $path = storage_path('framework/testing/coverage-in-place-formula.xlsx');
+        $this->createMinimalShopeeWorkbook($path, [
+            ['A' => 'target-1', 'C' => 'model-1', 'F' => 'formula-result'],
+            ['A' => 'target-2', 'C' => 'model-2', 'F' => 'discarded'],
+        ]);
+        $this->setMinimalShopeeWorkbookFormula($path, 'F7', 'A7&"-formula"', 'formula-result');
+        $formula = $this->readMinimalShopeeWorkbookFormula($path, 'F7');
+
+        $this->invokeWorkbookFilter($path, 'sales-info', [
+            ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+        ]);
+
+        $this->assertSame('A7&"-formula"', $formula);
+        $this->assertSame($formula, $this->readMinimalShopeeWorkbookFormula($path, 'F7'));
+        $this->assertSame('target-1', $this->readMinimalShopeeWorkbookRows($path)[0]['A']);
+    }
+
+    public function test_filter_rejects_an_unsupported_workbook_type_without_mutating_workbook(): void
+    {
+        $path = storage_path('framework/testing/coverage-unsupported-type.xlsx');
+        $this->createMinimalShopeeWorkbook($path, [
+            ['A' => 'target-1', 'C' => 'model-1'],
+        ]);
+
+        $this->assertWorkbookRejectedWithoutMutation($path, 'unknown-info', [
+            ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+        ], 'unsupported workbook type');
+    }
+
+    public function test_sales_filter_treats_target_item_and_model_as_a_collision_free_tuple(): void
+    {
+        $path = storage_path('framework/testing/coverage-tuple-collision.xlsx');
+        $this->createMinimalShopeeWorkbook($path, [
+            ['A' => 'item|part', 'C' => 'model', 'F' => 'permitted'],
+            ['A' => 'item', 'C' => 'part|model', 'F' => 'not-permitted'],
+        ]);
+
+        $this->invokeWorkbookFilter($path, 'sales-info', [
+            ['target_item_id' => 'item|part', 'target_model_id' => 'model'],
+        ]);
+
+        $this->assertSame([
+            ['A' => 'item|part', 'C' => 'model', 'F' => 'permitted'],
+        ], $this->readMinimalShopeeWorkbookRows($path));
     }
 
     public function test_filter_preserves_package_headers_styles_and_formulas_and_recalculates_ranges(): void
@@ -208,5 +330,19 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
     {
         $method = new ReflectionMethod(MarketplaceImportController::class, 'filterShopeeGitaWorkbook');
         $method->invoke(app(MarketplaceImportController::class), $path, $type, $readyTargets);
+    }
+
+    private function assertWorkbookRejectedWithoutMutation(string $path, string $type, array $readyTargets, string $case): void
+    {
+        $before = file_get_contents($path);
+
+        try {
+            $this->invokeWorkbookFilter($path, $type, $readyTargets);
+            $this->fail("Workbook was accepted for {$case}.");
+        } catch (HttpException $exception) {
+            $this->assertSame(422, $exception->getStatusCode(), $case);
+        }
+
+        $this->assertSame($before, file_get_contents($path), $case);
     }
 }
