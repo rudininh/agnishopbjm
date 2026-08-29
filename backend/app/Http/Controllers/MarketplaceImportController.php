@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\MarketplaceSyncService;
+use App\Services\ShopeeGitaExportCoverageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,7 +17,6 @@ class MarketplaceImportController extends Controller
 {
     private const XLSX_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
     private const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
-    private const TEMPLATE_DIR = 'import-marketplace/shopee-gita';
     private const PROMO_TEMPLATE_DIR = 'import-marketplace/shopee-promo';
     private const PROMO_TEMPLATE_FILE = 'template-discount.xlsx';
     private const LAZADA_TEMPLATE_DIR = 'import-marketplace/lazada';
@@ -25,8 +25,10 @@ class MarketplaceImportController extends Controller
     private const SOURCE_PROMO_ACCOUNT = 'shopee-agnishopbjm';
     private const TARGET_PROMO_ACCOUNT = 'shopee-gitacollectionbjm';
 
-    public function __construct(private readonly MarketplaceSyncService $syncService)
-    {
+    public function __construct(
+        private readonly MarketplaceSyncService $syncService,
+        private readonly ShopeeGitaExportCoverageService $coverageService,
+    ) {
     }
 
     public function generateShopeeGitaMassUpdateFiles(string $relativeDirectory, ?int $jobId = null): array
@@ -44,7 +46,7 @@ class MarketplaceImportController extends Controller
 
         foreach ($this->shopeeGitaTemplates() as $type => $template) {
             $fileName = $template['file'];
-            $source = storage_path('app/'.self::TEMPLATE_DIR.'/'.$fileName);
+            $source = $this->shopeeGitaTemplatePath($fileName);
             abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
 
             $target = $workDir.'/'.$fileName;
@@ -105,7 +107,7 @@ class MarketplaceImportController extends Controller
 
     public function shopeeGitaSalesTargetMappings()
     {
-        $source = storage_path('app/'.self::TEMPLATE_DIR.'/mass_update_sales_info.xlsx');
+        $source = $this->shopeeGitaTemplatePath('mass_update_sales_info.xlsx');
         abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: mass_update_sales_info.xlsx');
 
         [$zip, $sheetPath, $sharedStrings] = $this->openWorkbookSheet($source);
@@ -126,12 +128,48 @@ class MarketplaceImportController extends Controller
                 'source_seller_sku' => trim((string) ($row['F'] ?? '')),
                 'target_item_id' => trim((string) ($row['A'] ?? '')),
                 'target_model_id' => trim((string) ($row['C'] ?? '')),
+                'target_product_name' => trim((string) ($row['B'] ?? '')),
+                'target_variant_name' => trim((string) ($row['D'] ?? '')),
             ]);
         }
 
         $zip->close();
 
         return $mappings;
+    }
+
+    public function shopeeGitaCoverage(Request $request): JsonResponse
+    {
+        $snapshot = $this->currentShopeeGitaCoverage();
+
+        return response()->json(['status' => 'ok', 'data' => $snapshot]);
+    }
+
+    protected function currentShopeeGitaCoverage(): array
+    {
+        return $this->coverageService->analyze(
+            $this->shopeeGitaSourceVariants(),
+            $this->shopeeGitaSalesTargetMappings(),
+            $this->shopeeGitaTemplateMetadata(),
+        );
+    }
+
+    public function shopeeGitaTemplateMetadata(): array
+    {
+        $salesPath = $this->shopeeGitaTemplatePath('mass_update_sales_info.xlsx');
+        abort_if(! File::exists($salesPath), 422, 'Template Sales Info Gitashop belum tersedia.');
+
+        return [
+            'sales_sha256' => hash_file('sha256', $salesPath),
+            'sales_last_modified_at' => date(DATE_ATOM, File::lastModified($salesPath)),
+        ];
+    }
+
+    public function shopeeGitaTemplatePath(string $filename): string
+    {
+        abort_unless(in_array($filename, array_column($this->shopeeGitaTemplates(), 'file'), true), 404, 'Template Gitashop tidak dikenal.');
+
+        return rtrim((string) config('shopee_mass_upload.template_directory'), '/\\').DIRECTORY_SEPARATOR.$filename;
     }
 
     public function downloadShopeeGitaMassUpdate(Request $request): BinaryFileResponse
@@ -143,7 +181,7 @@ class MarketplaceImportController extends Controller
 
         foreach ($templates as $template) {
             $fileName = $template['file'];
-            $source = storage_path('app/'.self::TEMPLATE_DIR.'/'.$fileName);
+            $source = $this->shopeeGitaTemplatePath($fileName);
             abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
 
             $target = $workDir.'/'.$fileName;
@@ -177,7 +215,7 @@ class MarketplaceImportController extends Controller
 
         $template = $templates[$type];
         $fileName = $template['file'];
-        $source = storage_path('app/'.self::TEMPLATE_DIR.'/'.$fileName);
+        $source = $this->shopeeGitaTemplatePath($fileName);
         abort_if(! File::exists($source), 422, 'Template Mass Update belum lengkap: '.$fileName);
 
         $stamp = now()->format('Ymd_His');

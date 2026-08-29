@@ -113,6 +113,7 @@ Route::post('marketplace/auto-sync/poll-tiktok-orders', [MarketplaceAutoSyncCont
 Route::get('marketplace/import/shopee-gita/mass-update', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdate']);
 Route::get('marketplace/import/shopee-gita/mass-update/{type}', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdateFile'])
     ->where('type', 'basic-info|sales-info|media-info|shipping-info|dts-info|republish-items');
+Route::get('marketplace/import/shopee-gita/coverage', [MarketplaceImportController::class, 'shopeeGitaCoverage']);
 Route::post('marketplace/import/shopee-gita/mass-upload/jobs', [ShopeeMassUploadController::class, 'create']);
 Route::post('marketplace/import/shopee-gita/mass-upload/worker/wake', [ShopeeMassUploadController::class, 'wake']);
 Route::get('marketplace/import/shopee-gita/mass-upload/jobs/current', [ShopeeMassUploadController::class, 'current']);
