@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import * as massUploadState from '../src/pages/gitashopMassUploadState.js'
 import {
   isMassUploadTerminal,
   toMassUploadViewModel
@@ -87,4 +88,25 @@ test('adds absent audit entries and removes unsafe browser details from messages
   assert.equal(viewModel.files[0].statusLabel, 'Menunggu')
   assert.equal(viewModel.message, 'Detail aman tersedia pada audit job.')
   assert.equal(viewModel.canStartNewJob, false)
+})
+
+test('describes coverage mismatch as an actionable blocked upload', () => {
+  const view = toMassUploadViewModel({
+    id: 44,
+    status: 'dibatalkan_aman',
+    message: 'Template Gitashop belum mencakup 29 dari 1992 varian sumber; 3 baris target sudah tidak cocok. Periksa preflight Download Mass Update.',
+    files: []
+  })
+
+  assert.match(view.message, /Periksa preflight Download Mass Update/)
+  assert.equal(view.statusTone, 'warning')
+})
+
+test('warns before automatic upload when export coverage is partial', () => {
+  assert.equal(
+    massUploadState.massUploadPreflightWarning?.({ isPartial: true }),
+    'Export Mass Update ini parsial. Fase 1 tetap fail-closed dan tidak akan membuat listing baru.'
+  )
+  assert.equal(massUploadState.massUploadPreflightWarning?.({ isPartial: false }), '')
+  assert.equal(massUploadState.massUploadPreflightWarning?.(null), '')
 })

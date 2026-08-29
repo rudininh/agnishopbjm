@@ -32,6 +32,10 @@ const UNSAFE_MESSAGE_PATTERN = /authorization|bearer|cookie|html|profile|raw res
 
 export const isMassUploadTerminal = (status) => TERMINAL_STATUSES.has(status)
 
+export const massUploadPreflightWarning = (coverage) => coverage?.isPartial
+  ? 'Export Mass Update ini parsial. Fase 1 tetap fail-closed dan tidak akan membuat listing baru.'
+  : ''
+
 export const formatMassUploadWita = (value) => {
   if (!value) return '-'
 
