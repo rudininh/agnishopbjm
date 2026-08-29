@@ -380,8 +380,27 @@ export const omnichannelService = {
     return api.post('/marketplace/auto-sync/poll-tiktok-orders', { hours })
   },
 
-  downloadShopeeGitaMassUpdate() {
+  shopeeGitaExportCoverage() {
+    return api.get('/marketplace/import/shopee-gita/coverage')
+  },
+
+  downloadShopeeGitaMassUpdate(revision) {
     return api.get('/marketplace/import/shopee-gita/mass-update', {
+      params: { revision },
+      responseType: 'blob'
+    })
+  },
+
+  downloadShopeeGitaMassUpdateFile(type, revision) {
+    return api.get(`/marketplace/import/shopee-gita/mass-update/${type}`, {
+      params: { revision },
+      responseType: 'blob'
+    })
+  },
+
+  downloadShopeeGitaExceptions(revision) {
+    return api.get('/marketplace/import/shopee-gita/exceptions', {
+      params: { revision },
       responseType: 'blob'
     })
   },
