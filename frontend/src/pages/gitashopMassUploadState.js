@@ -32,6 +32,68 @@ const UNSAFE_MESSAGE_PATTERN = /authorization|bearer|cookie|html|profile|raw res
 
 export const isMassUploadTerminal = (status) => TERMINAL_STATUSES.has(status)
 
+export const massUploadPreflightWarning = (coverage) => coverage?.isPartial
+  ? 'Export Mass Update ini parsial. Fase 1 tetap fail-closed dan tidak akan membuat listing baru.'
+  : ''
+
+export const canStartMassUploadWithCoverage = (coverage, loadingCoverage) => Boolean(
+  !loadingCoverage && typeof coverage?.revision === 'string' && coverage.revision.trim()
+)
+
+export const refreshCoverageSnapshot = async ({ request, normalize, replace, canPublish = () => true }) => {
+  replace(null)
+
+  try {
+    const coverage = normalize(await request())
+    if (!canPublish()) return { ok: false, ignored: true, coverage: null }
+
+    replace(coverage)
+
+    return { ok: true, ignored: false, coverage }
+  } catch (error) {
+    return canPublish()
+      ? { ok: false, ignored: false, error }
+      : { ok: false, ignored: true, error }
+  }
+}
+
+export const createCoverageRefreshCoordinator = () => {
+  let latestRequestId = 0
+
+  return async ({ request, normalize, replace, setLoading, onError }) => {
+    const requestId = ++latestRequestId
+    setLoading(true)
+    const result = await refreshCoverageSnapshot({
+      request,
+      normalize,
+      replace,
+      canPublish: () => requestId === latestRequestId
+    })
+
+    if (requestId !== latestRequestId || result.ignored) {
+      return { ...result, ok: false, ignored: true }
+    }
+
+    try {
+      if (!result.ok) onError?.(result.error)
+      return result
+    } finally {
+      setLoading(false)
+    }
+  }
+}
+
+export const startMassUploadAfterPreflight = async ({ coverage, confirmPartial, onStart, request }) => {
+  if (!canStartMassUploadWithCoverage(coverage, false)) return { started: false, response: null }
+
+  const warning = massUploadPreflightWarning(coverage)
+  if (warning && !await confirmPartial(warning)) return { started: false, response: null }
+
+  onStart?.()
+
+  return { started: true, response: await request() }
+}
+
 export const formatMassUploadWita = (value) => {
   if (!value) return '-'
 

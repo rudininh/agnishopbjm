@@ -190,6 +190,7 @@ class MarketplaceSyncService
                     'stock_mismatch' => 0,
                     'missing_shopee_stock' => 0,
                     'missing_tiktok_stock' => 0,
+                    'tiktok_sku_conflict' => 0,
                     'incomplete_mapping' => 0,
                     'last_safety_run' => $this->lastSafetyRun(),
                     'disabled' => true,
@@ -220,6 +221,7 @@ class MarketplaceSyncService
                 : ($resolvedTiktokSku && $resolvedTiktokSku->stock_qty !== null ? (int) $resolvedTiktokSku->stock_qty : null);
             $hasShopeeMapping = trim((string) ($row->shopee_product_id ?? '')) !== '' && trim((string) ($row->shopee_sku ?? '')) !== '';
             $hasTiktokSku = $resolvedTiktokSku !== null;
+            $ambiguousTiktokSku = $hasTiktokSku ? null : $this->ambiguousTiktokSkuForShopeeSellerSku($row);
 
             $issueType = null;
             $severity = 'warning';
@@ -232,6 +234,15 @@ class MarketplaceSyncService
                 $issueType = 'missing_shopee_stock';
                 $severity = 'error';
                 $message = 'Stok Shopee belum tersedia di cache.';
+            } elseif ($ambiguousTiktokSku) {
+                $issueType = 'tiktok_sku_conflict';
+                $severity = 'warning';
+                $message = sprintf(
+                    'SKU Shopee %s sudah digunakan TikTok untuk varian %s; varian Shopee %s perlu verifikasi mapping. Stok tidak dipush otomatis.',
+                    trim((string) ($row->shopee_seller_sku ?? '')),
+                    trim((string) ($ambiguousTiktokSku->sku_name ?? '-')),
+                    trim((string) ($row->variant_name ?? '-')),
+                );
             } elseif ((! $hasTiktokSku || $tiktokStock === null) && ($shopeeStock ?? 0) > 0) {
                 $issueType = 'missing_tiktok_stock';
                 $severity = 'error';
@@ -254,8 +265,8 @@ class MarketplaceSyncService
                 'message' => $message,
                 'shopee_product_id' => (string) ($row->shopee_product_id ?? ''),
                 'shopee_model_id' => (string) ($row->shopee_sku ?? ''),
-                'tiktok_product_id' => (string) ($row->tiktok_product_id ?? $resolvedTiktokSku->product_id ?? ''),
-                'tiktok_sku_id' => (string) ($row->tiktok_sku ?? $resolvedTiktokSku->sku_id ?? ''),
+                'tiktok_product_id' => (string) ($row->tiktok_product_id ?? $resolvedTiktokSku->product_id ?? $ambiguousTiktokSku->product_id ?? ''),
+                'tiktok_sku_id' => (string) ($row->tiktok_sku ?? $resolvedTiktokSku->sku_id ?? $ambiguousTiktokSku->sku_id ?? ''),
                 'updated_at' => (string) ($row->updated_at ?? ''),
             ];
         })->filter(fn (array $row): bool => $row['issue_type'] !== null);
@@ -265,6 +276,7 @@ class MarketplaceSyncService
             'stock_mismatch' => $items->where('issue_type', 'stock_mismatch')->count(),
             'missing_shopee_stock' => $items->where('issue_type', 'missing_shopee_stock')->count(),
             'missing_tiktok_stock' => $items->where('issue_type', 'missing_tiktok_stock')->count(),
+            'tiktok_sku_conflict' => $items->where('issue_type', 'tiktok_sku_conflict')->count(),
             'incomplete_mapping' => $items->where('issue_type', 'incomplete_mapping')->count(),
             'last_safety_run' => $this->lastSafetyRun(),
         ];
@@ -1100,6 +1112,12 @@ class MarketplaceSyncService
         $newStock = (int) $stockResult['stock'];
         $this->updateLocalStock($mapping, 'shopee', $newStock);
 
+        $tiktokSku = $this->resolveTiktokSku($mapping);
+        if ($tiktokSku) {
+            $mapping->tiktok_product_id = (string) $tiktokSku->product_id;
+            $mapping->tiktok_sku = (string) $tiktokSku->sku_id;
+        }
+
         $pushResult = $this->pushTargetStock($mapping, 'tiktok', $newStock, $forceLive);
         $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : 'success';
         if ($status === 'error' && str_contains((string) ($pushResult['message'] ?? ''), 'SKU TikTok aktif tidak ditemukan')) {
@@ -1508,16 +1526,19 @@ class MarketplaceSyncService
     {
         $productId = trim((string) ($mapping->tiktok_product_id ?? ''));
         $skuId = trim((string) ($mapping->tiktok_sku ?? ''));
-        $warehouseId = trim((string) config('tiktok.default_warehouse_id', ''));
-        if ($warehouseId === '') {
-            return ['status' => 'error', 'message' => 'Push TikTok gagal: warehouse_id belum lengkap.'];
-        }
         $activeSku = $this->resolveTiktokSku($mapping);
         if (! $activeSku) {
             return ['status' => 'error', 'message' => 'Push TikTok dibatalkan: SKU TikTok aktif tidak ditemukan di cache.'];
         }
         $productId = (string) $activeSku->product_id;
         $skuId = (string) $activeSku->sku_id;
+        $warehouseId = trim((string) config('tiktok.default_warehouse_id', ''));
+        if ($warehouseId === '') {
+            $warehouseId = trim((string) ($activeSku->warehouse_id ?? ''));
+        }
+        if ($warehouseId === '') {
+            return ['status' => 'error', 'message' => 'Push TikTok gagal: warehouse_id belum tersedia pada konfigurasi atau cache SKU.'];
+        }
 
         $token = DB::table('tiktok_tokens')
             ->whereRaw('COALESCE(is_active, true) = true')
@@ -1593,14 +1614,18 @@ class MarketplaceSyncService
             }
         }
 
+        $sellerSkuCandidates = [
+            $mapping->internal_sku ?? null,
+            $mapping->mapped_seller_sku ?? null,
+            $mapping->tiktok_seller_sku ?? null,
+        ];
+        $shopeeSellerSku = trim((string) ($mapping->shopee_seller_sku ?? ''));
+        if ($shopeeSellerSku !== '' && ! $this->hasAmbiguousShopeeSellerSkuFallback($mapping, $shopeeSellerSku)) {
+            $sellerSkuCandidates[] = $shopeeSellerSku;
+        }
         $sellerSkus = array_values(array_unique(array_filter(array_map(
             fn ($value): string => trim((string) $value),
-            [
-                $mapping->internal_sku ?? null,
-                $mapping->mapped_seller_sku ?? null,
-                $mapping->tiktok_seller_sku ?? null,
-                $mapping->shopee_seller_sku ?? null,
-            ]
+            $sellerSkuCandidates
         ))));
         if ($sellerSkus !== []) {
             $activeSku = DB::table('tiktok_products')
@@ -1626,6 +1651,33 @@ class MarketplaceSyncService
             ->first(function ($row) use ($variantName): bool {
                 return $this->normalizeSkuMatchValue((string) ($row->sku_name ?? '')) === $variantName;
             });
+    }
+
+    private function hasAmbiguousShopeeSellerSkuFallback(object $mapping, string $sellerSku): bool
+    {
+        $canonicalSku = $this->canonicalSku($mapping);
+        if ($canonicalSku === '' || $sellerSku === $canonicalSku || ! Schema::hasTable('stock_master')) {
+            return false;
+        }
+
+        return DB::table('stock_master')
+            ->where('shopee_seller_sku', $sellerSku)
+            ->where('internal_sku', '<>', $canonicalSku)
+            ->exists();
+    }
+
+    private function ambiguousTiktokSkuForShopeeSellerSku(object $mapping): ?object
+    {
+        $sellerSku = trim((string) ($mapping->shopee_seller_sku ?? ''));
+        if ($sellerSku === '' || ! $this->hasAmbiguousShopeeSellerSkuFallback($mapping, $sellerSku)) {
+            return null;
+        }
+
+        return DB::table('tiktok_products')
+            ->where('seller_sku', $sellerSku)
+            ->whereRaw('COALESCE(is_active, true) = true')
+            ->orderByDesc('updated_at')
+            ->first();
     }
 
     private function normalizeSkuMatchValue(mixed $value): string

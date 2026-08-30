@@ -6,6 +6,7 @@ $stbWaitSeconds = (int) env('GITASHOP_MASS_UPLOAD_STB_WAIT_SECONDS', 300);
 return [
     'account_key' => 'shopee-gitacollectionbjm',
     'expected_shop_name' => 'Gitashopcollection',
+    'template_directory' => storage_path('app/import-marketplace/shopee-gita'),
     'worker_token' => trim((string) env('GITASHOP_MASS_UPLOAD_WORKER_TOKEN', '')),
     'worker_heartbeat_seconds' => max(10, min(300, $heartbeatSeconds)),
     'worker_claim_seconds' => max(60, min(900, $heartbeatSeconds * 4)),

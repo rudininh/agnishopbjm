@@ -146,7 +146,7 @@
         <button
           class="primary"
           type="button"
-          :disabled="downloadingKey === marketplace.key"
+          :disabled="downloadingKey === marketplace.key || (marketplace.key === 'shopee' && (!shopeeCoverage?.canDownloadMassUpdate || loadingShopeeCoverage || Boolean(downloadingShopeeCoverage)))"
           @click="downloadMassUpdate(marketplace)"
         >
           {{ downloadingKey === marketplace.key ? 'Menyiapkan...' : 'Download Mass Update' }}
@@ -155,7 +155,7 @@
     </section>
 
     <section class="download-panel mass-upload-panel">
-      <div class="panel-head"><h2>Upload Otomatis Gitashopcollection</h2><button class="primary" type="button" :disabled="startingMassUpload || Boolean(massUploadCurrent && !massUploadCurrent.isTerminal)" @click="startMassUpload">{{ startingMassUpload ? 'Memulai...' : 'Upload Otomatis Gitashop' }}</button></div>
+      <div class="panel-head"><h2>Upload Otomatis Gitashopcollection</h2><button class="primary" type="button" :disabled="startingMassUpload || Boolean(massUploadCurrent && !massUploadCurrent.isTerminal) || !canStartMassUploadWithCoverage(shopeeCoverage, loadingShopeeCoverage)" @click="startMassUpload">{{ startingMassUpload ? 'Memulai...' : 'Upload Otomatis Gitashop' }}</button></div>
       <div class="worker-guide">
         <div>
           <strong>Worker PC</strong>
@@ -180,9 +180,91 @@ npm run gitashop-mass-upload-worker</code></pre>
           <h2>Download Mass Update Shopee</h2>
           <p>Gitashopcollection</p>
         </div>
-        <button class="secondary" type="button" @click="downloadUrl(shopeeGitaMassUpdateUrl)">
-          Download Semua ZIP
+        <button
+          class="secondary"
+          type="button"
+          :disabled="!shopeeCoverage?.canDownloadMassUpdate || Boolean(downloadingShopeeCoverage)"
+          @click="downloadCoverageBlob('mass-update')"
+        >
+          {{ downloadingShopeeCoverage === 'mass-update' ? 'Menyiapkan...' : 'Download Mass Update Produk Lama' }}
         </button>
+      </div>
+
+      <div v-if="loadingShopeeCoverage && !shopeeCoverage" class="coverage-loading">Memuat preflight export Shopee...</div>
+      <div v-else-if="shopeeCoverage" class="coverage-preflight">
+        <div class="coverage-summary">
+          <article><span>Sumber</span><strong>{{ shopeeCoverage.sourceProducts }} produk</strong><small>{{ shopeeCoverage.sourceVariants }} varian</small></article>
+          <article><span>Siap Mass Update</span><strong>{{ shopeeCoverage.readyProducts }} produk</strong><small>{{ shopeeCoverage.readyVariants }} varian</small></article>
+          <article><span>Produk Baru</span><strong>{{ coverageStatusCount('new_product') }}</strong><small>varian</small></article>
+          <article><span>Varian Baru</span><strong>{{ coverageStatusCount('new_variant') }}</strong><small>varian</small></article>
+          <article><span>SKU Berubah</span><strong>{{ coverageStatusCount('sku_changed') }}</strong><small>varian</small></article>
+          <article><span>Diblokir</span><strong>{{ coverageStatusCount('blocked') }}</strong><small>varian</small></article>
+        </div>
+
+        <div class="coverage-template">
+          <div>
+            <span>Template Sales Info terakhir diubah</span>
+            <strong>{{ shopeeCoverageTemplateLabel }}</strong>
+          </div>
+          <span v-if="isShopeeCoverageTemplateStale" class="coverage-stale">Template lebih dari 7 hari</span>
+          <button class="secondary mini" type="button" :disabled="loadingShopeeCoverage" @click="loadShopeeCoverage">
+            {{ loadingShopeeCoverage ? 'Memuat...' : 'Refresh Preflight' }}
+          </button>
+        </div>
+
+        <p v-if="shopeeCoverage.isPartial" class="coverage-partial">
+          <strong>Export Mass Update ini parsial</strong>
+          Hanya produk lama yang cocok dengan template aktif yang masuk ke file.
+        </p>
+
+        <div class="coverage-actions">
+          <button
+            class="primary"
+            type="button"
+            :disabled="!shopeeCoverage.canDownloadMassUpdate || Boolean(downloadingShopeeCoverage)"
+            @click="downloadCoverageBlob('mass-update')"
+          >
+            {{ downloadingShopeeCoverage === 'mass-update' ? 'Menyiapkan...' : 'Download Mass Update Produk Lama' }}
+          </button>
+          <button class="secondary creation-download" type="button" disabled>Download Produk Baru Gitashop</button>
+          <p>Memerlukan template resmi Mass Upload Produk Baru Shopee</p>
+          <button
+            class="secondary"
+            type="button"
+            :disabled="!shopeeCoverage.canDownloadExceptions || Boolean(downloadingShopeeCoverage)"
+            @click="downloadCoverageBlob('exceptions')"
+          >
+            {{ downloadingShopeeCoverage === 'exceptions' ? 'Menyiapkan...' : 'Download Laporan Pengecualian' }}
+          </button>
+        </div>
+
+        <div class="coverage-exceptions">
+          <div class="coverage-search">
+            <label>
+              Cari pengecualian
+              <input v-model.trim="shopeeCoverageSearch" type="search" placeholder="Produk, varian, SKU, status, atau alasan" />
+            </label>
+            <span>{{ filteredShopeeCoverageExceptions.length }} pengecualian ditemukan</span>
+          </div>
+          <p v-if="filteredShopeeCoverageExceptions.length > visibleShopeeCoverageExceptions.length" class="coverage-truncated">
+            Menampilkan {{ visibleShopeeCoverageExceptions.length }} dari {{ filteredShopeeCoverageExceptions.length }} pengecualian.
+          </p>
+          <div v-if="visibleShopeeCoverageExceptions.length" class="table-wrap">
+            <table class="coverage-table">
+              <thead><tr><th>Produk</th><th>Varian</th><th>SKU</th><th>Status</th><th>Alasan</th></tr></thead>
+              <tbody>
+                <tr v-for="(item, index) in visibleShopeeCoverageExceptions" :key="`${item.source_seller_sku}:${item.status}:${index}`">
+                  <td>{{ item.product_name || '-' }}</td>
+                  <td>{{ item.variant_name || '-' }}</td>
+                  <td>{{ item.source_seller_sku || '-' }}</td>
+                  <td><span :class="['coverage-status', item.status]">{{ coverageStatusLabel(item.status) }}</span></td>
+                  <td>{{ coverageReasonLabel(item.reason) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="empty">Tidak ada pengecualian yang cocok.</p>
+        </div>
       </div>
 
       <div class="table-wrap">
@@ -204,8 +286,8 @@ npm run gitashop-mass-upload-worker</code></pre>
               <td>{{ file.filename }}</td>
               <td>{{ file.note }}</td>
               <td>
-                <button class="mini" type="button" @click="downloadMassUpdateFile(file)">
-                  Download Excel
+                <button class="mini" type="button" :disabled="Boolean(downloadingShopeeCoverage) || !shopeeCoverage?.canDownloadMassUpdate" @click="downloadMassUpdateFile(file)">
+                  {{ downloadingShopeeCoverage === file.key ? 'Menyiapkan...' : 'Download Excel' }}
                 </button>
               </td>
             </tr>
@@ -278,7 +360,12 @@ npm run gitashop-mass-upload-worker</code></pre>
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { omnichannelService, posService } from '@/services'
-import { toMassUploadViewModel } from './gitashopMassUploadState'
+import { canStartMassUploadWithCoverage, createCoverageRefreshCoordinator, formatMassUploadWita, massUploadPreflightWarning, startMassUploadAfterPreflight, toMassUploadViewModel } from './gitashopMassUploadState'
+import {
+  coverageDownloadFilename,
+  filterShopeeGitaExceptions,
+  toShopeeGitaCoverageViewModel
+} from './shopeeGitaExportCoverageState'
 
 const notice = ref({ type: '', message: '' })
 const downloadingKey = ref('')
@@ -292,15 +379,154 @@ const startingMassUpload = ref(false)
 const wakingMassUploadWorker = ref(false)
 const massUploadCurrent = ref(null)
 const massUploadHistory = ref([])
+const shopeeCoverage = ref(null)
+const loadingShopeeCoverage = ref(false)
+const shopeeCoverageSearch = ref('')
+const downloadingShopeeCoverage = ref('')
+const coordinateShopeeCoverageRefresh = createCoverageRefreshCoordinator()
 let massUploadPolling = null
 
 const downloadingLazada = ref(false)
 const downloadingLazadaAdvanced = ref(false)
 const syncResults = ref([])
-const shopeeGitaMassUpdateUrl = '/api/marketplace/import/shopee-gita/mass-update'
-const shopeeGitaMassUpdateFileUrl = (type) => `${shopeeGitaMassUpdateUrl}/${type}`
 const lazadaMassUpdateUrl = '/api/marketplace/import/lazada/mass-update'
 const lazadaAdvancedUpdateUrl = '/api/marketplace/import/lazada/advanced-update'
+
+const SHOPEE_COVERAGE_VISIBLE_LIMIT = 200
+const SHOPEE_COVERAGE_STATUS_LABELS = {
+  new_product: 'Produk baru',
+  new_variant: 'Varian baru',
+  sku_changed: 'SKU berubah',
+  blocked: 'Diblokir'
+}
+const SHOPEE_COVERAGE_REASON_LABELS = {
+  missing_target_product: 'Produk belum ada pada template target',
+  missing_target_variant: 'Varian belum ada pada produk target',
+  target_variant_sku_changed: 'SKU varian target sudah berubah',
+  duplicate_source_identity: 'Identitas varian sumber duplikat',
+  duplicate_target_sku_mapping: 'Pemetaan SKU target duplikat',
+  duplicate_target_identity: 'Identitas varian target duplikat',
+  ambiguous_target_variant_name: 'Nama varian target tidak unik'
+}
+
+const filteredShopeeCoverageExceptions = computed(() => filterShopeeGitaExceptions(
+  shopeeCoverage.value?.items,
+  shopeeCoverageSearch.value
+))
+const visibleShopeeCoverageExceptions = computed(() => {
+  const filtered = filteredShopeeCoverageExceptions.value
+  if (filtered.length <= SHOPEE_COVERAGE_VISIBLE_LIMIT) return filtered
+
+  const productRepresentatives = []
+  const remainingRows = []
+  const representedProducts = new Set()
+  filtered.forEach((item) => {
+    const productKey = item.product_name || item.source_seller_sku
+    if (!representedProducts.has(productKey) && productRepresentatives.length < SHOPEE_COVERAGE_VISIBLE_LIMIT) {
+      representedProducts.add(productKey)
+      productRepresentatives.push(item)
+    } else {
+      remainingRows.push(item)
+    }
+  })
+
+  return [...productRepresentatives, ...remainingRows].slice(0, SHOPEE_COVERAGE_VISIBLE_LIMIT)
+})
+const shopeeCoverageTemplateLabel = computed(() => formatMassUploadWita(shopeeCoverage.value?.templateLastModifiedAt))
+const isShopeeCoverageTemplateStale = computed(() => {
+  const timestamp = Date.parse(shopeeCoverage.value?.templateLastModifiedAt || '')
+
+  return Number.isFinite(timestamp) && Date.now() - timestamp > 7 * 24 * 60 * 60 * 1000
+})
+
+const coverageStatusCount = (status) => {
+  const value = Number(shopeeCoverage.value?.variantsByStatus?.[status])
+
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+const coverageStatusLabel = (status) => SHOPEE_COVERAGE_STATUS_LABELS[status] || status || '-'
+const coverageReasonLabel = (reason) => SHOPEE_COVERAGE_REASON_LABELS[reason] || reason || '-'
+
+const loadShopeeCoverage = async () => {
+  const result = await coordinateShopeeCoverageRefresh({
+    request: () => omnichannelService.shopeeGitaExportCoverage(),
+    normalize: (response) => {
+      const coverage = toShopeeGitaCoverageViewModel(response.data.data)
+      if (!coverage.revision) throw new Error('Coverage revision is missing.')
+
+      return coverage
+    },
+    replace: (coverage) => { shopeeCoverage.value = coverage },
+    setLoading: (loading) => { loadingShopeeCoverage.value = loading },
+    onError: (error) => {
+      notice.value = {
+        type: 'warning',
+        message: error?.response?.data?.message || 'Preflight export Shopee Gitashopcollection gagal dimuat. Download Shopee tetap dinonaktifkan.'
+      }
+    }
+  })
+
+  return result.ok
+}
+
+const coverageBlobErrorMessage = async (error) => {
+  const payload = error?.response?.data
+
+  if (typeof Blob !== 'undefined' && payload instanceof Blob) {
+    try {
+      const decoded = JSON.parse(await payload.text())
+      if (typeof decoded?.message === 'string' && decoded.message.trim()) return decoded.message.trim()
+    } catch {
+      // Non-JSON error blobs use the safe generic message below.
+    }
+  }
+
+  return typeof payload?.message === 'string' && payload.message.trim()
+    ? payload.message.trim()
+    : 'Download export Shopee Gitashopcollection gagal.'
+}
+
+const downloadCoverageBlob = async (kind, type = '') => {
+  if (!shopeeCoverage.value?.revision) {
+    await loadShopeeCoverage()
+    if (!shopeeCoverage.value?.revision) return
+  }
+
+  const downloadKey = kind === 'file' ? type : kind
+  const revision = shopeeCoverage.value.revision
+  let objectUrl = ''
+  let link = null
+  downloadingShopeeCoverage.value = downloadKey
+
+  try {
+    const response = kind === 'mass-update'
+      ? await omnichannelService.downloadShopeeGitaMassUpdate(revision)
+      : kind === 'exceptions'
+        ? await omnichannelService.downloadShopeeGitaExceptions(revision)
+        : await omnichannelService.downloadShopeeGitaMassUpdateFile(type, revision)
+    const filename = coverageDownloadFilename(kind === 'file' ? type : kind, response.headers)
+    link = document.createElement('a')
+    objectUrl = URL.createObjectURL(response.data)
+    link.href = objectUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    notice.value = { type: 'success', message: `${filename} berhasil disiapkan.` }
+  } catch (error) {
+    if (error?.response?.status === 409) {
+      const refreshed = await loadShopeeCoverage()
+      if (refreshed) {
+        notice.value = { type: 'warning', message: 'Katalog berubah; preflight sudah diperbarui. Silakan download ulang.' }
+      }
+    } else {
+      notice.value = { type: 'warning', message: await coverageBlobErrorMessage(error) }
+    }
+  } finally {
+    link?.remove()
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    downloadingShopeeCoverage.value = ''
+  }
+}
 
 const clearMassUploadPolling = () => {
   if (massUploadPolling) window.clearInterval(massUploadPolling)
@@ -327,9 +553,25 @@ const ensureMassUploadPolling = () => {
 }
 
 const startMassUpload = async () => {
-  startingMassUpload.value = true
+  if (!canStartMassUploadWithCoverage(shopeeCoverage.value, loadingShopeeCoverage.value)) {
+    notice.value = { type: 'warning', message: 'Preflight export Shopee Gitashopcollection belum siap. Muat ulang preflight sebelum upload otomatis.' }
+    return
+  }
+
+  const preflightWarning = massUploadPreflightWarning(shopeeCoverage.value)
   try {
-    const response = await omnichannelService.startShopeeGitaMassUpload()
+    const startResult = await startMassUploadAfterPreflight({
+      coverage: shopeeCoverage.value,
+      confirmPartial: (message) => window.confirm(`${message}\n\nLanjutkan upload otomatis?`),
+      onStart: () => { startingMassUpload.value = true },
+      request: () => omnichannelService.startShopeeGitaMassUpload()
+    })
+    if (!startResult.started) {
+      notice.value = { type: 'warning', message: `Upload otomatis dibatalkan. ${preflightWarning}` }
+      return
+    }
+
+    const response = startResult.response
     massUploadCurrent.value = toMassUploadViewModel(response.data.data)
     const workerStatus = response.data.worker?.status
     notice.value = { type: 'success', message: workerStatus === 'manual_required' ? 'Job dibuat. Jalankan perintah PowerShell pada panduan Worker PC.' : 'Job dibuat dan worker PC sedang dijalankan otomatis.' }
@@ -571,7 +813,7 @@ const downloadUrl = (url) => {
   link.remove()
 }
 
-const downloadMassUpdate = (marketplace) => {
+const downloadMassUpdate = async (marketplace) => {
   if (marketplace.key === 'lazada') {
     downloadLazadaMassUpdate()
     return
@@ -590,10 +832,8 @@ const downloadMassUpdate = (marketplace) => {
     type: 'success',
     message: 'Download Mass Update Shopee Gitashopcollection sedang disiapkan.'
   }
-  downloadUrl(shopeeGitaMassUpdateUrl)
-  window.setTimeout(() => {
-    downloadingKey.value = ''
-  }, 1200)
+  await downloadCoverageBlob('mass-update')
+  downloadingKey.value = ''
 }
 
 const downloadMassUpdateFile = (file) => {
@@ -601,11 +841,11 @@ const downloadMassUpdateFile = (file) => {
     type: 'success',
     message: `Download ${file.name} Shopee Gitashopcollection sedang disiapkan.`
   }
-  downloadUrl(shopeeGitaMassUpdateFileUrl(file.key))
+  downloadCoverageBlob('file', file.key)
 }
 
 onMounted(async () => {
-  await Promise.all([loadProducts(), refreshMassUpload()])
+  await Promise.all([loadProducts(), refreshMassUpload(), loadShopeeCoverage()])
   ensureMassUploadPolling()
 })
 onBeforeUnmount(clearMassUploadPolling)
@@ -665,6 +905,31 @@ button { border:0; border-radius:6px; cursor:pointer; font-weight:800; padding:1
 .mini { background:#0f5fc7; color:#fff; min-width:126px; padding:8px 11px; }
 button:disabled { cursor:wait; opacity:.72; }
 .download-panel { background:#fff; border:1px solid #e2e8f0; border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); margin-top:16px; overflow:hidden; }
+.coverage-loading { color:#64748b; font-size:14px; font-weight:700; padding:18px 16px; }
+.coverage-preflight { border-bottom:1px solid #e2e8f0; display:grid; gap:14px; padding:16px; }
+.coverage-summary { display:grid; gap:10px; grid-template-columns:repeat(6,minmax(0,1fr)); }
+.coverage-summary article { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; display:grid; gap:4px; padding:12px; }
+.coverage-summary span,.coverage-summary small,.coverage-template span { color:#64748b; font-size:12px; font-weight:800; }
+.coverage-summary strong { color:#0f172a; font-size:18px; line-height:1.2; }
+.coverage-template { align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; display:flex; gap:12px; justify-content:space-between; padding:12px; }
+.coverage-template div { display:grid; gap:4px; }
+.coverage-template strong { font-size:14px; }
+.coverage-stale { background:#fee2e2; border:1px solid #fecaca; border-radius:999px; color:#991b1b !important; padding:5px 9px; }
+.coverage-partial { background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; color:#9a3412; display:grid; gap:3px; padding:12px; }
+.coverage-actions { align-items:center; display:grid; gap:8px; grid-template-columns:max-content max-content minmax(180px,1fr) max-content; }
+.coverage-actions p { color:#64748b; font-size:12px; font-weight:700; }
+.creation-download:disabled { cursor:not-allowed; }
+.coverage-exceptions { border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
+.coverage-search { align-items:end; background:#f8fafc; display:flex; gap:12px; justify-content:space-between; padding:12px; }
+.coverage-search label { color:#475569; display:grid; flex:1; font-size:12px; font-weight:900; gap:6px; max-width:560px; }
+.coverage-search span,.coverage-truncated { color:#64748b; font-size:12px; font-weight:700; }
+.coverage-truncated { border-top:1px solid #e2e8f0; padding:10px 12px; }
+.coverage-table td:last-child,.coverage-table th:last-child { text-align:left; width:auto; }
+.coverage-status { border-radius:999px; display:inline-block; font-size:12px; font-weight:800; margin:0; padding:4px 8px; }
+.coverage-status.new_product { background:#ede9fe; color:#6d28d9; }
+.coverage-status.new_variant { background:#dbeafe; color:#1d4ed8; }
+.coverage-status.sku_changed { background:#fef3c7; color:#92400e; }
+.coverage-status.blocked { background:#fee2e2; color:#991b1b; }
 .mass-upload-content,.mass-upload-history { padding:16px; }
 .mass-upload-history { border-top:1px solid #e2e8f0; }
 .mass-upload-history h3 { font-size:16px; margin-bottom:10px; }
@@ -692,7 +957,9 @@ td span { color:#64748b; display:block; font-size:12px; margin-top:3px; }
 td:last-child, th:last-child { text-align:right; width:150px; }
 @media (max-width:1100px) {
   .market-grid { grid-template-columns:1fr; }
-  .sync-layout,.sync-toolbar { grid-template-columns:1fr; }
+  .sync-layout,.sync-toolbar,.coverage-summary { grid-template-columns:1fr; }
+  .coverage-actions { align-items:stretch; grid-template-columns:1fr; }
+  .coverage-template,.coverage-search { align-items:flex-start; flex-direction:column; }
   .sync-cart { position:static; }
   .panel-head { align-items:flex-start; flex-direction:column; }
   td:last-child, th:last-child { text-align:left; }

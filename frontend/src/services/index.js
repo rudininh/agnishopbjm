@@ -165,6 +165,14 @@ export const omnichannelService = {
     return api.post('/tiktok/bulk-missing-variants/submit', data)
   },
 
+  previewShopeeSkuTiktokCleanup() {
+    return api.post('/tiktok/bulk-missing-variants/sku-cleanup/preview')
+  },
+
+  submitShopeeSkuTiktokCleanup(runId, revision) {
+    return api.post(`/tiktok/bulk-missing-variants/sku-cleanup/${encodeURIComponent(runId)}/submit`, { revision })
+  },
+
   tiktokVariantReconciliationProducts() { return api.get('/tiktok/variant-reconciliation/products') },
   tiktokVariantReconciliationOverview() { return api.get('/tiktok/variant-reconciliation/overview') },
   tiktokVariantReconciliationPreview(params) { return api.get('/tiktok/variant-reconciliation/preview', { params }) },
@@ -372,8 +380,27 @@ export const omnichannelService = {
     return api.post('/marketplace/auto-sync/poll-tiktok-orders', { hours })
   },
 
-  downloadShopeeGitaMassUpdate() {
+  shopeeGitaExportCoverage() {
+    return api.get('/marketplace/import/shopee-gita/coverage')
+  },
+
+  downloadShopeeGitaMassUpdate(revision) {
     return api.get('/marketplace/import/shopee-gita/mass-update', {
+      params: { revision },
+      responseType: 'blob'
+    })
+  },
+
+  downloadShopeeGitaMassUpdateFile(type, revision) {
+    return api.get(`/marketplace/import/shopee-gita/mass-update/${type}`, {
+      params: { revision },
+      responseType: 'blob'
+    })
+  },
+
+  downloadShopeeGitaExceptions(revision) {
+    return api.get('/marketplace/import/shopee-gita/exceptions', {
+      params: { revision },
       responseType: 'blob'
     })
   },
@@ -416,6 +443,10 @@ export const omnichannelService = {
 
   syncGitaOrderItem(itemId) {
     return api.post(`/gita-order-scrapes/items/${itemId}/sync`, {}, { skipAuthRedirect: true })
+  },
+
+  pullStbMarketplaceTokens() {
+    return api.post('/runtime/pull-stb-marketplace-tokens')
   },
 
   runTokenAction(action) {

@@ -112,8 +112,15 @@ class ShopeeMassUploadManifestService
                 ];
             }
 
-            if (count($sources) !== count($mappings) || array_diff_key($sources, $mappings) !== [] || array_diff_key($mappings, $sources) !== []) {
-                throw new RuntimeException('Cakupan template Gitashop tidak sama dengan katalog sumber Shopee.');
+            $missingSourceKeys = array_diff_key($sources, $mappings);
+            $staleTargetKeys = array_diff_key($mappings, $sources);
+            if ($missingSourceKeys !== [] || $staleTargetKeys !== []) {
+                throw new RuntimeException(sprintf(
+                    'Template Gitashop belum mencakup %d dari %d varian sumber; %d baris target sudah tidak cocok. Periksa preflight Download Mass Update.',
+                    count($missingSourceKeys),
+                    count($sources),
+                    count($staleTargetKeys),
+                ));
             }
 
             $now = now();

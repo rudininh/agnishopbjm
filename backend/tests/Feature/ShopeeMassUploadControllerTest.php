@@ -11,6 +11,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Config;
 use Mockery;
+use RuntimeException;
 use Tests\TestCase;
 
 class ShopeeMassUploadControllerTest extends TestCase
@@ -177,6 +178,38 @@ class ShopeeMassUploadControllerTest extends TestCase
         $completed = $service->job($job->id);
         $this->assertSame('menunggu_verifikasi', $completed['status']);
         $this->assertNull($service->current());
+    }
+
+    public function test_claim_cancels_safely_with_the_actionable_coverage_message_without_creating_upload_files(): void
+    {
+        $generator = Mockery::mock(ShopeeGitaMassUpdateGenerator::class);
+        $generator->shouldNotReceive('generate');
+        $guard = Mockery::mock(ShopeeMassUploadStbGuard::class);
+        $guard->shouldReceive('acquireForJob')->once()->andReturnTrue();
+        $guard->shouldReceive('releaseForJob')->once();
+        $manifest = Mockery::mock(ShopeeMassUploadManifestService::class);
+        $manifest->shouldReceive('refreshSource')->once()->andReturn([
+            'products' => 2,
+            'variants' => 2,
+            'refreshed_at' => '2026-08-29 10:30:00',
+        ]);
+        $manifest->shouldReceive('buildForJob')->once()->andThrow(new RuntimeException(
+            'Template Gitashop belum mencakup 1 dari 2 varian sumber; 0 baris target sudah tidak cocok. Periksa preflight Download Mass Update.'
+        ));
+        $this->app->instance(ShopeeGitaMassUpdateGenerator::class, $generator);
+        $this->app->instance(ShopeeMassUploadStbGuard::class, $guard);
+        $this->app->instance(ShopeeMassUploadManifestService::class, $manifest);
+
+        $service = app(ShopeeMassUploadService::class);
+        $job = $service->create();
+
+        $this->assertNull($service->claim('worker-test'));
+        $this->assertDatabaseCount('shopee_mass_upload_files', 0);
+        $this->assertDatabaseHas('shopee_mass_upload_jobs', [
+            'id' => $job->id,
+            'status' => 'dibatalkan_aman',
+            'message' => 'Template Gitashop belum mencakup 1 dari 2 varian sumber; 0 baris target sudah tidak cocok. Periksa preflight Download Mass Update.',
+        ]);
     }
 
     public function test_worker_can_reconcile_a_verified_terminal_file_and_resume_the_next_file(): void

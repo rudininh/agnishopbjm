@@ -2,6 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\TiktokPartialEditSkuPayloadBuilder;
+use App\Services\ShopeeSellerSkuTemplate;
+use App\Services\ShopeeSkuTiktokVariantCleanupService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
@@ -3266,7 +3269,7 @@ class OmnichannelController extends Controller
 
     private function buildShopeeTemplateSellerSku(string $itemId, string $variantName): string
     {
-        return 'INT-'.trim($itemId).'-'.$this->sanitizeSkuFragment($variantName);
+        return app(ShopeeSellerSkuTemplate::class)->build($itemId, $variantName);
     }
 
     private function shopeeModelVariationCode(string $itemId, object $model): string
@@ -3702,15 +3705,22 @@ class OmnichannelController extends Controller
 
                         if ($existingSellerSkus->contains($sellerSku)) {
                             $tiktokSku = $tiktokSkusBySellerSku->get($sellerSku, []);
+                            $shopeeVariantName = trim((string) ($row->shopee_variant_name ?? ''));
+                            $tiktokVariantName = trim((string) ($tiktokSku['sku_name'] ?? ''));
+                            $hasVariantNameConflict = $shopeeVariantName !== ''
+                                && $tiktokVariantName !== ''
+                                && $this->normalizeTiktokVariantReconciliationName($shopeeVariantName) !== $this->normalizeTiktokVariantReconciliationName($tiktokVariantName);
                             $mappingOnlyVariants->push([
                                 'shopee_item_id' => trim((string) ($row->shopee_item_id ?? '')),
                                 'shopee_model_id' => $modelId,
-                                'variant_name' => trim((string) ($row->shopee_variant_name ?? '')),
+                                'variant_name' => $shopeeVariantName,
                                 'seller_sku' => $sellerSku,
                                 'image_url' => $imageUrl,
                                 'tiktok_sku_id' => $tiktokSku['sku_id'] ?? null,
-                                'tiktok_variant_name' => $tiktokSku['sku_name'] ?? null,
-                                'reason' => 'SKU sudah ada di TikTok; mapping belum tersambung.',
+                                'tiktok_variant_name' => $tiktokVariantName ?: null,
+                                'reason' => $hasVariantNameConflict
+                                    ? 'SKU sudah ada di TikTok, tetapi nama varian berbeda; perlu verifikasi mapping.'
+                                    : 'SKU sudah ada di TikTok; mapping belum tersambung.',
                             ]);
                             return null;
                         }
@@ -6053,6 +6063,7 @@ class OmnichannelController extends Controller
             $sellerSku = $this->extractTiktokSellerSku($sku);
             $price = (int) data_get($sku, 'price.sale_price', data_get($sku, 'price', 0));
             $stock = (int) data_get($sku, 'inventory.0.quantity', data_get($sku, 'stock', 0));
+            $warehouseId = trim((string) data_get($sku, 'inventory.0.warehouse_id', data_get($sku, 'inventory.0.warehouse.id', '')));
             $skuImageUrl = $this->cacheMarketplaceImageUrl($this->extractTiktokSkuImageUrl($sku), 'tiktok', $productId, $skuId !== '' ? $skuId : $skuName);
             $skuKey = $skuId !== '' ? $skuId : $skuName;
             $matchAttributes = $skuId !== ''
@@ -6071,6 +6082,7 @@ class OmnichannelController extends Controller
                     'image_url' => $skuImageUrl,
                     'sku_name' => $skuName,
                     'seller_sku' => $sellerSku,
+                    'warehouse_id' => $warehouseId !== '' ? $warehouseId : null,
                     'stock_qty' => $stock,
                     'price' => $price,
                     'subtotal' => $price * $stock,
@@ -6642,6 +6654,7 @@ class OmnichannelController extends Controller
                 image_url TEXT NULL,
                 sku_name TEXT NULL,
                 seller_sku TEXT NULL,
+                warehouse_id TEXT NULL,
                 stock_qty INTEGER DEFAULT 0,
                 price BIGINT DEFAULT 0,
                 subtotal BIGINT DEFAULT 0,
@@ -6655,6 +6668,7 @@ class OmnichannelController extends Controller
 
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS sku_id TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS seller_sku TEXT NULL");
+        DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS warehouse_id TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS product_status TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS audit_status TEXT NULL");
         DB::statement("ALTER TABLE tiktok_products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE");
@@ -6675,6 +6689,10 @@ class OmnichannelController extends Controller
 
     private function ensureSkuMappingTables(): void
     {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return;
+        }
+
         $this->ensureShopeeProductTables();
         $this->ensureTiktokProductTables();
         $this->ensureSkuVariantActionTables();
@@ -6775,6 +6793,10 @@ class OmnichannelController extends Controller
 
     private function ensureSkuMappingVisibilityColumns(): void
     {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return;
+        }
+
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS is_hidden_from_mapping BOOLEAN DEFAULT FALSE");
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS hidden_from_mapping_reason TEXT NULL");
         DB::statement("ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS hidden_from_mapping_at TIMESTAMP NULL");
@@ -6813,35 +6835,38 @@ class OmnichannelController extends Controller
         $perPage = max(1, min(5000, (int) $request->query('per_page', 10)));
         $page = max(1, (int) $request->query('page', 1));
         $compact = $request->boolean('compact');
+        $shopeeItemIdExpression = "CAST(NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '') AS BIGINT)";
 
         $query = DB::table('stock_master as sm')
             ->leftJoin('sku_mappings as map', 'map.stock_master_id', '=', 'sm.id')
             ->leftJoin('shopee_product_model as spm', function ($join) {
                 $join->on('spm.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
             })
-            ->leftJoin('shopee_product as sp', function ($join) {
-                $join->on('sp.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+            ->leftJoin('shopee_product as sp', function ($join) use ($shopeeItemIdExpression) {
+                $join->on('sp.item_id', '=', DB::raw($shopeeItemIdExpression))
                     ->whereRaw('COALESCE(sp.is_active, true) = true');
             })
-            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join) {
-                $join->on('spmi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"))
+            ->leftJoin(DB::raw('(SELECT item_id, model_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NOT NULL GROUP BY item_id, model_id) as spmi'), function ($join) use ($shopeeItemIdExpression) {
+                $join->on('spmi.item_id', '=', DB::raw($shopeeItemIdExpression))
                     ->on('spmi.model_id', '=', DB::raw("COALESCE(NULLIF(map.shopee_model_id, ''), NULLIF(sm.shopee_sku, ''))"));
             })
-            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) {
-                $join->on('spi.item_id', '=', DB::raw("NULLIF(COALESCE(NULLIF(map.shopee_item_id, ''), NULLIF(sm.shopee_product_id, '')), '')::BIGINT"));
+            ->leftJoin(DB::raw('(SELECT item_id, MIN(image_url) as image_url FROM shopee_product_image WHERE model_id IS NULL GROUP BY item_id) as spi'), function ($join) use ($shopeeItemIdExpression) {
+                $join->on('spi.item_id', '=', DB::raw($shopeeItemIdExpression));
             })
             ->leftJoin(DB::raw("(
-                SELECT DISTINCT ON (stock_master_id)
-                    stock_master_id,
-                    target_channel,
-                    source_channel,
-                    action_type,
-                    status AS variant_action_status,
-                    payload AS variant_action_payload,
-                    created_at,
-                    updated_at
-                FROM sku_variant_actions
-                ORDER BY stock_master_id, created_at DESC, id DESC
+                SELECT stock_master_id, target_channel, source_channel, action_type,
+                    status AS variant_action_status, payload AS variant_action_payload,
+                    created_at, updated_at
+                FROM (
+                    SELECT stock_master_id, target_channel, source_channel, action_type,
+                        status, payload, created_at, updated_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY stock_master_id
+                            ORDER BY created_at DESC, id DESC
+                        ) AS row_number
+                    FROM sku_variant_actions
+                ) latest_variant_actions
+                WHERE row_number = 1
             ) as sva"), function ($join) {
                 $join->on('sva.stock_master_id', '=', 'sm.id');
             })
@@ -7335,6 +7360,10 @@ class OmnichannelController extends Controller
 
     private function autoHideInactiveStockMasterMappings(): int
     {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return 0;
+        }
+
         if (! Schema::hasTable('stock_master')) {
             return 0;
         }
@@ -8544,6 +8573,49 @@ class OmnichannelController extends Controller
                 ->values(),
         ]);
     }
+
+    public function previewShopeeSkuTiktokCleanup(
+        ShopeeSkuTiktokVariantCleanupService $service,
+    ): JsonResponse {
+        $this->ensureSkuMappingTables();
+        $groups = $this->tiktokBulkCandidateGroups(true);
+
+        return response()->json($service->createPreview($groups));
+    }
+
+    public function submitShopeeSkuTiktokCleanup(
+        Request $request,
+        string $runId,
+        ShopeeSkuTiktokVariantCleanupService $service,
+    ): JsonResponse {
+        $revision = $request->input('revision');
+        if (! is_string($revision) || strlen($revision) !== 64) {
+            return response()->json([
+                'message' => 'The revision field must be 64 characters.',
+                'errors' => ['revision' => ['The revision field must be 64 characters.']],
+            ], 422);
+        }
+
+        set_time_limit(0);
+        $this->autoRefreshMarketplaceTokens();
+
+        $run = $service->loadRun($runId);
+        $currentGroups = ($run['status'] ?? null) === 'ready_for_review'
+            && hash_equals((string) ($run['revision'] ?? ''), $revision)
+            ? $this->tiktokBulkCandidateGroups(true)
+            : collect();
+        $result = $service->submit($runId, $revision, $currentGroups);
+        $status = match ($result['status'] ?? null) {
+            'not_found' => 404,
+            'stale_revision' => 409,
+            'busy', 'claimed' => 423,
+            'partial', 'failed', 'completed' => 200,
+            default => 500,
+        };
+
+        return response()->json($result, $status);
+    }
+
     public function bulkSubmitTiktokMissingVariants(Request $request): JsonResponse
     {
         set_time_limit(0);
@@ -9394,45 +9466,30 @@ class OmnichannelController extends Controller
 
     private function buildTiktokPartialEditSkuDeleteRows(array $productDetail, string $targetSkuId, array $excludedSkuIds = []): array
     {
-        $rows = [];
-        $targetFound = false;
-        $productId = trim((string) ($productDetail['id'] ?? $productDetail['product_id'] ?? ''));
-        $excludedKeys = collect([...array_values($excludedSkuIds), $targetSkuId])
-            ->map(fn (mixed $value): string => $this->normalizeSkuMatchValue($value))
-            ->filter()
+        $availableSkuKeys = collect($this->normalizeTiktokSkuList($productDetail))
+            ->filter(fn (mixed $sku): bool => is_array($sku))
+            ->map(fn (array $sku): string => $this->normalizeTiktokSkuIdIdentity($sku['id'] ?? $sku['sku_id'] ?? null))
+            ->filter(fn (string $skuId): bool => $skuId !== '')
             ->flip()
             ->all();
+        $presentExclusions = collect($excludedSkuIds)
+            ->filter(fn (mixed $skuId): bool => isset($availableSkuKeys[$this->normalizeTiktokSkuIdIdentity($skuId)]))
+            ->values()
+            ->all();
 
-        foreach ($this->normalizeTiktokSkuList($productDetail) as $sku) {
-            if (! is_array($sku)) {
-                continue;
-            }
-
-            $skuId = trim((string) ($sku['id'] ?? $sku['sku_id'] ?? ''));
-            if ($skuId === '') {
-                continue;
-            }
-
-            if ($skuId === $targetSkuId) {
-                $targetFound = true;
-                continue;
-            }
-
-            if (isset($excludedKeys[$this->normalizeSkuMatchValue($skuId)])) {
-                continue;
-            }
-
-            $row = $this->buildTiktokPartialEditSkuKeepRow($sku, null, $productId);
-
-            $salesAttributes = data_get($sku, 'sales_attributes', data_get($sku, 'sale_attributes', []));
-            if (is_array($salesAttributes) && $salesAttributes !== []) {
-                $row['sales_attributes'] = $salesAttributes;
-            }
-
-            $rows[] = $row;
+        try {
+            return app(TiktokPartialEditSkuPayloadBuilder::class)
+                ->deleteSkuIds($productDetail, [$targetSkuId, ...$presentExclusions])['skus'];
+        } catch (\RuntimeException) {
+            return [];
         }
+    }
 
-        return $targetFound ? $rows : [];
+    private function normalizeTiktokSkuIdIdentity(mixed $value): string
+    {
+        $value = is_string($value) ? trim($value) : '';
+
+        return preg_match('/[a-z0-9]/i', $value) === 1 ? $value : '';
     }
 
     private function buildTiktokPartialEditSkuKeepRow(array $sku, ?string $sellerSkuOverride = null, string $productId = ''): array
@@ -11473,8 +11530,8 @@ class OmnichannelController extends Controller
                 'merchant_id' => $token->merchant_id,
                 'supplier_id' => $token->supplier_id,
                 'user_id' => $token->user_id,
-                'access_token' => $this->maskToken($token->access_token),
-                'refresh_token' => $this->maskToken($token->refresh_token),
+                'access_token_available' => trim((string) $token->access_token) !== '',
+                'refresh_token_available' => trim((string) $token->refresh_token) !== '',
                 'expire_in' => $token->expire_in,
                 'expire_at' => $token->expire_at,
                 'access_token_expire_at' => $token->access_token_expire_at,
@@ -11529,8 +11586,8 @@ class OmnichannelController extends Controller
                     'account_key' => $accountKey,
                     'account_name' => $row['account_name'] ?? 'TikTok AgniShopBJM',
                     'shop_id' => $row['shop_id'] ?? $row['seller_id'] ?? $row['shop_cipher'] ?? null,
-                    'access_token' => $this->maskToken($row['access_token'] ?? null),
-                    'refresh_token' => $this->maskToken($row['refresh_token'] ?? null),
+                    'access_token_available' => trim((string) ($row['access_token'] ?? '')) !== '',
+                    'refresh_token_available' => trim((string) ($row['refresh_token'] ?? '')) !== '',
                     'expire_in' => $row['expire_in'] ?? $row['expires_in'] ?? null,
                     'expire_at' => $row['expire_at'] ?? $row['access_token_expire_at'] ?? null,
                     'request_id' => $row['request_id'] ?? null,
@@ -12637,6 +12694,10 @@ class OmnichannelController extends Controller
             return;
         }
 
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return;
+        }
+
         foreach ([
             'access_token_expire_at TIMESTAMP NULL',
             'refresh_token_expire_at TIMESTAMP NULL',
@@ -12729,6 +12790,10 @@ class OmnichannelController extends Controller
 
     private function ensureTiktokAuthTables(): void
     {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return;
+        }
+
         $this->ensureTiktokProductTables();
 
         DB::statement("

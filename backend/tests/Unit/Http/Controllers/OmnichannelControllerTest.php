@@ -3,6 +3,7 @@
 namespace Tests\Unit\Http\Controllers;
 
 use App\Http\Controllers\OmnichannelController;
+use App\Services\ShopeeSellerSkuTemplate;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -235,6 +236,32 @@ class OmnichannelControllerTest extends TestCase
         $this->assertCount(1, $groups->first()['variants']);
         $this->assertSame(['SH-RED'], $groups->first()['variants']->pluck('seller_sku')->all());
         $this->assertSame('1', $groups->first()['variants']->first()['shopee_model_id']);
+    }
+
+    public function test_tiktok_bulk_candidates_flag_variant_name_conflicts_for_manual_mapping_review(): void
+    {
+        $groups = $this->tiktokBulkMissingVariantCandidates(collect([
+            (object) [
+                'tiktok_product_id' => '900',
+                'product_name' => 'Produk A',
+                'shopee_item_id' => '100',
+                'shopee_model_id' => '1',
+                'shopee_model_sku' => 'SH-BURGANDY',
+                'shopee_variant_name' => 'Seameson',
+                'shopee_image_url' => 'https://cdn.example/seameson.jpg',
+                'tiktok_seller_skus' => ['SH-BURGANDY'],
+                'tiktok_skus' => [[
+                    'seller_sku' => 'SH-BURGANDY',
+                    'sku_id' => 'TT-1',
+                    'sku_name' => 'Burgandy uk M',
+                ]],
+            ],
+        ]));
+
+        $variant = $groups->first()['mapping_only_variants']->first();
+
+        $this->assertSame('TT-1', $variant['tiktok_sku_id']);
+        $this->assertSame('SKU sudah ada di TikTok, tetapi nama varian berbeda; perlu verifikasi mapping.', $variant['reason']);
     }
 
     public function test_linked_tiktok_seller_sku_lookup_ignores_variant_name_mismatch(): void
@@ -509,6 +536,20 @@ class OmnichannelControllerTest extends TestCase
         $this->assertSame('App\\Http\\Controllers\\OmnichannelController@bulkSubmitTiktokMissingVariants', $submit->getActionName());
     }
 
+    public function test_shopee_sku_tiktok_cleanup_routes_are_registered(): void
+    {
+        $routes = collect(app('router')->getRoutes()->getRoutes());
+        $preview = $routes->first(fn ($route) => in_array('POST', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/bulk-missing-variants/sku-cleanup/preview');
+        $submit = $routes->first(fn ($route) => in_array('POST', $route->methods(), true)
+            && $route->uri() === 'api/tiktok/bulk-missing-variants/sku-cleanup/{runId}/submit');
+
+        $this->assertNotNull($preview);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@previewShopeeSkuTiktokCleanup', $preview->getActionName());
+        $this->assertNotNull($submit);
+        $this->assertSame('App\\Http\\Controllers\\OmnichannelController@submitShopeeSkuTiktokCleanup', $submit->getActionName());
+    }
+
     public function test_tiktok_variant_reconciliation_routes_are_registered(): void
     {
         $routes = collect(app('router')->getRoutes()->getRoutes());
@@ -525,9 +566,11 @@ class OmnichannelControllerTest extends TestCase
     {
         $canonical = $this->invokeControllerMethod('canonicalShopeeVariantSellerSku', ['100', 'Rose_Gold']);
         $template = $this->invokeControllerMethod('buildShopeeTemplateSellerSku', ['100', 'Rose_Gold']);
+        $sharedTemplate = (new ShopeeSellerSkuTemplate())->build('100', 'Rose_Gold');
 
         $this->assertSame('INT-100-ROSE_GOLD', $canonical);
         $this->assertSame($template, $canonical);
+        $this->assertSame($sharedTemplate, $template);
     }
 
     public function test_global_reconciliation_overview_lists_explicit_variant_anomalies(): void
@@ -993,6 +1036,112 @@ class OmnichannelControllerTest extends TestCase
 
         $this->assertSame('Deskripsi TikTok asli.', $description);
         $this->assertSame('', $blank);
+    }
+
+    public function test_tiktok_delete_helper_delegates_trimmed_multi_target_payload_building_without_changing_row_contract(): void
+    {
+        Http::fake();
+        $greenSku = $this->tiktokPartialEditFixtureSku([
+            'id' => 'tt-green',
+            'seller_sku' => 'INT-42-GREEN',
+        ]);
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'id' => 'tt-product-42',
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-blue']),
+                $greenSku,
+            ],
+        ], ' tt-old-red ', ['tt-old-blue', ' tt-old-blue ']]);
+
+        $this->assertSame([[
+            'id' => 'tt-green',
+            'seller_sku' => 'INT-42-GREEN',
+            'price' => [
+                'currency' => 'IDR',
+                'sale_price' => '48000',
+                'tax_exclusive_price' => '48000',
+                'amount' => '48000',
+            ],
+            'inventory' => [[
+                'quantity' => 3,
+                'warehouse_id' => 'warehouse-1',
+            ]],
+            'sales_attributes' => $greenSku['sales_attributes'],
+        ]], $rows);
+        Http::assertNothingSent();
+    }
+
+    public function test_tiktok_delete_helper_preserves_empty_row_contract_when_a_target_is_missing(): void
+    {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [$this->tiktokPartialEditFixtureSku()],
+        ], 'missing-target', []]);
+
+        $this->assertSame([], $rows);
+        Http::assertNothingSent();
+    }
+
+    public function test_tiktok_delete_helper_ignores_historical_exclusions_already_absent_from_fresh_detail(): void
+    {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-green', 'seller_sku' => 'INT-42-GREEN']),
+            ],
+        ], 'tt-old-red', ['tt-already-deleted']]);
+
+        $this->assertSame(['tt-green'], array_column($rows, 'id'));
+        Http::assertNothingSent();
+    }
+
+    public function test_tiktok_delete_helper_keeps_present_zero_string_historical_exclusion(): void
+    {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => '0']),
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-green', 'seller_sku' => 'INT-42-GREEN']),
+            ],
+        ], 'tt-old-red', ['0']]);
+
+        $this->assertSame(['tt-green'], array_column($rows, 'id'));
+        Http::assertNothingSent();
+    }
+
+    /**
+     * @dataProvider distinctHistoricalExclusionProvider
+     */
+    public function test_tiktok_delete_helper_ignores_case_or_punctuation_distinct_historical_exclusions(
+        string $freshSkuId,
+        string $historicalExclusion
+    ): void {
+        Http::fake();
+
+        $rows = $this->invokeControllerMethod('buildTiktokPartialEditSkuDeleteRows', [[
+            'skus' => [
+                $this->tiktokPartialEditFixtureSku(['id' => 'tt-old-red']),
+                $this->tiktokPartialEditFixtureSku(['id' => $freshSkuId]),
+            ],
+        ], 'tt-old-red', [$historicalExclusion]]);
+
+        $this->assertSame([$freshSkuId], array_column($rows, 'id'));
+        Http::assertNothingSent();
+    }
+
+    public static function distinctHistoricalExclusionProvider(): array
+    {
+        return [
+            'punctuation-distinct' => ['a-b', 'a_b'],
+            'case-distinct' => ['ABC', 'abc'],
+        ];
     }
 
     public function test_tiktok_existing_product_partial_edit_batch_mutation_appends_all_new_skus(): void

@@ -2,12 +2,266 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 
 class MarketplaceApiService
 {
     private array $shopeeModelStockCache = [];
+
+    public function fetchTiktokProduct(string $productId): array
+    {
+        $productId = trim($productId);
+        $path = '/product/202309/products/'.$productId;
+        $request = ['method' => 'GET', 'path' => $path, 'body' => null];
+        $context = $this->activeTiktokContext();
+
+        if (($context['status'] ?? '') !== 'success') {
+            return $this->catalogResult(false, (string) ($context['message'] ?? 'Konteks TikTok belum tersedia.'), [
+                'product_id' => $productId,
+                'product' => null,
+            ], $request, []);
+        }
+
+        $shopId = trim((string) ($context['shop_id'] ?? ''));
+        if ($shopId === '') {
+            return $this->catalogResult(false, 'Shop ID TikTok belum tersedia.', [
+                'product_id' => $productId,
+                'product' => null,
+            ], $request, []);
+        }
+
+        $query = [
+            'app_key' => $context['config']['app_key'],
+            'shop_cipher' => $context['shop_cipher'],
+            'shop_id' => $shopId,
+            'timestamp' => time(),
+            'version' => '202309',
+        ];
+        $query['sign'] = $this->generateTiktokSign($path, $query, (string) $context['config']['app_secret']);
+
+        try {
+            $httpResponse = Http::timeout(45)
+                ->withHeaders([
+                    'x-tts-access-token' => $context['access_token'],
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                ])
+                ->get($context['config']['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+        } catch (ConnectionException) {
+            return $this->catalogResult(false, 'Koneksi ke TikTok gagal.', [
+                'product_id' => $productId,
+                'product' => null,
+            ], $request, []);
+        }
+        $response = $httpResponse->json();
+
+        if (! is_array($response)) {
+            return $this->catalogResult(false, 'TikTok tidak mengembalikan JSON valid.', [
+                'product_id' => $productId,
+                'product' => null,
+            ], $request, [
+                'code' => $httpResponse->status(),
+                'message' => 'TikTok tidak mengembalikan JSON valid.',
+            ]);
+        }
+
+        $marketplaceOk = $httpResponse->successful() && (int) ($response['code'] ?? -1) === 0;
+        $product = data_get($response, 'data.product');
+        $productIsValid = is_array($product) && $product !== [] && ! array_is_list($product);
+        $ok = $marketplaceOk && $productIsValid;
+
+        return $this->catalogResult(
+            $ok,
+            $ok
+                ? 'Detail produk TikTok berhasil diambil.'
+                : $this->marketplaceFailureMessage(
+                    $response,
+                    $marketplaceOk
+                        ? 'Detail produk TikTok tidak valid.'
+                        : ($httpResponse->successful() ? 'Detail produk TikTok gagal diambil.' : 'TikTok merespons HTTP '.$httpResponse->status().'.'),
+                ),
+            ['product_id' => $productId, 'product' => $productIsValid ? $product : null],
+            $request,
+            $response,
+        );
+    }
+
+    public function partialEditTiktokProduct(string $productId, array $payload): array
+    {
+        $productId = trim($productId);
+        $path = '/product/202509/products/'.$productId.'/partial_edit';
+        $request = ['method' => 'POST', 'path' => $path, 'body' => $payload];
+        $context = $this->activeTiktokContext();
+
+        if (($context['status'] ?? '') !== 'success') {
+            return $this->catalogResult(false, (string) ($context['message'] ?? 'Konteks TikTok belum tersedia.'), [
+                'product_id' => $productId,
+            ], $request, []);
+        }
+
+        $shopId = trim((string) ($context['shop_id'] ?? ''));
+        if ($shopId === '') {
+            return $this->catalogResult(false, 'Shop ID TikTok belum tersedia.', [
+                'product_id' => $productId,
+            ], $request, []);
+        }
+
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($body === false) {
+            return $this->catalogResult(false, 'Payload TikTok tidak bisa diencode.', [
+                'product_id' => $productId,
+            ], $request, []);
+        }
+
+        $query = [
+            'access_token' => $context['access_token'],
+            'app_key' => $context['config']['app_key'],
+            'shop_cipher' => $context['shop_cipher'],
+            'shop_id' => $shopId,
+            'timestamp' => time(),
+            'version' => '202509',
+        ];
+        $query['sign'] = $this->generateTiktokSign($path, $query, (string) $context['config']['app_secret'], $body);
+
+        try {
+            $httpResponse = Http::timeout(45)
+                ->withHeaders([
+                    'x-tts-access-token' => $context['access_token'],
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                ])
+                ->withBody($body, 'application/json')
+                ->post($context['config']['api_host'].$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+        } catch (ConnectionException) {
+            return $this->catalogResult(false, 'Koneksi ke TikTok gagal.', [
+                'product_id' => $productId,
+            ], $request, []);
+        }
+        $response = $httpResponse->json();
+
+        if (! is_array($response)) {
+            return $this->catalogResult(false, 'TikTok tidak mengembalikan JSON valid.', [
+                'product_id' => $productId,
+            ], $request, [
+                'code' => $httpResponse->status(),
+                'message' => 'TikTok tidak mengembalikan JSON valid.',
+            ]);
+        }
+
+        $ok = $httpResponse->successful() && (int) ($response['code'] ?? -1) === 0;
+
+        return $this->catalogResult(
+            $ok,
+            $ok
+                ? 'Produk TikTok berhasil diperbarui.'
+                : $this->marketplaceFailureMessage(
+                    $response,
+                    $httpResponse->successful() ? 'Produk TikTok gagal diperbarui.' : 'TikTok merespons HTTP '.$httpResponse->status().'.',
+                ),
+            ['product_id' => $productId],
+            $request,
+            $response,
+        );
+    }
+
+    public function fetchShopeeModels(string $itemId): array
+    {
+        $itemId = trim($itemId);
+        $body = ['item_id' => is_numeric($itemId) ? (int) $itemId : $itemId];
+        $request = ['method' => 'GET', 'path' => '/api/v2/product/get_model_list', 'body' => $body];
+        $token = $this->activeShopeeToken();
+
+        if (! $token) {
+            return $this->catalogResult(false, 'Token Shopee aktif belum tersedia.', [
+                'item_id' => $itemId,
+                'models' => [],
+            ], $request, []);
+        }
+
+        try {
+            $response = $this->shopeeSignedGet(
+                '/api/v2/product/get_model_list',
+                (int) $token->shop_id,
+                (string) $token->access_token,
+                $body,
+            );
+        } catch (ConnectionException) {
+            return $this->catalogResult(false, 'Koneksi ke Shopee gagal.', [
+                'item_id' => $itemId,
+                'models' => [],
+            ], $request, []);
+        }
+        $ok = $this->successfulShopeeResponse($response)
+            && trim((string) ($response['error'] ?? '')) === '';
+        $models = data_get($response, 'response.model', data_get($response, 'response.model_list', []));
+
+        return $this->catalogResult(
+            $ok,
+            $ok
+                ? 'Model Shopee berhasil diambil.'
+                : $this->marketplaceFailureMessage(
+                    $response,
+                    $this->successfulShopeeResponse($response) ? 'Model Shopee gagal diambil.' : 'Shopee merespons HTTP '.(int) ($response['_http_status'] ?? 0).'.',
+                ),
+            ['item_id' => $itemId, 'models' => is_array($models) ? $models : []],
+            $request,
+            $this->publicMarketplaceResponse($response),
+        );
+    }
+
+    public function updateShopeeModelSku(string $itemId, string $modelId, string $targetSku): array
+    {
+        $itemId = trim($itemId);
+        $modelId = trim($modelId);
+        $body = [
+            'item_id' => is_numeric($itemId) ? (int) $itemId : $itemId,
+            'model' => [[
+                'model_id' => is_numeric($modelId) ? (int) $modelId : $modelId,
+                'model_sku' => trim($targetSku),
+            ]],
+        ];
+        $request = ['method' => 'POST', 'path' => '/api/v2/product/update_model', 'body' => $body];
+        $token = $this->activeShopeeToken();
+
+        if (! $token) {
+            return $this->catalogResult(false, 'Token Shopee aktif belum tersedia.', [
+                'item_id' => $itemId,
+                'model_id' => $modelId,
+            ], $request, []);
+        }
+
+        try {
+            $response = $this->shopeeSignedPost(
+                '/api/v2/product/update_model',
+                (int) $token->shop_id,
+                (string) $token->access_token,
+                $body,
+            );
+        } catch (ConnectionException) {
+            return $this->catalogResult(false, 'Koneksi ke Shopee gagal.', [
+                'item_id' => $itemId,
+                'model_id' => $modelId,
+            ], $request, []);
+        }
+        $ok = $this->successfulShopeeResponse($response)
+            && trim((string) ($response['error'] ?? '')) === '';
+
+        return $this->catalogResult(
+            $ok,
+            $ok
+                ? 'Model SKU Shopee berhasil diperbarui.'
+                : $this->marketplaceFailureMessage(
+                    $response,
+                    $this->successfulShopeeResponse($response) ? 'Model SKU Shopee gagal diperbarui.' : 'Shopee merespons HTTP '.(int) ($response['_http_status'] ?? 0).'.',
+                ),
+            ['item_id' => $itemId, 'model_id' => $modelId],
+            $request,
+            $this->publicMarketplaceResponse($response),
+        );
+    }
 
     public function fetchShopeeOfficialShippingDocument(string $orderSn, string $documentType = '', string $documentSize = 'A6'): array
     {
@@ -623,10 +877,14 @@ class MarketplaceApiService
 
     private function activeShopeeToken(): ?object
     {
-        return DB::table('shopee_tokens')
-            ->whereRaw('COALESCE(is_active, true) = true')
-            ->orderByDesc('created_at')
-            ->first();
+        $query = DB::table('shopee_tokens')
+            ->whereRaw('COALESCE(is_active, true) = true');
+        $accountKey = trim((string) config('shopee.account_key', ''));
+        if ($accountKey !== '' && Schema::hasColumn('shopee_tokens', 'account_key')) {
+            $query->where('account_key', $accountKey);
+        }
+
+        return $query->orderByDesc('created_at')->first();
     }
 
     private function shopeeSignedGet(string $path, int $shopId, string $accessToken, array $params = []): array
@@ -734,9 +992,42 @@ class MarketplaceApiService
         return [
             'status' => 'success',
             'access_token' => (string) $token->access_token,
+            'shop_id' => trim((string) ($shop->shop_id ?? $shop->id ?? '')),
             'shop_cipher' => $shopCipher,
             'config' => config('tiktok'),
         ];
+    }
+
+    private function catalogResult(bool $ok, string $message, array $data, array $request, array $response): array
+    {
+        return compact('ok', 'message', 'data', 'request', 'response');
+    }
+
+    private function publicMarketplaceResponse(array $response): array
+    {
+        return array_filter(
+            $response,
+            fn (string|int $key): bool => ! is_string($key) || ! str_starts_with($key, '_'),
+            ARRAY_FILTER_USE_KEY,
+        );
+    }
+
+    private function successfulShopeeResponse(array $response): bool
+    {
+        $status = (int) ($response['_http_status'] ?? 0);
+
+        return $status >= 200 && $status < 300;
+    }
+
+    private function marketplaceFailureMessage(array $response, string $fallback): string
+    {
+        foreach ([$response['message'] ?? null, $response['error'] ?? null] as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '' && strtolower(trim($candidate)) !== 'success') {
+                return trim($candidate);
+            }
+        }
+
+        return $fallback;
     }
 
     private function generateShopeeApiSign(int $partnerId, string $partnerKey, string $path, int $timestamp, string $accessToken, int $shopId): string

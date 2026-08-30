@@ -5,6 +5,7 @@ use App\Http\Controllers\CartController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\GitaOrderScrapeController;
 use App\Http\Controllers\MarketplaceAutoSyncController;
+use App\Http\Controllers\MarketplaceTokenSyncController;
 use App\Http\Controllers\MarketplaceImportController;
 use App\Http\Controllers\MarketplaceWebhookController;
 use App\Http\Controllers\MobileProductController;
@@ -50,6 +51,8 @@ Route::post('sku-mapping/bulk-update-empty-shopee-variant-skus', [OmnichannelCon
 Route::post('sku-mapping/prepare-missing-variant', [OmnichannelController::class, 'prepareMissingVariant']);
 Route::get('tiktok/bulk-missing-variants', [OmnichannelController::class, 'bulkTiktokMissingVariantsPreview']);
 Route::post('tiktok/bulk-missing-variants/submit', [OmnichannelController::class, 'bulkSubmitTiktokMissingVariants']);
+Route::post('tiktok/bulk-missing-variants/sku-cleanup/preview', [OmnichannelController::class, 'previewShopeeSkuTiktokCleanup']);
+Route::post('tiktok/bulk-missing-variants/sku-cleanup/{runId}/submit', [OmnichannelController::class, 'submitShopeeSkuTiktokCleanup']);
 Route::get('tiktok/variant-reconciliation/products', [OmnichannelController::class, 'tiktokVariantReconciliationProducts']);
 Route::get('tiktok/variant-reconciliation/overview', [OmnichannelController::class, 'tiktokVariantReconciliationOverview']);
 Route::get('tiktok/variant-reconciliation/preview', [OmnichannelController::class, 'tiktokVariantReconciliationPreview']);
@@ -64,6 +67,9 @@ Route::get('shopee/api-test-context', [OmnichannelController::class, 'shopeeApiT
 Route::post('shopee/add-variant', [OmnichannelController::class, 'shopeeAddVariant']);
 Route::post('shopee/delete-variant', [OmnichannelController::class, 'shopeeDeleteVariant']);
 Route::get('runtime/stb-status', [SyncRuntimeController::class, 'stbStatus']);
+Route::get('runtime/marketplace-token-sync', [MarketplaceTokenSyncController::class, 'export']);
+Route::post('runtime/pull-stb-marketplace-tokens', [MarketplaceTokenSyncController::class, 'pull']);
+Route::get('runtime/marketplace-token-sync-status', [MarketplaceTokenSyncController::class, 'status'])->middleware('auth:sanctum');
 Route::post('runtime/marketplace-operation/acquire', [SyncRuntimeController::class, 'acquireMarketplaceOperation']);
 Route::post('runtime/marketplace-operation/renew', [SyncRuntimeController::class, 'renewMarketplaceOperation']);
 Route::post('runtime/marketplace-operation/release', [SyncRuntimeController::class, 'releaseMarketplaceOperation']);
@@ -107,6 +113,8 @@ Route::post('marketplace/auto-sync/poll-tiktok-orders', [MarketplaceAutoSyncCont
 Route::get('marketplace/import/shopee-gita/mass-update', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdate']);
 Route::get('marketplace/import/shopee-gita/mass-update/{type}', [MarketplaceImportController::class, 'downloadShopeeGitaMassUpdateFile'])
     ->where('type', 'basic-info|sales-info|media-info|shipping-info|dts-info|republish-items');
+Route::get('marketplace/import/shopee-gita/coverage', [MarketplaceImportController::class, 'shopeeGitaCoverage']);
+Route::get('marketplace/import/shopee-gita/exceptions', [MarketplaceImportController::class, 'downloadShopeeGitaExceptions']);
 Route::post('marketplace/import/shopee-gita/mass-upload/jobs', [ShopeeMassUploadController::class, 'create']);
 Route::post('marketplace/import/shopee-gita/mass-upload/worker/wake', [ShopeeMassUploadController::class, 'wake']);
 Route::get('marketplace/import/shopee-gita/mass-upload/jobs/current', [ShopeeMassUploadController::class, 'current']);
