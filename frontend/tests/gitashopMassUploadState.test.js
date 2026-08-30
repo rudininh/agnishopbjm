@@ -152,7 +152,7 @@ test('does not request automatic upload when partial coverage is not acknowledge
   let confirmations = 0
   let requests = 0
   const result = await massUploadState.startMassUploadAfterPreflight?.({
-    coverage: { isPartial: true },
+    coverage: { revision: 'current-revision', isPartial: true },
     confirmPartial: (message) => {
       confirmations += 1
       assert.match(message, /fail-closed/)
@@ -170,7 +170,7 @@ test('does not request automatic upload when partial coverage is not acknowledge
 test('requests automatic upload after partial coverage is acknowledged', async () => {
   let requests = 0
   const result = await massUploadState.startMassUploadAfterPreflight?.({
-    coverage: { isPartial: true },
+    coverage: { revision: 'current-revision', isPartial: true },
     confirmPartial: () => true,
     request: async () => {
       requests += 1
@@ -187,7 +187,7 @@ test('starts a complete-coverage upload without asking for acknowledgement', asy
   let confirmations = 0
   let requests = 0
   const result = await massUploadState.startMassUploadAfterPreflight?.({
-    coverage: { isPartial: false },
+    coverage: { revision: 'current-revision', isPartial: false },
     confirmPartial: () => { confirmations += 1; return false },
     request: async () => { requests += 1; return { data: {} } }
   })
@@ -195,6 +195,23 @@ test('starts a complete-coverage upload without asking for acknowledgement', asy
   assert.equal(result?.started, true)
   assert.equal(confirmations, 0)
   assert.equal(requests, 1)
+})
+
+test('refuses automatic upload until a current non-loading coverage revision exists', async () => {
+  let confirmations = 0
+  let requests = 0
+  const result = await massUploadState.startMassUploadAfterPreflight?.({
+    coverage: null,
+    confirmPartial: () => { confirmations += 1; return true },
+    request: async () => { requests += 1 }
+  })
+
+  assert.equal(result?.started, false)
+  assert.equal(confirmations, 0)
+  assert.equal(requests, 0)
+  assert.equal(massUploadState.canStartMassUploadWithCoverage?.(null, false), false)
+  assert.equal(massUploadState.canStartMassUploadWithCoverage?.({ revision: 'current-revision' }, true), false)
+  assert.equal(massUploadState.canStartMassUploadWithCoverage?.({ revision: 'current-revision' }, false), true)
 })
 
 test('coverage refresh coordinator ignores an older response that finishes last', async () => {

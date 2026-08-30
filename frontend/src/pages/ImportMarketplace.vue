@@ -155,7 +155,7 @@
     </section>
 
     <section class="download-panel mass-upload-panel">
-      <div class="panel-head"><h2>Upload Otomatis Gitashopcollection</h2><button class="primary" type="button" :disabled="startingMassUpload || Boolean(massUploadCurrent && !massUploadCurrent.isTerminal)" @click="startMassUpload">{{ startingMassUpload ? 'Memulai...' : 'Upload Otomatis Gitashop' }}</button></div>
+      <div class="panel-head"><h2>Upload Otomatis Gitashopcollection</h2><button class="primary" type="button" :disabled="startingMassUpload || Boolean(massUploadCurrent && !massUploadCurrent.isTerminal) || !canStartMassUploadWithCoverage(shopeeCoverage, loadingShopeeCoverage)" @click="startMassUpload">{{ startingMassUpload ? 'Memulai...' : 'Upload Otomatis Gitashop' }}</button></div>
       <div class="worker-guide">
         <div>
           <strong>Worker PC</strong>
@@ -360,7 +360,7 @@ npm run gitashop-mass-upload-worker</code></pre>
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { omnichannelService, posService } from '@/services'
-import { createCoverageRefreshCoordinator, formatMassUploadWita, massUploadPreflightWarning, startMassUploadAfterPreflight, toMassUploadViewModel } from './gitashopMassUploadState'
+import { canStartMassUploadWithCoverage, createCoverageRefreshCoordinator, formatMassUploadWita, massUploadPreflightWarning, startMassUploadAfterPreflight, toMassUploadViewModel } from './gitashopMassUploadState'
 import {
   coverageDownloadFilename,
   filterShopeeGitaExceptions,
@@ -553,6 +553,11 @@ const ensureMassUploadPolling = () => {
 }
 
 const startMassUpload = async () => {
+  if (!canStartMassUploadWithCoverage(shopeeCoverage.value, loadingShopeeCoverage.value)) {
+    notice.value = { type: 'warning', message: 'Preflight export Shopee Gitashopcollection belum siap. Muat ulang preflight sebelum upload otomatis.' }
+    return
+  }
+
   const preflightWarning = massUploadPreflightWarning(shopeeCoverage.value)
   try {
     const startResult = await startMassUploadAfterPreflight({

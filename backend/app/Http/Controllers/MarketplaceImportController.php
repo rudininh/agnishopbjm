@@ -169,12 +169,25 @@ class MarketplaceImportController extends Controller
 
     public function shopeeGitaTemplateMetadata(): array
     {
-        $salesPath = $this->shopeeGitaTemplatePath('mass_update_sales_info.xlsx');
-        abort_if(! File::exists($salesPath), 422, 'Template Sales Info Gitashop belum tersedia.');
+        $files = [];
+        foreach ($this->shopeeGitaTemplates() as $template) {
+            $filename = $template['file'];
+            $path = $this->shopeeGitaTemplatePath($filename);
+            abort_if(! File::exists($path), 422, 'Template Mass Update belum lengkap: '.$filename);
+            $files[$filename] = [
+                'sha256' => hash_file('sha256', $path),
+                'last_modified_at' => date(DATE_ATOM, File::lastModified($path)),
+            ];
+        }
+        ksort($files, SORT_STRING);
+
+        $sales = $files['mass_update_sales_info.xlsx'];
 
         return [
-            'sales_sha256' => hash_file('sha256', $salesPath),
-            'sales_last_modified_at' => date(DATE_ATOM, File::lastModified($salesPath)),
+            // These fields remain for the existing coverage label API contract.
+            'sales_sha256' => $sales['sha256'],
+            'sales_last_modified_at' => $sales['last_modified_at'],
+            'files' => $files,
         ];
     }
 
@@ -1793,6 +1806,19 @@ class MarketplaceImportController extends Controller
                 $seenVariantIdentities[$itemId][$modelId] = true;
             }
             $kept[] = $rowNode;
+        }
+
+        if ($type === 'basic-info' || $type === 'media-info') {
+            foreach ($productKeys as $itemId => $_) {
+                abort_unless(isset($seenProductIdentities[$itemId]), 422, 'Template Mass Update tidak mencakup semua produk target siap.');
+            }
+        }
+        if (in_array($type, ['sales-info', 'shipping-info', 'dts-info'], true)) {
+            foreach ($variantKeys as $itemId => $modelIds) {
+                foreach ($modelIds as $modelId => $_) {
+                    abort_unless(isset($seenVariantIdentities[$itemId][$modelId]), 422, 'Template Mass Update tidak mencakup semua varian target siap.');
+                }
+            }
         }
 
         foreach ($kept as $offset => $rowNode) {

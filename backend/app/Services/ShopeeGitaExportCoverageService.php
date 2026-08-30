@@ -149,9 +149,19 @@ final class ShopeeGitaExportCoverageService
 
     private function canonicalTemplate(array $templateMetadata): array
     {
+        $files = [];
+        foreach (is_array($templateMetadata['files'] ?? null) ? $templateMetadata['files'] : [] as $filename => $metadata) {
+            $files[$this->scalar($filename)] = [
+                'sha256' => $this->scalar(is_array($metadata) ? ($metadata['sha256'] ?? '') : ''),
+                'last_modified_at' => $this->scalar(is_array($metadata) ? ($metadata['last_modified_at'] ?? '') : ''),
+            ];
+        }
+        ksort($files, SORT_STRING);
+
         return [
             'sales_last_modified_at' => $this->scalar($templateMetadata['sales_last_modified_at'] ?? ''),
             'sales_sha256' => $this->scalar($templateMetadata['sales_sha256'] ?? ''),
+            'files' => $files,
         ];
     }
 

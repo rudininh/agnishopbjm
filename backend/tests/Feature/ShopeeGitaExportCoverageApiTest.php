@@ -72,6 +72,8 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             storage_path('framework/testing/coverage-unsupported-type.xlsx'),
             storage_path('framework/testing/coverage-tuple-collision.xlsx'),
             storage_path('framework/testing/coverage-in-place-formula.xlsx'),
+            storage_path('framework/testing/coverage-missing-product.xlsx'),
+            storage_path('framework/testing/coverage-missing-variant.xlsx'),
             storage_path('framework/testing/filtered-sales.xlsx'),
         ]);
         File::deleteDirectory($this->templateDirectory);
@@ -118,6 +120,30 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             ['INT-100-RED', 'INT-100-BLUE', 'INT-200-BLACK', 'INT-300-WHITE'],
             $mappings->pluck('source_seller_sku')->all(),
         );
+    }
+
+    public function test_template_metadata_fingerprints_all_workbooks_and_changes_revision_when_basic_template_changes(): void
+    {
+        $controller = app(MarketplaceImportController::class);
+        $before = $controller->shopeeGitaTemplateMetadata();
+
+        $this->assertSame([
+            'mass_republish_items.xlsx',
+            'mass_update_basic_info.xlsx',
+            'mass_update_dts_info.xlsx',
+            'mass_update_media_info.xlsx',
+            'mass_update_sales_info.xlsx',
+            'mass_update_shipping_info.xlsx',
+        ], array_keys($before['files']));
+        $this->assertSame($before['files']['mass_update_sales_info.xlsx']['sha256'], $before['sales_sha256']);
+        $this->assertSame($before['files']['mass_update_sales_info.xlsx']['last_modified_at'], $before['sales_last_modified_at']);
+        $beforeRevision = app(ShopeeGitaExportCoverageService::class)->analyze([], [], $before)['revision'];
+
+        File::append($this->templateDirectory.'/mass_update_basic_info.xlsx', "\x00coverage-revision-regression");
+        $after = $controller->shopeeGitaTemplateMetadata();
+
+        $this->assertNotSame($before['files']['mass_update_basic_info.xlsx']['sha256'], $after['files']['mass_update_basic_info.xlsx']['sha256']);
+        $this->assertNotSame($beforeRevision, app(ShopeeGitaExportCoverageService::class)->analyze([], [], $after)['revision']);
     }
 
     public function test_coverage_endpoint_returns_revision_summary_and_exceptions(): void
@@ -480,6 +506,38 @@ class ShopeeGitaExportCoverageApiTest extends TestCase
             $this->assertWorkbookRejectedWithoutMutation($path, $type, [
                 ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
             ], $type);
+        }
+    }
+
+    public function test_product_filters_reject_missing_expected_ready_products_without_mutation(): void
+    {
+        $path = storage_path('framework/testing/coverage-missing-product.xlsx');
+
+        foreach (['basic-info', 'media-info'] as $type) {
+            $this->createMinimalShopeeWorkbook($path, [
+                ['A' => 'target-1', 'C' => 'Produk 1'],
+            ]);
+
+            $this->assertWorkbookRejectedWithoutMutation($path, $type, [
+                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+                ['target_item_id' => 'target-2', 'target_model_id' => 'model-2'],
+            ], $type.' missing expected product');
+        }
+    }
+
+    public function test_variant_filters_reject_missing_expected_ready_targets_without_mutation(): void
+    {
+        $path = storage_path('framework/testing/coverage-missing-variant.xlsx');
+
+        foreach (['sales-info' => 'C', 'shipping-info' => 'D', 'dts-info' => 'D'] as $type => $modelColumn) {
+            $this->createMinimalShopeeWorkbook($path, [
+                ['A' => 'target-1', $modelColumn => 'model-1'],
+            ]);
+
+            $this->assertWorkbookRejectedWithoutMutation($path, $type, [
+                ['target_item_id' => 'target-1', 'target_model_id' => 'model-1'],
+                ['target_item_id' => 'target-2', 'target_model_id' => 'model-2'],
+            ], $type.' missing expected variant');
         }
     }
 

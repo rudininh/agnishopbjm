@@ -223,6 +223,29 @@ PHP;
         ])['revision']);
     }
 
+    public function test_revision_fingerprints_every_template_file_in_a_deterministic_order(): void
+    {
+        $service = app(ShopeeGitaExportCoverageService::class);
+        $metadata = [
+            'sales_sha256' => str_repeat('a', 64),
+            'sales_last_modified_at' => '2026-08-29T10:00:00+08:00',
+            'files' => [
+                'mass_update_basic_info.xlsx' => ['sha256' => str_repeat('b', 64), 'last_modified_at' => '2026-08-29T10:00:00+08:00'],
+                'mass_update_sales_info.xlsx' => ['sha256' => str_repeat('a', 64), 'last_modified_at' => '2026-08-29T10:00:00+08:00'],
+            ],
+        ];
+        $baseline = $service->analyze([], [], $metadata)['revision'];
+
+        $this->assertSame($baseline, $service->analyze([], [], [
+            ...$metadata,
+            'files' => array_reverse($metadata['files'], true),
+        ])['revision']);
+
+        $changedBasicTemplate = $metadata;
+        $changedBasicTemplate['files']['mass_update_basic_info.xlsx']['sha256'] = str_repeat('c', 64);
+        $this->assertNotSame($baseline, $service->analyze([], [], $changedBasicTemplate)['revision']);
+    }
+
     public function test_assert_revision_rejects_a_stale_revision_with_http_conflict(): void
     {
         $snapshot = app(ShopeeGitaExportCoverageService::class)->analyze([], [], $this->metadata());
