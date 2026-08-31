@@ -17,6 +17,7 @@
 - Shopee Gita must fail closed until credentials, authorization, shop identity, and mapping readiness pass.
 - Gita may use the primary Shopee application only when `SHOPEE_GITA_USE_PRIMARY_APP=true`; partial or implicit fallback is forbidden.
 - Partner Keys, app secrets, access tokens, and refresh tokens must never appear in frontend payloads, logs, test failure messages, or documentation values.
+- Never modify, delete, overwrite, or print the contents of `backend/.env`; only `backend/.env.example` may receive blank template keys.
 - Existing primary Shopee/TikTok behavior and current API routes remain backward compatible.
 
 ## File Structure
@@ -570,40 +571,13 @@ git commit -m "feat: show marketplace account readiness"
 
 - Modify: `backend/.env.example`
 - Modify: `docs/STB_CONFIG_REFERENCE.md`
-- Modify: `frontend/tests/marketplaceAccountReadinessState.test.js`
 
 **Interfaces:**
 
 - Documents the exact fields operators will populate after Shopee approves the application.
 - Does not edit `backend/.env` or include any real credential value.
 
-- [ ] **Step 1: Add a failing source-contract test for safe setup guidance**
-
-Extend the frontend/source contract test or add a small repository-level Node test that reads `backend/.env.example` and `docs/STB_CONFIG_REFERENCE.md`, then asserts the presence of:
-
-```text
-SHOPEE_GITA_ENABLED
-SHOPEE_GITA_USE_PRIMARY_APP
-SHOPEE_GITA_PARTNER_ID
-SHOPEE_GITA_PARTNER_KEY
-SHOPEE_GITA_HOST
-SHOPEE_GITA_REDIRECT_URL
-TIKTOK_APP_KEY
-TIKTOK_APP_SECRET
-TIKTOK_AUTH_HOST
-TIKTOK_API_HOST
-TIKTOK_REDIRECT_URL
-```
-
-The test must also reject example values matching `secret`, a long token-like value, or a real Partner Key assignment.
-
-- [ ] **Step 2: Run the source-contract test and verify RED**
-
-Run: `cd frontend; npm test -- marketplaceAccountReadinessState.test.js`
-
-Expected: FAIL because the Gita and missing TikTok example keys are not all documented.
-
-- [ ] **Step 3: Update `.env.example` with blank values and safe defaults**
+- [ ] **Step 1: Update `.env.example` with blank values and safe defaults**
 
 Add:
 
@@ -622,7 +596,7 @@ TIKTOK_API_HOST=https://open-api.tiktokglobalshop.com
 TIKTOK_REDIRECT_URL=
 ```
 
-- [ ] **Step 4: Document the PC/STB activation sequence**
+- [ ] **Step 2: Document the PC/STB activation sequence**
 
 Document two mutually exclusive Shopee modes:
 
@@ -631,7 +605,7 @@ Document two mutually exclusive Shopee modes:
 
 Require `php artisan optimize:clear`, authorization of the exact Gita shop, token-sync confirmation, mapping readiness, and a supervised test before any future live scheduling is enabled. Explicitly say that this foundation release does not add Gita order polling or stock push.
 
-- [ ] **Step 5: Run all phase verification**
+- [ ] **Step 3: Run all phase verification**
 
 Run: `cd backend; php artisan test`
 
@@ -649,14 +623,18 @@ Run from repository root: `git diff --check`
 
 Expected: no whitespace errors.
 
-- [ ] **Step 6: Publish built frontend assets for the Laravel host**
+- [ ] **Step 4: Publish built frontend assets for the Laravel host**
 
 After the build succeeds, copy `frontend/dist/index.html` to `backend/public/index.html` and copy all files under `frontend/dist/assets` to `backend/public/assets` using the established Windows-safe publish procedure. Verify the Laravel host returns HTTP 200 and references the new hashed bundle; verify the served bundle contains `Shopee GitaCollectionBJM` and `Menunggu kredensial`.
 
-- [ ] **Step 7: Commit Task 6**
+- [ ] **Step 5: Prove the active environment file is untouched**
+
+Compare the SHA-256 hash of `backend/.env` with the baseline hash recorded by the controller before Task 1. Do not print or read the file contents. Stop without committing if the hashes differ.
+
+- [ ] **Step 6: Commit Task 6**
 
 ```powershell
-git add backend/.env.example docs/STB_CONFIG_REFERENCE.md frontend/tests/marketplaceAccountReadinessState.test.js backend/public/index.html backend/public/assets
+git add backend/.env.example docs/STB_CONFIG_REFERENCE.md backend/public/index.html backend/public/assets
 git commit -m "docs: prepare Gitashop marketplace credentials"
 ```
 
