@@ -78,6 +78,34 @@ STB_SUPERVISOR_PROGRAM=agnishop-worker
 
 Catatan: jangan isi secret asli di file template repo. Secret hanya masuk ke `/opt/agnishopbjm/backend/.env` di STB.
 
+## Aktivasi Aplikasi Marketplace GitaCollectionBJM
+
+Rilis foundation ini hanya menyiapkan konfigurasi dan readiness untuk akun Shopee `GitaCollectionBJM`. Rilis ini **tidak** mengaktifkan polling pesanan Gita, push stok Gita, ataupun penjadwalan live untuk keduanya. Aktivasi perilaku tersebut memerlukan rencana implementasi dan uji terpisah setelah gate readiness di bawah terpenuhi.
+
+Setelah aplikasi Shopee disetujui, operator memilih tepat satu mode berikut. Jangan mencampur dua mode ini.
+
+### Mode 1: aplikasi Gita khusus
+
+Gunakan aplikasi Shopee yang memang diterbitkan untuk Gita. Isi semua field kredensial dan callback Gita di env aktif, lalu pertahankan flag shared app sebagai `false`:
+
+`SHOPEE_GITA_ENABLED` harus aktif. Isi `SHOPEE_GITA_PARTNER_ID`, `SHOPEE_GITA_PARTNER_KEY`, `SHOPEE_GITA_HOST`, dan `SHOPEE_GITA_REDIRECT_URL` dengan nilai yang diterbitkan/diizinkan untuk aplikasi khusus tersebut.
+
+Isi nilai kosong hanya di `/opt/agnishopbjm/backend/.env` (dan env aktif PC bila PC menjalankan otorisasi). Jangan memasukkan nilai itu ke `.env.example`, dokumentasi, log, atau chat.
+
+### Mode 2: aplikasi primary yang dibagikan secara eksplisit
+
+Gunakan hanya jika aplikasi Shopee primary yang sudah disetujui memang boleh dipakai oleh Gita. Set `SHOPEE_GITA_USE_PRIMARY_APP=true`; biarkan seluruh field kredensial dan callback `SHOPEE_GITA_*` tetap kosong. Dalam mode ini Gita memakai satu set konfigurasi primary `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `SHOPEE_HOST`, dan `SHOPEE_REDIRECT_URL`; flag tidak boleh digunakan untuk menggabungkan sebagian credential Gita dan sebagian credential primary.
+
+`SHOPEE_GITA_ENABLED` tetap harus aktif dalam mode ini. Jika TikTok akan diautorisasi pada lingkungan yang sama, isi hanya di env aktif field `TIKTOK_APP_KEY`, `TIKTOK_APP_SECRET`, `TIKTOK_AUTH_HOST`, `TIKTOK_API_HOST`, dan `TIKTOK_REDIRECT_URL` dengan nilai yang disetujui provider.
+
+### Urutan aktivasi PC dan STB
+
+1. Setelah menulis env aktif di PC dan/atau STB, jalankan `php artisan optimize:clear` pada setiap instance Laravel yang menggunakan konfigurasi tersebut. Jangan lanjut jika konfigurasi masih ter-cache.
+2. Otorisasi **shop GitaCollectionBJM yang tepat** melalui alur Shopee untuk mode yang dipilih. Jangan gunakan token atau shop primary sebagai pengganti identitas Gita.
+3. Pastikan token sync PC/STB yang ada telah mengonfirmasi token Gita tersedia, tanpa menampilkan nilai token. Pastikan juga status readiness marketplace menunjukkan mapping untuk akun Gita sudah siap.
+4. Lakukan satu uji tersupervisi dengan operator yang dapat memeriksa shop, SKU mapping, dan hasil aman secara langsung. Perbaiki authorization atau mapping yang belum siap sebelum mengulang uji.
+5. Jangan mengaktifkan scheduler live, polling pesanan Gita, atau push stok Gita pada foundation ini. Aktivasi tersebut hanya boleh dilakukan oleh follow-up yang menambahkan kontrol scheduler, delivery stok, dan pengujian idempoten.
+
 ## Command Setelah Edit `.env`
 
 ```bash
