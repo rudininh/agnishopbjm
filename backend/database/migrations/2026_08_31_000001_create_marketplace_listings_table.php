@@ -13,7 +13,11 @@ return new class extends Migration
             Schema::create('marketplace_listings', function (Blueprint $table): void {
                 $table->id();
                 $table->unsignedBigInteger('stock_master_id');
-                $table->string('account_key', 100);
+                $table->enum('account_key', [
+                    'shopee-agnishopbjm',
+                    'tiktok-agnishopbjm',
+                    'shopee-gitacollectionbjm',
+                ]);
                 $table->string('channel', 20);
                 $table->string('remote_product_id', 100);
                 $table->string('remote_variant_id', 100)->default('');
@@ -133,16 +137,20 @@ return new class extends Migration
         $existing = DB::table('marketplace_listings')
             ->select('stock_master_id', 'account_key', 'remote_identity_hash')
             ->get();
+        $logicalIdentities = [];
         $remoteOwners = [];
 
         foreach ($existing as $listing) {
+            $logicalIdentities[$listing->stock_master_id."\0".$listing->account_key] = true;
             $remoteOwners[$listing->account_key."\0".$listing->remote_identity_hash] = $listing->stock_master_id;
         }
 
-        return array_values(array_filter($candidates, function (array $candidate) use ($remoteOwners): bool {
-            $key = $candidate['account_key']."\0".$candidate['remote_identity_hash'];
+        return array_values(array_filter($candidates, function (array $candidate) use ($logicalIdentities, $remoteOwners): bool {
+            $logicalKey = $candidate['stock_master_id']."\0".$candidate['account_key'];
+            $remoteKey = $candidate['account_key']."\0".$candidate['remote_identity_hash'];
 
-            return ! isset($remoteOwners[$key]) || $remoteOwners[$key] === $candidate['stock_master_id'];
+            return ! isset($logicalIdentities[$logicalKey])
+                && (! isset($remoteOwners[$remoteKey]) || $remoteOwners[$remoteKey] === $candidate['stock_master_id']);
         }));
     }
 };

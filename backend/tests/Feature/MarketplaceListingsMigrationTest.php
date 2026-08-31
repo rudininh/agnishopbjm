@@ -46,6 +46,22 @@ class MarketplaceListingsMigrationTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+        DB::table('sku_mappings')->insert([
+            'stock_master_id' => 12,
+            'shopee_item_id' => 'ambiguous-item',
+            'shopee_model_id' => 'ambiguous-model',
+            'seller_sku' => 'INT-AMBIGUOUS-ONE',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('sku_mappings')->insert([
+            'stock_master_id' => 13,
+            'shopee_item_id' => 'ambiguous-item',
+            'shopee_model_id' => 'ambiguous-model',
+            'seller_sku' => 'INT-AMBIGUOUS-TWO',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
 
         $migration = require database_path('migrations/2026_08_31_000001_create_marketplace_listings_table.php');
         $migration->up();
@@ -71,6 +87,12 @@ class MarketplaceListingsMigrationTest extends TestCase
         ]);
         $this->assertDatabaseMissing('marketplace_listings', [
             'stock_master_id' => 11,
+        ]);
+        $this->assertDatabaseMissing('marketplace_listings', [
+            'stock_master_id' => 12,
+        ]);
+        $this->assertDatabaseMissing('marketplace_listings', [
+            'stock_master_id' => 13,
         ]);
         $this->assertSame(2, DB::table('marketplace_listings')->count());
     }
@@ -98,7 +120,7 @@ class MarketplaceListingsMigrationTest extends TestCase
         DB::table('marketplace_listings')->insert($listing + ['account_key' => 'shopee-agnishopbjm']);
         DB::table('marketplace_listings')->insert($listing + [
             'stock_master_id' => 11,
-            'account_key' => 'shopee-another-account',
+            'account_key' => 'shopee-gitacollectionbjm',
         ]);
 
         $this->assertSame(2, DB::table('marketplace_listings')->count());
@@ -124,6 +146,101 @@ class MarketplaceListingsMigrationTest extends TestCase
         } catch (QueryException) {
             $this->addToAssertionCount(1);
         }
+
+        try {
+            DB::table('marketplace_listings')->insert($listing + [
+                'stock_master_id' => 13,
+                'account_key' => 'shopee-another-account',
+                'remote_product_id' => 'item-3',
+                'remote_variant_id' => 'model-3',
+                'remote_identity_hash' => hash('sha256', json_encode(['shopee', 'item-3', 'model-3'], JSON_THROW_ON_ERROR)),
+            ]);
+            $this->fail('Expected an unregistered account key to be rejected.');
+        } catch (QueryException) {
+            $this->addToAssertionCount(1);
+        }
+    }
+
+    public function test_backfill_rerun_preserves_existing_listing_state(): void
+    {
+        $this->createStockMasterTable();
+        Schema::dropIfExists('marketplace_listings');
+
+        $now = now();
+        DB::table('sku_mappings')->insert([
+            'stock_master_id' => 20,
+            'shopee_item_id' => 'stateful-item',
+            'shopee_model_id' => 'stateful-model',
+            'seller_sku' => 'LEGACY-SKU',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $migration = require database_path('migrations/2026_08_31_000001_create_marketplace_listings_table.php');
+        $migration->up();
+        DB::table('marketplace_listings')
+            ->where('stock_master_id', 20)
+            ->where('account_key', 'shopee-agnishopbjm')
+            ->update([
+                'seller_sku' => 'CURATED-SKU',
+                'warehouse_id' => 'WAREHOUSE-1',
+                'is_active' => false,
+                'updated_at' => now()->subDay(),
+            ]);
+        $before = DB::table('marketplace_listings')
+            ->where('stock_master_id', 20)
+            ->where('account_key', 'shopee-agnishopbjm')
+            ->first();
+
+        $migration->up();
+
+        $after = DB::table('marketplace_listings')
+            ->where('stock_master_id', 20)
+            ->where('account_key', 'shopee-agnishopbjm')
+            ->first();
+
+        $this->assertEquals($before, $after);
+    }
+
+    public function test_backfill_skips_a_remote_identity_owned_by_another_stock_master(): void
+    {
+        $this->createStockMasterTable();
+        Schema::dropIfExists('marketplace_listings');
+
+        $migration = require database_path('migrations/2026_08_31_000001_create_marketplace_listings_table.php');
+        $migration->up();
+
+        $now = now();
+        DB::table('marketplace_listings')->insert([
+            'stock_master_id' => 30,
+            'account_key' => 'shopee-agnishopbjm',
+            'channel' => 'shopee',
+            'remote_product_id' => 'owned-item',
+            'remote_variant_id' => 'owned-model',
+            'remote_identity_hash' => hash('sha256', json_encode(['shopee', 'owned-item', 'owned-model'], JSON_THROW_ON_ERROR)),
+            'seller_sku' => 'CURATED-OWNER',
+            'warehouse_id' => 'WAREHOUSE-2',
+            'is_active' => false,
+            'created_at' => $now,
+            'updated_at' => now()->subDay(),
+        ]);
+        DB::table('sku_mappings')->insert([
+            'stock_master_id' => 31,
+            'shopee_item_id' => 'owned-item',
+            'shopee_model_id' => 'owned-model',
+            'seller_sku' => 'LEGACY-CONFLICT',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $before = DB::table('marketplace_listings')->where('stock_master_id', 30)->first();
+
+        $migration->up();
+
+        $this->assertEquals($before, DB::table('marketplace_listings')->where('stock_master_id', 30)->first());
+        $this->assertDatabaseMissing('marketplace_listings', [
+            'stock_master_id' => 31,
+            'account_key' => 'shopee-agnishopbjm',
+        ]);
     }
 
     private function createStockMasterTable(): void
