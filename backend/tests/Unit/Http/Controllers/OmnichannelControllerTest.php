@@ -6,6 +6,7 @@ use App\Http\Controllers\OmnichannelController;
 use App\Services\ShopeeSellerSkuTemplate;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
@@ -14,6 +15,178 @@ use Tests\TestCase;
 
 class OmnichannelControllerTest extends TestCase
 {
+    public function test_shopee_account_gita_auth_url_uses_gita_credentials_and_callback_account(): void
+    {
+        $this->configureDistinctShopeeAccounts();
+
+        $response = $this->postJson('/api/omnichannel/auth-shopee-gitacollectionbjm')->assertOk();
+        $query = [];
+        parse_str((string) parse_url($response->json('redirect_url'), PHP_URL_QUERY), $query);
+        $redirectQuery = [];
+        parse_str((string) parse_url($query['redirect'], PHP_URL_QUERY), $redirectQuery);
+
+        $this->assertSame('9988', $query['partner_id']);
+        $this->assertSame(
+            hash_hmac('sha256', '9988/api/v2/shop/auth_partner'.$query['timestamp'], 'gita-secret'),
+            $query['sign']
+        );
+        $this->assertSame('shopee-gitacollectionbjm', $redirectQuery['account']);
+    }
+
+    public function test_shopee_account_gita_callback_exchange_uses_and_stores_gita_partner_id(): void
+    {
+        $this->configureDistinctShopeeAccounts();
+        $this->createShopeeCallbacksTable();
+        Http::fake([
+            'https://gita-partner.example/*' => Http::response([
+                'error' => 'exchange_rejected_for_test',
+                'message' => 'Simulated exchange rejection.',
+            ], 200),
+            '*' => Http::response([
+                'error' => 'unexpected_account_credentials',
+                'message' => 'Unexpected account credentials.',
+            ], 200),
+        ]);
+
+        try {
+            $this->get('/api/shopee/callback?code=callback-code&shop_id=7766&account=shopee-gitacollectionbjm')
+                ->assertStatus(422);
+
+            $callback = DB::table('shopee_callbacks')->first();
+            $this->assertSame('shopee-gitacollectionbjm', $callback->account_key);
+            $this->assertSame(9988, (int) $callback->partner_id);
+
+            Http::assertSent(function ($request): bool {
+                $query = [];
+                parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+                $expectedSign = hash_hmac(
+                    'sha256',
+                    '9988/api/v2/auth/token/get'.($query['timestamp'] ?? ''),
+                    'gita-secret'
+                );
+
+                return $request->url() !== ''
+                    && str_starts_with($request->url(), 'https://gita-partner.example/api/v2/auth/token/get?')
+                    && ($query['partner_id'] ?? null) === '9988'
+                    && ($query['sign'] ?? null) === $expectedSign
+                    && ($request['partner_id'] ?? null) === 9988;
+            });
+        } finally {
+            Schema::dropIfExists('shopee_callbacks');
+        }
+    }
+
+    public function test_shopee_account_callback_without_account_defaults_to_primary(): void
+    {
+        $this->configureDistinctShopeeAccounts();
+        $this->createShopeeCallbacksTable();
+        Http::fake([
+            '*' => Http::response([
+                'error' => 'exchange_rejected_for_test',
+                'message' => 'Simulated exchange rejection.',
+            ], 200),
+        ]);
+
+        try {
+            $this->get('/api/shopee/callback?code=callback-code&shop_id=7766')
+                ->assertStatus(422);
+
+            $callback = DB::table('shopee_callbacks')->first();
+            $this->assertSame('shopee-agnishopbjm', $callback->account_key);
+            $this->assertSame(1122, (int) $callback->partner_id);
+            Http::assertSent(fn ($request): bool => str_starts_with(
+                $request->url(),
+                'https://primary-partner.example/api/v2/auth/token/get?'
+            ));
+        } finally {
+            Schema::dropIfExists('shopee_callbacks');
+        }
+    }
+
+    public function test_shopee_account_callback_with_unknown_account_fails_before_persistence_or_http(): void
+    {
+        $this->configureDistinctShopeeAccounts();
+        $this->createShopeeCallbacksTable();
+        Http::fake();
+
+        try {
+            $response = $this->getJson('/api/shopee/callback?code=callback-code&shop_id=7766&account=unknown-account')
+                ->assertStatus(422)
+                ->assertJsonPath('message', 'Akun marketplace tidak dikenal.');
+
+            $this->assertSame(0, DB::table('shopee_callbacks')->count());
+            $this->assertStringNotContainsString('primary-secret', (string) $response->getContent());
+            $this->assertStringNotContainsString('gita-secret', (string) $response->getContent());
+            Http::assertNothingSent();
+        } finally {
+            Schema::dropIfExists('shopee_callbacks');
+        }
+    }
+
+    public function test_shopee_account_gita_refresh_request_uses_gita_partner_id_and_signature(): void
+    {
+        $this->configureDistinctShopeeAccounts();
+        $this->createShopeeTokensTable();
+        DB::table('shopee_tokens')->insert([
+            'account_key' => 'shopee-gitacollectionbjm',
+            'account_name' => 'Shopee GitaCollectionBJM',
+            'partner_id' => 9988,
+            'shop_id' => 7766,
+            'refresh_token' => 'test-refresh-token',
+            'refresh_token_expire_at' => now()->addDay(),
+            'is_active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            'https://gita-partner.example/*' => Http::response([
+                'error' => 'refresh_rejected_for_test',
+                'message' => 'Simulated refresh rejection.',
+            ], 200),
+            '*' => Http::response([
+                'error' => 'unexpected_account_credentials',
+                'message' => 'Unexpected account credentials.',
+            ], 200),
+        ]);
+
+        try {
+            $this->postJson('/api/omnichannel/refresh-token-shopee-gitacollectionbjm')
+                ->assertStatus(422);
+
+            Http::assertSent(function ($request): bool {
+                $query = [];
+                parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+                $expectedSign = hash_hmac(
+                    'sha256',
+                    '9988/api/v2/auth/access_token/get'.($query['timestamp'] ?? ''),
+                    'gita-secret'
+                );
+
+                return str_starts_with($request->url(), 'https://gita-partner.example/api/v2/auth/access_token/get?')
+                    && ($query['partner_id'] ?? null) === '9988'
+                    && ($query['sign'] ?? null) === $expectedSign
+                    && ($request['partner_id'] ?? null) === 9988;
+            });
+        } finally {
+            Schema::dropIfExists('shopee_tokens');
+        }
+    }
+
+    public function test_shopee_account_incomplete_gita_config_is_sanitized_and_does_not_affect_primary_auth(): void
+    {
+        $this->configureDistinctShopeeAccounts();
+        Config::set('marketplace_accounts.accounts.shopee-gitacollectionbjm.credentials.partner_key', 'configured-secret-must-not-leak');
+        Config::set('marketplace_accounts.accounts.shopee-gitacollectionbjm.credentials.redirect_url', '');
+
+        $primaryResponse = $this->postJson('/api/omnichannel/auth-shopee')->assertOk();
+        $this->assertSame('shopee-agnishopbjm', $primaryResponse->json('account_key'));
+        $response = $this->postJson('/api/omnichannel/auth-shopee-gitacollectionbjm')
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Konfigurasi Shopee GitaCollectionBJM belum lengkap.');
+
+        $this->assertStringNotContainsString('configured-secret-must-not-leak', (string) $response->getContent());
+    }
+
     public function test_tiktok_generated_payload_weight_is_normalized_from_kilogram_to_gram(): void
     {
         $payload = $this->normalizePackageWeight([
@@ -1568,6 +1741,71 @@ class OmnichannelControllerTest extends TestCase
                 'width' => '1',
             ],
         ], $overrides);
+    }
+
+    private function configureDistinctShopeeAccounts(): void
+    {
+        Config::set('shopee.partner_id', 1122);
+        Config::set('shopee.partner_key', 'primary-secret');
+        Config::set('shopee.host', 'https://primary-partner.example');
+        Config::set('shopee.redirect_url', 'https://primary.example/api/shopee/callback');
+        Config::set('marketplace_accounts.accounts.shopee-agnishopbjm.credentials', [
+            'partner_id' => 1122,
+            'partner_key' => 'primary-secret',
+            'host' => 'https://primary-partner.example',
+            'redirect_url' => 'https://primary.example/api/shopee/callback',
+        ]);
+        Config::set('marketplace_accounts.accounts.shopee-gitacollectionbjm.use_primary_app', false);
+        Config::set('marketplace_accounts.accounts.shopee-gitacollectionbjm.credentials', [
+            'partner_id' => 9988,
+            'partner_key' => 'gita-secret',
+            'host' => 'https://gita-partner.example',
+            'redirect_url' => 'https://gita.example/api/shopee/callback',
+        ]);
+    }
+
+    private function createShopeeCallbacksTable(): void
+    {
+        Schema::dropIfExists('shopee_callbacks');
+        Schema::create('shopee_callbacks', function (Blueprint $table): void {
+            $table->id();
+            $table->string('account_key');
+            $table->string('account_name');
+            $table->string('code');
+            $table->bigInteger('shop_id')->nullable();
+            $table->bigInteger('main_account_id')->nullable();
+            $table->bigInteger('partner_id')->nullable();
+            $table->json('query_payload')->nullable();
+            $table->timestamp('used_at')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    private function createShopeeTokensTable(): void
+    {
+        Schema::dropIfExists('shopee_tokens');
+        Schema::create('shopee_tokens', function (Blueprint $table): void {
+            $table->id();
+            $table->string('account_key');
+            $table->string('account_name');
+            $table->bigInteger('partner_id')->nullable();
+            $table->bigInteger('shop_id')->nullable();
+            $table->bigInteger('merchant_id')->nullable();
+            $table->bigInteger('supplier_id')->nullable();
+            $table->bigInteger('user_id')->nullable();
+            $table->text('access_token')->nullable();
+            $table->text('refresh_token')->nullable();
+            $table->integer('expire_in')->nullable();
+            $table->timestamp('expire_at')->nullable();
+            $table->timestamp('access_token_expire_at')->nullable();
+            $table->timestamp('refresh_token_expire_at')->nullable();
+            $table->string('request_id')->nullable();
+            $table->string('error')->nullable();
+            $table->text('message')->nullable();
+            $table->json('raw_response')->nullable();
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
     }
 
     private function hasControllerMethod(string $name): bool

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\MarketplaceAccountRegistry;
 use App\Services\TiktokPartialEditSkuPayloadBuilder;
 use App\Services\ShopeeSellerSkuTemplate;
 use App\Services\ShopeeSkuTiktokVariantCleanupService;
@@ -17,20 +18,6 @@ use Illuminate\Support\Facades\Schema;
 
 class OmnichannelController extends Controller
 {
-    private const MARKETPLACE_ACCOUNTS = [
-        'shopee-agnishopbjm' => [
-            'channel' => 'shopee',
-            'name' => 'Shopee AgniShopBJM',
-        ],
-        'shopee-gitacollectionbjm' => [
-            'channel' => 'shopee',
-            'name' => 'Shopee GitaCollectionBJM',
-        ],
-        'tiktok-agnishopbjm' => [
-            'channel' => 'tiktok',
-            'name' => 'TikTok AgniShopBJM',
-        ],
-    ];
     private const SHOPEE_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES = 15;
     private const TIKTOK_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES = 15;
     private const SHOPEE_REFRESH_TOKEN_VALID_DAYS = 365;
@@ -4728,8 +4715,7 @@ class OmnichannelController extends Controller
         $this->normalizeActiveMarketplaceTokens();
 
         $results = [];
-        foreach (self::MARKETPLACE_ACCOUNTS as $key => $account) {
-            $account = ['key' => $key, ...$account];
+        foreach ($this->marketplaceAccounts() as $key => $account) {
             $channel = $account['channel'];
             $token = $channel === 'shopee'
                 ? $this->latestActiveShopeeToken($account)
@@ -4792,13 +4778,14 @@ class OmnichannelController extends Controller
             return response('Callback Shopee tidak membawa code.', 422);
         }
 
+        $config = $this->shopeeConfig($account);
         $callbackId = DB::table('shopee_callbacks')->insertGetId([
             'account_key' => $account['key'],
             'account_name' => $account['name'],
             'code' => $code,
             'shop_id' => $request->query('shop_id') ? (int) $request->query('shop_id') : null,
             'main_account_id' => $request->query('main_account_id') ? (int) $request->query('main_account_id') : null,
-            'partner_id' => $this->shopeeConfig()['partner_id'],
+            'partner_id' => $config['partner_id'],
             'query_payload' => json_encode($request->query()),
             'created_at' => now(),
             'updated_at' => now(),
@@ -11714,7 +11701,7 @@ class OmnichannelController extends Controller
 
     private function buildShopeeAuthUrl(array $account): string
     {
-        $config = $this->shopeeConfig();
+        $config = $this->shopeeConfig($account);
         $path = '/api/v2/shop/auth_partner';
         $timestamp = time();
         $sign = $this->generateShopeeSign($config['partner_id'], $config['partner_key'], $path, $timestamp);
@@ -11784,7 +11771,9 @@ class OmnichannelController extends Controller
 
     private function exchangeShopeeToken(object $callback): array
     {
-        $config = $this->shopeeConfig();
+        $config = $this->shopeeConfig([
+            'key' => (string) ($callback->account_key ?? 'shopee-agnishopbjm'),
+        ]);
         $path = '/api/v2/auth/token/get';
         $timestamp = time();
         $sign = $this->generateShopeeSign($config['partner_id'], $config['partner_key'], $path, $timestamp);
@@ -11899,7 +11888,7 @@ class OmnichannelController extends Controller
             ];
         }
 
-        $config = $this->shopeeConfig();
+        $config = $this->shopeeConfig($account);
         $path = '/api/v2/auth/access_token/get';
         $timestamp = time();
         $sign = $this->generateShopeeSign($config['partner_id'], $config['partner_key'], $path, $timestamp);
@@ -12635,7 +12624,7 @@ class OmnichannelController extends Controller
                 continue;
             }
 
-            foreach (self::MARKETPLACE_ACCOUNTS as $key => $account) {
+            foreach ($this->marketplaceAccounts() as $key => $account) {
                 if ($account['channel'] !== $channel) {
                     continue;
                 }
@@ -12928,21 +12917,15 @@ class OmnichannelController extends Controller
         }
     }
 
-    private function shopeeConfig(): array
+    private function shopeeConfig(?array $account = null): array
     {
-        $row = SchemaCache::activeShopeeConfig();
+        $accountKey = (string) ($account['key'] ?? 'shopee-agnishopbjm');
 
-        $partnerId = (int) ($row->partner_id ?? config('shopee.partner_id'));
-        $partnerKey = (string) ($row->partner_key ?? config('shopee.partner_key'));
-
-        abort_if($partnerId <= 0 || $partnerKey === '', 422, 'Konfigurasi Shopee belum lengkap.');
-
-        return [
-            'partner_id' => $partnerId,
-            'partner_key' => $partnerKey,
-            'host' => rtrim((string) ($row->host ?? config('shopee.host')), '/'),
-            'redirect_url' => (string) ($row->redirect_url ?? config('shopee.redirect_url')),
-        ];
+        try {
+            return $this->marketplaceAccountRegistry()->shopeeContext($accountKey);
+        } catch (\InvalidArgumentException|\RuntimeException $exception) {
+            abort(422, $exception->getMessage());
+        }
     }
 
     private function generateShopeeSign(int $partnerId, string $partnerKey, string $path, int $timestamp): string
@@ -13137,9 +13120,9 @@ class OmnichannelController extends Controller
 
     private function resolveAccountFromAction(string $action): ?array
     {
-        foreach (self::MARKETPLACE_ACCOUNTS as $key => $account) {
+        foreach ($this->marketplaceAccounts() as $key => $account) {
             if (str_ends_with($action, $key)) {
-                return ['key' => $key, ...$account];
+                return $account;
             }
         }
 
@@ -13152,28 +13135,40 @@ class OmnichannelController extends Controller
 
     private function resolveAccount(string $key, string $channel): array
     {
-        $resolvedKey = array_key_exists($key, self::MARKETPLACE_ACCOUNTS)
-            ? $key
-            : ($channel === 'tiktok' ? 'tiktok-agnishopbjm' : 'shopee-agnishopbjm');
-        $account = self::MARKETPLACE_ACCOUNTS[$resolvedKey];
+        $accounts = $this->marketplaceAccounts();
+        abort_if(! array_key_exists($key, $accounts), 422, 'Akun marketplace tidak dikenal.');
+        $account = $accounts[$key];
 
         abort_if($account['channel'] !== $channel, 422, 'Klasifikasi akun marketplace tidak valid.');
 
-        return ['key' => $resolvedKey, ...$account];
+        return $account;
+    }
+
+    private function marketplaceAccountRegistry(): MarketplaceAccountRegistry
+    {
+        return app(MarketplaceAccountRegistry::class);
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    private function marketplaceAccounts(): array
+    {
+        $accounts = [];
+
+        foreach ($this->marketplaceAccountRegistry()->publicAccounts() as $account) {
+            $key = (string) ($account['key'] ?? '');
+            if ($key !== '') {
+                $accounts[$key] = $account;
+            }
+        }
+
+        return $accounts;
     }
 }
 
 final class SchemaCache
 {
-    public static function activeShopeeConfig(): ?object
-    {
-        try {
-            return DB::table('shopee_config')->whereRaw('is_active = true')->first();
-        } catch (\Throwable) {
-            return null;
-        }
-    }
-
     public static function activeTiktokConfig(): ?object
     {
         try {
