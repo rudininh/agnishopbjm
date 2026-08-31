@@ -3,11 +3,61 @@
 namespace Tests\Unit\Services;
 
 use App\Services\MarketplaceAccountRegistry;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class MarketplaceAccountRegistryTest extends TestCase
 {
+    public function test_primary_and_explicit_shared_app_use_active_database_configuration_override(): void
+    {
+        Config::set('marketplace_accounts.accounts.shopee-agnishopbjm.credentials', [
+            'partner_id' => 1122,
+            'partner_key' => 'configured-primary-key',
+            'host' => 'https://configured-primary.example',
+            'redirect_url' => 'https://configured-primary.example/callback',
+        ]);
+        Config::set('marketplace_accounts.accounts.shopee-gitacollectionbjm.use_primary_app', true);
+        Schema::dropIfExists('shopee_config');
+        Schema::create('shopee_config', function (Blueprint $table): void {
+            $table->id();
+            $table->bigInteger('partner_id');
+            $table->text('partner_key');
+            $table->string('host');
+            $table->string('redirect_url');
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
+        DB::table('shopee_config')->insert([
+            'partner_id' => 7788,
+            'partner_key' => 'database-primary-key',
+            'host' => 'https://database-primary.example/',
+            'redirect_url' => 'https://database-primary.example/callback',
+            'is_active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        try {
+            $registry = app(MarketplaceAccountRegistry::class);
+
+            $this->assertSame([
+                'partner_id' => 7788,
+                'partner_key' => 'database-primary-key',
+                'host' => 'https://database-primary.example',
+                'redirect_url' => 'https://database-primary.example/callback',
+            ], $registry->shopeeContext('shopee-agnishopbjm'));
+            $this->assertSame(
+                $registry->shopeeContext('shopee-agnishopbjm'),
+                $registry->shopeeContext('shopee-gitacollectionbjm')
+            );
+        } finally {
+            Schema::dropIfExists('shopee_config');
+        }
+    }
+
     public function test_public_registry_has_exact_accounts_and_no_secrets(): void
     {
         Config::set('marketplace_accounts.accounts.shopee-agnishopbjm.credentials.partner_key', 'never-return-me');

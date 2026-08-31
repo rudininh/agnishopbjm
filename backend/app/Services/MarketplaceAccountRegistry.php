@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use InvalidArgumentException;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use Throwable;
 
 class MarketplaceAccountRegistry
 {
@@ -15,14 +17,20 @@ class MarketplaceAccountRegistry
         $accounts = [];
 
         foreach (config('marketplace_accounts.accounts', []) as $key => $account) {
+            $usesPrimaryApp = (bool) ($account['use_primary_app'] ?? false);
+            $requiredEnv = $account['required_env'] ?? [];
+            if ($key === 'shopee-gitacollectionbjm' && $usesPrimaryApp) {
+                $requiredEnv = config('marketplace_accounts.accounts.shopee-agnishopbjm.required_env', []);
+            }
+
             $accounts[] = [
                 'key' => (string) $key,
                 'name' => (string) ($account['name'] ?? ''),
                 'channel' => (string) ($account['channel'] ?? ''),
                 'enabled' => (bool) ($account['enabled'] ?? false),
                 'connect_action' => (string) ($account['connect_action'] ?? ''),
-                'uses_primary_app' => (bool) ($account['use_primary_app'] ?? false),
-                'required_env' => array_values($account['required_env'] ?? []),
+                'uses_primary_app' => $usesPrimaryApp,
+                'required_env' => array_values($requiredEnv),
             ];
         }
 
@@ -107,11 +115,44 @@ class MarketplaceAccountRegistry
      */
     private function shopeeCredentials(string $accountKey, array $account): array
     {
+        if ($accountKey === 'shopee-agnishopbjm') {
+            return $this->primaryShopeeCredentials($account);
+        }
+
         if ($accountKey === 'shopee-gitacollectionbjm' && (bool) ($account['use_primary_app'] ?? false)) {
-            return $this->requireChannel('shopee-agnishopbjm', 'shopee')['credentials'] ?? [];
+            return $this->primaryShopeeCredentials($this->requireChannel('shopee-agnishopbjm', 'shopee'));
         }
 
         return $account['credentials'] ?? [];
+    }
+
+    /**
+     * @param array<string, mixed> $account
+     * @return array<string, mixed>
+     */
+    private function primaryShopeeCredentials(array $account): array
+    {
+        $credentials = $account['credentials'] ?? [];
+
+        try {
+            $override = DB::table('shopee_config')
+                ->whereRaw('COALESCE(is_active, true) = true')
+                ->orderByDesc('id')
+                ->first();
+        } catch (Throwable) {
+            $override = null;
+        }
+
+        if ($override === null) {
+            return $credentials;
+        }
+
+        return [
+            'partner_id' => $override->partner_id ?? ($credentials['partner_id'] ?? 0),
+            'partner_key' => $override->partner_key ?? ($credentials['partner_key'] ?? ''),
+            'host' => $override->host ?? ($credentials['host'] ?? ''),
+            'redirect_url' => $override->redirect_url ?? ($credentials['redirect_url'] ?? ''),
+        ];
     }
 
     /**

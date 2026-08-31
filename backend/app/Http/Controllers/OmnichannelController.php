@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Schema;
 
 class OmnichannelController extends Controller
 {
+    private const PRIMARY_SHOPEE_ACCOUNT_KEY = 'shopee-agnishopbjm';
     private const SHOPEE_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES = 15;
     private const TIKTOK_ACCESS_TOKEN_REFRESH_BUFFER_MINUTES = 15;
     private const SHOPEE_REFRESH_TOKEN_VALID_DAYS = 365;
@@ -2973,6 +2974,7 @@ class OmnichannelController extends Controller
     private function activeShopeeTokensForSync()
     {
         $tokens = DB::table('shopee_tokens')
+            ->where('account_key', self::PRIMARY_SHOPEE_ACCOUNT_KEY)
             ->whereRaw('is_active = true')
             ->whereNotNull('shop_id')
             ->whereNotNull('access_token')
@@ -2989,6 +2991,7 @@ class OmnichannelController extends Controller
         }
 
         return DB::table('shopee_tokens')
+            ->where('account_key', self::PRIMARY_SHOPEE_ACCOUNT_KEY)
             ->whereRaw('is_active = true')
             ->whereNotNull('shop_id')
             ->whereNotNull('access_token')

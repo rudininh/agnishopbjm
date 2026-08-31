@@ -15,6 +15,42 @@ use Tests\TestCase;
 
 class OmnichannelControllerTest extends TestCase
 {
+    public function test_scheduled_shopee_cache_token_selection_is_primary_account_only(): void
+    {
+        $this->createShopeeTokensTable();
+        Config::set('marketplace_accounts.accounts.shopee-gitacollectionbjm.enabled', false);
+        DB::table('shopee_tokens')->insert([
+            [
+                'account_key' => 'shopee-agnishopbjm',
+                'account_name' => 'Shopee AgniShopBJM',
+                'shop_id' => 1122,
+                'access_token' => 'primary-access-token',
+                'access_token_expire_at' => now()->addHour(),
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'account_key' => 'shopee-gitacollectionbjm',
+                'account_name' => 'Shopee GitaCollectionBJM',
+                'shop_id' => 9988,
+                'access_token' => 'gita-access-token',
+                'access_token_expire_at' => now()->addHour(),
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        try {
+            $tokens = $this->invokeControllerMethod('activeShopeeTokensForSync', []);
+
+            $this->assertSame(['shopee-agnishopbjm'], $tokens->pluck('account_key')->all());
+        } finally {
+            Schema::dropIfExists('shopee_tokens');
+        }
+    }
+
     public function test_shopee_account_gita_auth_url_uses_gita_credentials_and_callback_account(): void
     {
         $this->configureDistinctShopeeAccounts();

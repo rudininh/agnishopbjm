@@ -63,6 +63,25 @@ class MarketplaceAccountReadinessTest extends TestCase
         $this->assertFalse($account['checks']['active_token']);
     }
 
+    public function test_gita_shared_app_readiness_reports_primary_environment_names(): void
+    {
+        $this->configureShopeeAccount('shopee-agnishopbjm');
+        config([
+            'marketplace_accounts.accounts.shopee-gitacollectionbjm.enabled' => true,
+            'marketplace_accounts.accounts.shopee-gitacollectionbjm.use_primary_app' => true,
+        ]);
+
+        $account = $this->accountFromDashboard('shopee-gitacollectionbjm');
+
+        $this->assertSame('authorization_required', $account['state']);
+        $this->assertTrue($account['checks']['credentials']);
+        $this->assertSame([
+            'SHOPEE_PARTNER_ID',
+            'SHOPEE_PARTNER_KEY',
+            'SHOPEE_REDIRECT_URL',
+        ], $account['required_env']);
+    }
+
     public function test_expired_active_token_is_reported_as_expired(): void
     {
         $this->configureShopeeAccount('shopee-gitacollectionbjm');
