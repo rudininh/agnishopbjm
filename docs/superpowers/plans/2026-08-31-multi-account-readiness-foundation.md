@@ -135,7 +135,7 @@ class MarketplaceAccountRegistryTest extends TestCase
 
 - [ ] **Step 2: Run the tests and verify RED**
 
-Run: `cd backend; php artisan test tests/Unit/Services/MarketplaceAccountRegistryTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Unit/Services/MarketplaceAccountRegistryTest.php`
 
 Expected: FAIL because `MarketplaceAccountRegistry` and `marketplace_accounts` do not exist.
 
@@ -171,7 +171,7 @@ Primary accounts default to enabled. Keep the Gita account enabled at the regist
 
 - [ ] **Step 5: Run focused and full registry-adjacent tests**
 
-Run: `cd backend; php artisan test tests/Unit/Services/MarketplaceAccountRegistryTest.php tests/Feature/MarketplaceTokenSyncTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Unit/Services/MarketplaceAccountRegistryTest.php tests/Feature/MarketplaceTokenSyncTest.php`
 
 Expected: PASS.
 
@@ -221,7 +221,7 @@ $this->assertSame(
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
-Run: `cd backend; php artisan test tests/Unit/Http/Controllers/OmnichannelControllerTest.php --filter=shopee_account`
+Run: `cd backend; php vendor/bin/phpunit tests/Unit/Http/Controllers/OmnichannelControllerTest.php --filter=shopee_account`
 
 Expected: FAIL because Gita auth and refresh still resolve the global Shopee configuration.
 
@@ -248,7 +248,7 @@ Run the focused tests with Gita credentials incomplete and primary credentials c
 
 - [ ] **Step 5: Run the full Omnichannel controller suite**
 
-Run: `cd backend; php artisan test tests/Unit/Http/Controllers/OmnichannelControllerTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Unit/Http/Controllers/OmnichannelControllerTest.php`
 
 Expected: PASS with no secret values in output.
 
@@ -329,7 +329,7 @@ Import `Illuminate\Database\Schema\Blueprint`, `Illuminate\Foundation\Testing\Re
 
 - [ ] **Step 2: Run the migration test and verify RED**
 
-Run: `cd backend; php artisan test tests/Feature/MarketplaceListingsMigrationTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Feature/MarketplaceListingsMigrationTest.php`
 
 Expected: FAIL because the dated migration file does not exist yet, so the test cannot create or query `marketplace_listings`.
 
@@ -358,13 +358,13 @@ Calculate `remote_identity_hash` as SHA-256 over a collision-free JSON encoding 
 
 - [ ] **Step 4: Run focused migration tests**
 
-Run: `cd backend; php artisan test tests/Feature/MarketplaceListingsMigrationTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Feature/MarketplaceListingsMigrationTest.php`
 
 Expected: PASS.
 
 - [ ] **Step 5: Run current mapping and STB regression suites**
 
-Run: `cd backend; php artisan test tests/Feature/SkuMappingsMigrationTest.php tests/Unit/Services/StbMappingSyncServiceTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Feature/SkuMappingsMigrationTest.php tests/Unit/Services/StbMappingSyncServiceTest.php`
 
 Expected: PASS; legacy mapping behavior remains intact.
 
@@ -428,7 +428,7 @@ Additional tests must prove:
 
 - [ ] **Step 2: Run the readiness tests and verify RED**
 
-Run: `cd backend; php artisan test tests/Feature/MarketplaceAccountReadinessTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Feature/MarketplaceAccountReadinessTest.php`
 
 Expected: FAIL because the readiness service and `data.accounts` do not exist.
 
@@ -461,7 +461,7 @@ Keep all current dashboard fields unchanged.
 
 - [ ] **Step 5: Run focused and dashboard regressions**
 
-Run: `cd backend; php artisan test tests/Feature/MarketplaceAccountReadinessTest.php tests/Feature/MarketplaceTokenSyncTest.php`
+Run: `cd backend; php vendor/bin/phpunit tests/Feature/MarketplaceAccountReadinessTest.php tests/Feature/MarketplaceTokenSyncTest.php`
 
 Expected: PASS.
 
@@ -607,7 +607,7 @@ Require `php artisan optimize:clear`, authorization of the exact Gita shop, toke
 
 - [ ] **Step 3: Run all phase verification**
 
-Run: `cd backend; php artisan test`
+Run: `cd backend; php vendor/bin/phpunit`
 
 Expected: full backend suite PASS.
 
