@@ -20,6 +20,7 @@ class MarketplaceSyncService
         $today = Carbon::today();
 
         return [
+            'accounts' => app(MarketplaceAccountReadinessService::class)->all(),
             'statuses' => [
                 'shopee' => $this->marketplaceStatus('shopee', $today),
                 'tiktok' => $this->marketplaceStatus('tiktok', $today),
