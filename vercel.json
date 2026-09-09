@@ -1,19 +1,21 @@
 {
   "version": 2,
+  "installCommand": "npm ci --ignore-scripts --no-audit --no-fund",
+  "buildCommand": "node -e \"console.log('Callback-only deployment; frontend build skipped')\"",
+  "outputDirectory": ".",
   "routes": [
     {
       "src": "/api/(.*)",
       "dest": "/api/$1"
     },
     {
-      "src": "/(.*)",
-      "dest": "/public/$1"
-    }
-  ],
-  "crons": [
+      "src": "/",
+      "dest": "/index.html"
+    },
     {
-      "path": "/api/auto-sync-scheduler",
-      "schedule": "0 15 * * *"
+      "src": "/(.*)",
+      "status": 404,
+      "dest": "/404.html"
     }
   ]
 }

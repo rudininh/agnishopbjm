@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\MobileStockAdjustmentService;
+use DomainException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
+use InvalidArgumentException;
 
 class MobileProductController extends Controller
 {
@@ -194,6 +197,109 @@ class MobileProductController extends Controller
                 'message' => 'Gagal menghitung profit: '.$exception->getMessage(),
             ], $exception->getCode() >= 400 && $exception->getCode() < 600 ? $exception->getCode() : 500);
         }
+    }
+
+    public function searchStockMaster(Request $request, MobileStockAdjustmentService $service): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'search' => ['nullable', 'string', 'max:255'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data tidak valid',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $data = $validator->validated();
+
+        $results = $service->search(
+            (string) ($data['search'] ?? ''),
+            (int) ($data['per_page'] ?? 20),
+        );
+
+        return response()->json([
+            'success' => true,
+            'data' => $results->items(),
+            'pagination' => [
+                'current_page' => $results->currentPage(),
+                'last_page' => $results->lastPage(),
+                'per_page' => $results->perPage(),
+                'total' => $results->total(),
+            ],
+        ]);
+    }
+
+    public function adjustStockMaster(Request $request, MobileStockAdjustmentService $service): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'stock_master_id' => ['required', 'integer', 'min:1'],
+            'delta' => ['required', 'integer', 'not_in:0'],
+            'reason' => ['required', 'in:receiving,sale,return,damaged,correction'],
+            'note' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data tidak valid',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $data = $validator->validated();
+
+        try {
+            $adjustment = $service->adjust(
+                (int) $data['stock_master_id'],
+                (int) $data['delta'],
+                (string) $data['reason'],
+                $data['note'] ?? null,
+                $request->user()?->email,
+            );
+        } catch (DomainException|InvalidArgumentException $exception) {
+            $status = $exception->getMessage() === 'Varian Stock Master tidak ditemukan.' ? 404 : 422;
+
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], $status);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Penyesuaian stok Stock Master tercatat. Marketplace belum diperbarui otomatis.',
+            'data' => $adjustment,
+        ]);
+    }
+
+    public function stockMasterAdjustmentHistory(Request $request, MobileStockAdjustmentService $service): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'stock_master_id' => ['required', 'integer', 'min:1'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data tidak valid',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $data = $validator->validated();
+
+        return response()->json([
+            'success' => true,
+            'data' => $service->history(
+                (int) $data['stock_master_id'],
+                (int) ($data['limit'] ?? 20),
+            )->values(),
+        ]);
     }
 
     private function buildProductQuery(string $search, string $marketplace)

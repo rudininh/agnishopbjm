@@ -1,6 +1,9 @@
 # 📱 Mobile Product Management - Dokumentasi
 
 ## Deskripsi
+
+> **Transisi Stock Master (September 9, 2026):** Penyesuaian stok harian sekarang dicatat melalui panel Stock Master pada halaman mobile. Setiap perubahan menyimpan saldo sebelum/sesudah, alasan, catatan, dan operator di `stock_adjustments`. Status marketplace hanya menunjukkan apakah mapping tersedia; Shopee dan TikTok belum diperbarui otomatis pada fase ini. Jangan gunakan form marketplace untuk mengubah stok.
+
 Halaman mobile-friendly untuk mengelola produk Shopee dan TikTok dengan kemampuan:
 1. ✅ Tambah produk di Shopee dan TikTok
 2. ✅ Tambah variant produk di Shopee dan TikTok

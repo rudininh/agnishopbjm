@@ -12,6 +12,7 @@
       <nav class="menu">
         <RouterLink to="/dashboard">Dashboard</RouterLink>
         <RouterLink to="/mobile/kelola-produk" class="menu-mobile-highlight">Kelola Produk Mobile</RouterLink>
+        <RouterLink to="/sinkronisasi-stok" class="menu-hub-highlight">Sinkronisasi Stok Semua Marketplace</RouterLink>
         <div class="menu-group">
           <button
             type="button"
@@ -24,6 +25,8 @@
           </button>
           <div v-if="produkOpen" class="submenu">
             <RouterLink to="/mobile/kelola-produk" class="menu-mobile-highlight">ðŸ“± Kelola Produk Mobile</RouterLink>
+            <RouterLink to="/products/omnichannel/create" class="menu-live-highlight">Tambah Produk Omnichannel</RouterLink>
+            <RouterLink to="/products">Daftar Produk</RouterLink>
             <RouterLink to="/stok-shopee">Stok Shopee</RouterLink>
             <RouterLink to="/stok-tiktok">Stok TikTok</RouterLink>
             <RouterLink to="/stock-master">Stock Master</RouterLink>
@@ -40,6 +43,7 @@
         <RouterLink to="/pos-offline">POS Offline</RouterLink>
         <div class="menu-group">
           <span>Marketplace</span>
+          <RouterLink to="/marketplace/accounts">Akun Marketplace</RouterLink>
           <RouterLink to="/marketplace/auto-sync">Sinkronisasi Otomatis</RouterLink>
           <RouterLink to="/marketplace/import">Import Marketplace</RouterLink>
           <RouterLink to="/marketplace/cetak-resi">Cetak Resi</RouterLink>
@@ -59,6 +63,10 @@ const produkOpen = ref(false)
 const sidebarOpen = ref(false)
 const route = useRoute()
 const isPosPage = computed(() => route.path === '/pos-offline')
+
+watch(() => route.path, (path) => {
+  if (path.startsWith('/products')) produkOpen.value = true
+}, { immediate: true })
 
 watch(isPosPage, (active) => {
   sidebarOpen.value = true
@@ -305,6 +313,16 @@ watch(isPosPage, (active) => {
 
 .submenu a {
   font-size: 13px;
+}
+
+.submenu .menu-live-highlight {
+  background: rgba(255, 255, 255, .16);
+  font-weight: 800;
+}
+
+.menu-hub-highlight {
+  background: rgba(255, 255, 255, .16);
+  font-weight: 800;
 }
 
 .logout {

@@ -45,6 +45,8 @@
         <RouterLink class="action tiktok" to="/stok-tiktok">Stok TikTok</RouterLink>
         <RouterLink class="action master" to="/stock-master">Stock Master</RouterLink>
         <RouterLink class="action sync" to="/marketplace/auto-sync">Auto Sync</RouterLink>
+        <RouterLink class="action hub" to="/sinkronisasi-stok">Hub Stok Marketplace</RouterLink>
+        <RouterLink class="action accounts" to="/marketplace/accounts">Kelola Akun Marketplace</RouterLink>
       </div>
     </section>
 

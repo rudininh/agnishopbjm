@@ -49,6 +49,54 @@
       </article>
     </section>
 
+    <section v-if="marketplaceAccountCards.length" class="account-readiness-panel" aria-labelledby="account-readiness-title">
+      <header>
+        <div>
+          <span>Alur sinkronisasi</span>
+          <h2 id="account-readiness-title">Kesiapan akun marketplace</h2>
+        </div>
+        <p>Stock Master menjadi satu-satunya sumber stok.</p>
+      </header>
+      <div class="account-readiness-flow">
+        <article class="stock-master-node">
+          <span>Sumber stok</span>
+          <strong>Stock Master</strong>
+        </article>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="account-target-grid">
+          <article v-for="account in marketplaceAccountCards" :key="account.key" class="account-target-card">
+            <div class="account-target-head">
+              <div>
+                <span>{{ account.channelLabel }}</span>
+                <strong>{{ account.name }}</strong>
+              </div>
+              <b :class="['badge', account.badgeClass]">{{ account.stateLabel }}</b>
+            </div>
+            <p v-if="account.message">{{ account.message }}</p>
+            <dl class="account-checks">
+              <div><dt>Kredensial</dt><dd>{{ account.checks.credentials ? 'Siap' : 'Belum lengkap' }}</dd></div>
+              <div><dt>Token &amp; toko</dt><dd>{{ account.checks.activeToken && account.checks.shopIdentity && account.checks.tokenUsable ? 'Siap' : 'Perlu perhatian' }}</dd></div>
+              <div><dt>Mapping SKU</dt><dd>{{ account.checks.mappings ? 'Siap' : 'Belum tersedia' }}</dd></div>
+              <div><dt>SKU termapping</dt><dd>{{ account.mappedSkus }}</dd></div>
+            </dl>
+            <div v-if="account.requiredEnv.length" class="required-env">
+              <span>Variabel .env diperlukan</span>
+              <code v-for="name in account.requiredEnv" :key="name">{{ name }}</code>
+            </div>
+            <button
+              v-if="canAuthorizeAccount(account)"
+              class="primary account-authorize"
+              type="button"
+              :disabled="runningAccountAuthorization === account.key"
+              @click="authorizeMarketplaceAccount(account)"
+            >
+              {{ runningAccountAuthorization === account.key ? 'Memproses...' : 'Hubungkan akun Shopee' }}
+            </button>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section class="browser-auto-strip">
       <div>
         <span>Auto Browser</span>
@@ -749,6 +797,7 @@
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { omnichannelService } from '@/services'
+import { canAuthorizeAccount, normalizeMarketplaceAccounts } from './marketplaceAccountReadinessState'
 
 const BROWSER_AUTO_SYNC_KEY = 'marketplace_auto_sync_browser_enabled'
 const BROWSER_AUTO_SYNC_INTERVAL_MS = 60 * 1000
@@ -776,6 +825,7 @@ const activeTab = ref('order')
 const notice = ref('')
 const noticeType = ref('success')
 const dashboard = ref({ statuses: {}, engine: {}, safety: {}, order_sync: {}, webhook_urls: {} })
+const runningAccountAuthorization = ref('')
 const runtimeStatus = ref({})
 const stbStatus = ref({})
 const runtimeEvents = ref({ items: [], pagination: { page: 1, last_page: 1, total: 0 } })
@@ -824,6 +874,7 @@ const Pagination = defineComponent({
 })
 
 const marketplaceStatus = (marketplace) => dashboard.value.statuses?.[marketplace] || {}
+const marketplaceAccountCards = computed(() => normalizeMarketplaceAccounts(dashboard.value.accounts))
 const labelMarketplace = (value) => {
   const text = String(value || '-')
   if (text === 'shopee') return 'Shopee'
@@ -945,6 +996,30 @@ const failureNotificationLabel = computed(() => {
 const loadDashboard = async () => {
   const { data } = await omnichannelService.autoSyncDashboard()
   dashboard.value = data.data || {}
+}
+
+const authorizeMarketplaceAccount = async (account) => {
+  if (!canAuthorizeAccount(account) || !account.connectAction) return
+
+  runningAccountAuthorization.value = account.key
+  notice.value = ''
+  try {
+    const response = await omnichannelService.runTokenAction(account.connectAction)
+    notice.value = response.data?.message || 'Aksi otorisasi berhasil diproses.'
+    noticeType.value = 'success'
+
+    if (response.data?.redirect_url) {
+      window.location.href = response.data.redirect_url
+      return
+    }
+
+    await loadDashboard()
+  } catch (error) {
+    notice.value = error?.response?.data?.message || error?.message || 'Aksi otorisasi akun gagal diproses.'
+    noticeType.value = 'error'
+  } finally {
+    runningAccountAuthorization.value = ''
+  }
 }
 
 const loadRuntimeStatus = async () => {
@@ -1801,6 +1876,31 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 .ghost { background:#fff; color:#0f172a; border:1px solid #dbe3ef; }
 .notice { border-radius:6px; padding:10px 12px; margin-bottom:14px; border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; }
 .notice.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+.account-readiness-panel { border:1px solid #dbe3ef; border-radius:8px; padding:12px; margin-bottom:14px; background:#fff; }
+.account-readiness-panel > header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:12px; }
+.account-readiness-panel header span { display:block; color:#64748b; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; margin-bottom:3px; }
+.account-readiness-panel h2 { font-size:17px; margin:0; }
+.account-readiness-panel header p { color:#475569; font-size:12px; line-height:1.4; margin:3px 0 0; text-align:right; }
+.account-readiness-flow { display:grid; grid-template-columns:150px 20px minmax(0,1fr); align-items:stretch; gap:10px; }
+.stock-master-node { display:grid; align-content:center; gap:5px; border:1px solid #bbf7d0; border-radius:8px; padding:12px; background:#f0fdf4; }
+.stock-master-node span { color:#166534; font-size:12px; font-weight:800; }
+.stock-master-node strong { color:#14532d; font-size:15px; }
+.flow-arrow { align-self:center; color:#0f5fc7; font-size:20px; font-weight:800; text-align:center; }
+.account-target-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.account-target-card { display:grid; align-content:start; gap:10px; border:1px solid #e2e8f0; border-radius:8px; padding:11px; background:#f8fafc; min-width:0; }
+.account-target-head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+.account-target-head span { display:block; color:#64748b; font-size:11px; font-weight:800; text-transform:uppercase; margin-bottom:3px; }
+.account-target-head strong { display:block; color:#0f172a; font-size:13px; line-height:1.3; }
+.account-target-head .badge { flex:none; max-width:126px; text-align:center; }
+.account-target-card > p { color:#475569; font-size:12px; line-height:1.4; margin:0; }
+.account-checks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.account-checks div { min-width:0; }
+.account-checks dt { font-size:11px; }
+.account-checks dd { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.required-env { display:flex; flex-wrap:wrap; gap:5px; align-items:center; color:#7c2d12; font-size:11px; font-weight:800; }
+.required-env span { width:100%; }
+.required-env code { border:1px solid #fed7aa; border-radius:4px; padding:3px 5px; background:#fff7ed; color:#9a3412; font-size:11px; }
+.account-authorize { justify-self:start; padding:7px 9px; font-size:12px; }
 .browser-auto-strip { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
 .browser-auto-strip div { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; min-width:0; }
 .browser-auto-strip span { color:#64748b; font-size:12px; font-weight:800; }
@@ -1904,6 +2004,6 @@ td { color:#0f172a; }
 .detail-items span { display:block; color:#475569; font-size:12px; margin-top:2px; }
 .detail-table table { min-width:980px; }
 @media (max-width:1360px) { .status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.stb-worker-strip,.runtime-strip,.bridge-strip { grid-template-columns:1fr; } }
-@media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.alert-card,.detail-grid,.detail-items article,.anomaly-filter-row,.compact-filter-row { grid-template-columns:1fr; } }
+@media (max-width:1180px) { .status-grid,.safety-summary,.webhook-strip,.browser-auto-strip,.stb-worker-strip,.runtime-strip,.bridge-strip { grid-template-columns:1fr; } .account-target-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:820px) { .page-shell { margin-left:0; padding:16px; } .page-header,.header-actions,.modal-head,.modal-actions,.account-readiness-panel > header { flex-direction:column; align-items:stretch; } .filter-row,.issue-banner,.alert-card,.detail-grid,.detail-items article,.anomaly-filter-row,.compact-filter-row,.account-readiness-flow,.account-target-grid { grid-template-columns:1fr; } .account-readiness-panel header p { text-align:left; } .flow-arrow { transform:rotate(90deg); } }
 </style>
