@@ -177,11 +177,16 @@ class MarketplaceAccountRegistry
             return $credentials;
         }
 
+        $partnerId = (int) ($override->partner_id ?? 0);
+        $partnerKey = trim((string) ($override->partner_key ?? ''));
+        $host = rtrim(trim((string) ($override->host ?? '')), '/');
+        $redirectUrl = trim((string) ($override->redirect_url ?? ''));
+
         return [
-            'partner_id' => $override->partner_id ?? ($credentials['partner_id'] ?? 0),
-            'partner_key' => $override->partner_key ?? ($credentials['partner_key'] ?? ''),
-            'host' => $override->host ?? ($credentials['host'] ?? ''),
-            'redirect_url' => $override->redirect_url ?? ($credentials['redirect_url'] ?? ''),
+            'partner_id' => $partnerId > 0 ? $partnerId : ($credentials['partner_id'] ?? 0),
+            'partner_key' => $partnerKey !== '' ? $partnerKey : ($credentials['partner_key'] ?? ''),
+            'host' => $host !== '' ? $host : ($credentials['host'] ?? ''),
+            'redirect_url' => $redirectUrl !== '' ? $redirectUrl : ($credentials['redirect_url'] ?? ''),
         ];
     }
 
