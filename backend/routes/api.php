@@ -4,9 +4,11 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CartController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\GitaOrderScrapeController;
+use App\Http\Controllers\MarketplaceAccountController;
 use App\Http\Controllers\MarketplaceAutoSyncController;
 use App\Http\Controllers\MarketplaceTokenSyncController;
 use App\Http\Controllers\MarketplaceImportController;
+use App\Http\Controllers\MarketplaceProductPublicationController;
 use App\Http\Controllers\MarketplaceWebhookController;
 use App\Http\Controllers\MobileProductController;
 use App\Http\Controllers\OrderController;
@@ -141,10 +143,18 @@ Route::prefix('auth')->group(function () {
 
 Route::post('auth/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
 
+Route::get('marketplace/accounts', [MarketplaceAccountController::class, 'index']);
+Route::post('marketplace/products/{product}/publish', [MarketplaceProductPublicationController::class, 'publish']);
+Route::get('marketplace/products/publication-runs/{run}', [MarketplaceProductPublicationController::class, 'show']);
+Route::post('marketplace/products/publication-runs/{run}/retry', [MarketplaceProductPublicationController::class, 'retry']);
 Route::apiResource('products', ProductController::class);
 Route::apiResource('categories', CategoryController::class)->only(['index', 'show', 'store', 'update', 'destroy']);
 
 Route::middleware('auth:sanctum')->group(function () {
+    Route::post('marketplace/accounts', [MarketplaceAccountController::class, 'store']);
+    Route::put('marketplace/accounts/{accountKey}', [MarketplaceAccountController::class, 'update']);
+    Route::post('marketplace/accounts/{accountKey}/test', [MarketplaceAccountController::class, 'test']);
+
     Route::get('cart', [CartController::class, 'show']);
     Route::post('cart/items', [CartController::class, 'addItem']);
     Route::put('cart/items/{item}', [CartController::class, 'updateItem']);
@@ -153,6 +163,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('orders', [OrderController::class, 'checkout']);
     Route::get('orders', [OrderController::class, 'index']);
     Route::get('orders/{order}', [OrderController::class, 'show']);
+
+    Route::prefix('mobile/stock-master')->group(function () {
+        Route::get('search', [MobileProductController::class, 'searchStockMaster']);
+        Route::post('adjustments', [MobileProductController::class, 'adjustStockMaster']);
+        Route::get('adjustments', [MobileProductController::class, 'stockMasterAdjustmentHistory']);
+    });
 });
 Route::get('pos/stock-master-products', [PosController::class, 'stockMasterProducts']);
 Route::post('pos/offline-orders', [PosController::class, 'checkout']);

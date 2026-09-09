@@ -3,7 +3,7 @@
     <header class="page-header">
       <div>
         <p>Marketplace</p>
-        <h1>Stok Shopee</h1>
+        <h1>{{ unified ? `Stok Shopee · ${accountName}` : 'Stok Shopee' }}</h1>
       </div>
       <div class="header-actions">
         <button class="ghost" @click="resetFilters">Reset Filter</button>
@@ -310,6 +310,14 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
+
+const props = defineProps({
+  accountKey: { type: String, default: '' },
+  accountName: { type: String, default: 'Shopee' },
+  unified: { type: Boolean, default: false }
+})
+
+const accountParams = () => props.accountKey ? { account_key: props.accountKey } : {}
 
 const items = ref([])
 const expanded = ref({})
@@ -730,7 +738,7 @@ const loadData = async (syncMode = false) => {
   loading.value = true
   syncMessage.value = ''
   try {
-    const response = await omnichannelService.shopeeItems(syncMode)
+    const response = await omnichannelService.shopeeItems(syncMode, accountParams())
     items.value = response.data.items || []
     const syncResult = response.data.sync
 
@@ -756,7 +764,7 @@ const syncProduct = async (item) => {
   syncingItemId.value = item.item_id
   syncMessage.value = ''
   try {
-    const response = await omnichannelService.shopeeItems(true, { item_id: item.item_id })
+    const response = await omnichannelService.shopeeItems(true, { ...accountParams(), item_id: item.item_id })
     items.value = response.data.items || []
     syncMessage.value = response.data.sync?.message || response.data.message || ''
     syncTone.value = response.data.sync?.status === 'error' ? 'error' : 'success'

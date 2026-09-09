@@ -3,7 +3,7 @@
     <header class="page-header">
       <div>
         <p>Marketplace</p>
-        <h1>Stok TikTok</h1>
+        <h1>{{ unified ? `Stok TikTok · ${accountName}` : 'Stok TikTok' }}</h1>
       </div>
       <div class="header-actions">
         <button class="ghost" @click="resetFilters">Reset Filter</button>
@@ -284,6 +284,14 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { omnichannelService } from '@/services'
+
+const props = defineProps({
+  accountKey: { type: String, default: '' },
+  accountName: { type: String, default: 'TikTok' },
+  unified: { type: Boolean, default: false }
+})
+
+const accountParams = () => props.accountKey ? { account_key: props.accountKey } : {}
 
 const items = ref([])
 const expanded = ref({})
@@ -592,7 +600,7 @@ const loadData = async (syncMode = false) => {
   loading.value = true
   syncMessage.value = ''
   try {
-    const response = await omnichannelService.tiktokItems(syncMode)
+    const response = await omnichannelService.tiktokItems(syncMode, accountParams())
     items.value = response.data.items || []
     lastSyncAt.value = response.data.last_sync_at || response.data.sync?.last_sync_at || ''
     syncMessage.value = response.data.sync?.message || response.data.message || ''
@@ -614,7 +622,7 @@ const syncProduct = async (item) => {
   syncingProductId.value = item.product_id
   syncMessage.value = ''
   try {
-    const response = await omnichannelService.tiktokItems(true, { product_id: item.product_id })
+    const response = await omnichannelService.tiktokItems(true, { ...accountParams(), product_id: item.product_id })
     items.value = response.data.items || []
     lastSyncAt.value = response.data.last_sync_at || response.data.sync?.last_sync_at || ''
     syncMessage.value = response.data.sync?.message || response.data.message || ''

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\MarketplaceAccount;
 use InvalidArgumentException;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -10,13 +11,14 @@ use Throwable;
 class MarketplaceAccountRegistry
 {
     /**
-     * @return array<int, array{key:string, name:string, channel:string, enabled:bool, connect_action:string, uses_primary_app:bool, required_env:array<int, string>}>
+     * @return array<int, array{key:string, account_key:string, name:string, channel:string, enabled:bool, connect_action:string, uses_primary_app:bool, required_env:array<int, string>, credentials_configured:bool}>
      */
     public function publicAccounts(): array
     {
         $accounts = [];
 
-        foreach (config('marketplace_accounts.accounts', []) as $key => $account) {
+        foreach ($this->accountKeys() as $key) {
+            $account = $this->account($key);
             $usesPrimaryApp = (bool) ($account['use_primary_app'] ?? false);
             $requiredEnv = $account['required_env'] ?? [];
             if ($key === 'shopee-gitacollectionbjm' && $usesPrimaryApp) {
@@ -25,12 +27,14 @@ class MarketplaceAccountRegistry
 
             $accounts[] = [
                 'key' => (string) $key,
+                'account_key' => (string) $key,
                 'name' => (string) ($account['name'] ?? ''),
                 'channel' => (string) ($account['channel'] ?? ''),
                 'enabled' => (bool) ($account['enabled'] ?? false),
                 'connect_action' => (string) ($account['connect_action'] ?? ''),
                 'uses_primary_app' => $usesPrimaryApp,
                 'required_env' => array_values($requiredEnv),
+                'credentials_configured' => $this->credentialsConfigured($account),
             ];
         }
 
@@ -42,11 +46,37 @@ class MarketplaceAccountRegistry
      */
     public function account(string $accountKey): array
     {
-        $account = config('marketplace_accounts.accounts.'.$accountKey);
+        $configured = config('marketplace_accounts.accounts.'.$accountKey);
+        $stored = $this->storedAccount($accountKey);
 
-        if (! is_array($account)) {
+        if (! is_array($configured) && $stored === null) {
             throw new InvalidArgumentException('Akun marketplace tidak dikenal.');
         }
+
+        if ($stored === null) {
+            return $configured;
+        }
+
+        $account = is_array($configured) ? $configured : [
+            'name' => $stored->name,
+            'channel' => $stored->channel,
+            'enabled' => $stored->enabled,
+            'connect_action' => 'auth-'.$stored->account_key,
+            'use_primary_app' => false,
+            'required_env' => [],
+            'credentials' => [],
+        ];
+        $configuredCredentials = is_array($account['credentials'] ?? null) ? $account['credentials'] : [];
+        $storedCredentials = is_array($stored->credentials) ? $stored->credentials : [];
+
+        $account['name'] = $stored->name;
+        $account['channel'] = $stored->channel;
+        $account['enabled'] = (bool) $stored->enabled;
+        $account['credentials'] = array_replace($configuredCredentials, $storedCredentials);
+        $account['settings'] = array_replace(
+            is_array($account['settings'] ?? null) ? $account['settings'] : [],
+            is_array($stored->settings) ? $stored->settings : [],
+        );
 
         return $account;
     }
@@ -153,6 +183,61 @@ class MarketplaceAccountRegistry
             'host' => $override->host ?? ($credentials['host'] ?? ''),
             'redirect_url' => $override->redirect_url ?? ($credentials['redirect_url'] ?? ''),
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function accountKeys(): array
+    {
+        $keys = array_keys(config('marketplace_accounts.accounts', []));
+        foreach ($this->storedAccounts() as $account) {
+            $keys[] = (string) $account->account_key;
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function storedAccount(string $accountKey): ?MarketplaceAccount
+    {
+        foreach ($this->storedAccounts() as $account) {
+            if ((string) $account->account_key === $accountKey) {
+                return $account;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<int, MarketplaceAccount>
+     */
+    private function storedAccounts(): array
+    {
+        try {
+            return MarketplaceAccount::query()->orderBy('id')->get()->all();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $account
+     */
+    private function credentialsConfigured(array $account): bool
+    {
+        $credentials = is_array($account['credentials'] ?? null) ? $account['credentials'] : [];
+        if (($account['channel'] ?? '') === 'shopee') {
+            return (int) ($credentials['partner_id'] ?? 0) > 0
+                && trim((string) ($credentials['partner_key'] ?? '')) !== '';
+        }
+
+        if (($account['channel'] ?? '') === 'tiktok') {
+            return trim((string) ($credentials['app_key'] ?? '')) !== ''
+                && trim((string) ($credentials['app_secret'] ?? '')) !== '';
+        }
+
+        return false;
     }
 
     /**

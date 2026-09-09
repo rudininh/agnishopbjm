@@ -1,0 +1,20 @@
+# Gitashop Vercel deployment
+
+Project URL: `https://gitashopbjm.vercel.app`
+
+## Callback URLs
+
+- Shopee: `https://gitashopbjm.vercel.app/api/callback`
+- TikTok: `https://gitashopbjm.vercel.app/api/tiktok-callback`
+
+## Required Vercel environment variables
+
+- `GITASHOP_BACKEND_URL`: base URL for the separate Gitashop Laravel backend.
+- `VITE_API_BASE_URL`: Gitashop backend API URL, normally `${GITASHOP_BACKEND_URL}/api`.
+
+Optional callback overrides:
+
+- `GITASHOP_SHOPEE_CALLBACK_URL`
+- `GITASHOP_TIKTOK_CALLBACK_URL`
+
+Do not add partner IDs, partner keys, access tokens, refresh tokens, or callback state to this repository. Add production values in the Vercel project settings after the partner review is complete.

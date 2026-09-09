@@ -16,6 +16,7 @@ class ProductResource extends JsonResource
             'price' => (float) $this->price,
             'stock' => $this->stock,
             'category' => new CategoryResource($this->whenLoaded('category')),
+            'variants' => ProductVariantResource::collection($this->whenLoaded('variants')),
             'created_at' => $this->created_at?->toIso8601String(),
         ];
     }

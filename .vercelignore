@@ -5,6 +5,9 @@ node_modules
 
 backend
 frontend
+api/*.js
+!api/callback.js
+!api/tiktok-callback.js
 
 backend/vendor
 backend/storage/logs

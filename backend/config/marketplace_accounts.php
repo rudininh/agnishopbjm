@@ -48,8 +48,8 @@ return [
             'connect_action' => 'auth-shopee-gitacollectionbjm',
             'use_primary_app' => filter_var(env('SHOPEE_GITA_USE_PRIMARY_APP', false), FILTER_VALIDATE_BOOL),
             'credentials' => [
-                'partner_id' => (int) env('SHOPEE_GITA_PARTNER_ID', 0),
-                'partner_key' => trim((string) env('SHOPEE_GITA_PARTNER_KEY', '')),
+                'partner_id' => (int) env('SHOPEE_GITA_PARTNER_ID', env('GITASHOPCOLLECTIONBJM_SHOPEE_PARTNER_ID', 0)),
+                'partner_key' => trim((string) env('SHOPEE_GITA_PARTNER_KEY', env('GITASHOPCOLLECTIONBJM_SHOPEE_PARTNER_KEY', ''))),
                 'host' => rtrim(trim((string) env('SHOPEE_GITA_HOST', 'https://partner.shopeemobile.com')), '/'),
                 'redirect_url' => trim((string) env('SHOPEE_GITA_REDIRECT_URL', '')),
             ],

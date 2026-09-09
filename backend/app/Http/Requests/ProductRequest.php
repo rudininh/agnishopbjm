@@ -20,6 +20,12 @@ class ProductRequest extends FormRequest
             'price' => 'required|numeric|min:0',
             'stock' => 'required|integer|min:0',
             'category_id' => 'required|uuid|exists:categories,uuid',
+            'variants' => 'sometimes|array|min:1',
+            'variants.*.variant_name' => 'required_with:variants|string|max:255',
+            'variants.*.sku' => 'required_with:variants|string|max:100|distinct|unique:product_variants,sku',
+            'variants.*.price' => 'required_with:variants|numeric|min:0',
+            'variants.*.stock' => 'required_with:variants|integer|min:0',
+            'variants.*.image_url' => 'nullable|url|max:2048',
         ];
     }
 }

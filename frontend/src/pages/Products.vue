@@ -1,7 +1,15 @@
 <template>
   <div class="pages-products">
     <div class="container">
-      <h1>Produk AgniShop</h1>
+      <div class="page-heading">
+        <div>
+          <h1>Produk AgniShop</h1>
+          <p class="page-subtitle">Kelola produk internal dan varian marketplace.</p>
+        </div>
+        <RouterLink class="add-product-link" to="/products/omnichannel/create">
+          + Tambah Produk
+        </RouterLink>
+      </div>
 
       <div class="filter-section">
         <input 
@@ -35,6 +43,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useCartStore } from '@/stores/cartStore'
 import { productService } from '@/services'
 import ProductCard from '@/components/ProductCard.vue'
+import { RouterLink } from 'vue-router'
 
 const products = ref([])
 const loading = ref(false)
@@ -87,8 +96,33 @@ onMounted(fetchProducts)
 }
 
 .pages-products h1 {
-  margin-bottom: 2rem;
+  margin: 0;
   color: #2c3e50;
+}
+
+.page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.page-subtitle {
+  margin: .45rem 0 0;
+  color: #64748b;
+}
+
+.add-product-link {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  padding: .7rem 1rem;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
 }
 
 .filter-section {
@@ -123,6 +157,15 @@ onMounted(fetchProducts)
 }
 
 @media (max-width: 768px) {
+  .page-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .add-product-link {
+    justify-content: center;
+  }
+
   .products-grid {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   }

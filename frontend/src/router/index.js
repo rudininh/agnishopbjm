@@ -20,6 +20,9 @@ import GitaOrderScrapeReport from '@/pages/GitaOrderScrapeReport.vue'
 import ShippingLabels from '@/pages/ShippingLabels.vue'
 import POSOffline from '@/pages/POSOffline.vue'
 import MobileProductManagement from '@/pages/MobileProductManagement.vue'
+import OmnichannelProductCreate from '@/pages/OmnichannelProductCreate.vue'
+import MarketplaceStockHub from '@/pages/MarketplaceStockHub.vue'
+import MarketplaceAccounts from '@/pages/MarketplaceAccounts.vue'
 
 const routes = [
   {
@@ -45,6 +48,16 @@ const routes = [
     path: '/stok-tiktok',
     name: 'tiktok-stock',
     component: TiktokStock
+  },
+  {
+    path: '/sinkronisasi-stok',
+    name: 'sinkronisasi-stok',
+    component: MarketplaceStockHub
+  },
+  {
+    path: '/marketplace/accounts',
+    name: 'marketplace-accounts',
+    component: MarketplaceAccounts
   },
   {
     path: '/stock-master',
@@ -141,6 +154,11 @@ const routes = [
     path: '/mobile/kelola-produk',
     name: 'mobile-product-management',
     component: MobileProductManagement
+  },
+  {
+    path: '/products/omnichannel/create',
+    name: 'omnichannel-product-create',
+    component: OmnichannelProductCreate
   },
   {
     path: '/:pathMatch(.*)*',

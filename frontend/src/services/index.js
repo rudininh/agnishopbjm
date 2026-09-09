@@ -43,6 +43,18 @@ export const productService = {
 
   delete(id) {
     return api.delete(`/products/${id}`)
+  },
+
+  publishToMarketplaces(id, data) {
+    return api.post(`/marketplace/products/${id}/publish`, data)
+  },
+
+  getPublicationRun(runId) {
+    return api.get(`/marketplace/products/publication-runs/${runId}`)
+  },
+
+  retryPublicationRun(runId) {
+    return api.post(`/marketplace/products/publication-runs/${runId}/retry`)
   }
 }
 
@@ -111,6 +123,22 @@ export const omnichannelService = {
     return api.get('/get-tiktok-items', {
       params: { ...(sync ? { sync: 1 } : {}), ...params }
     })
+  },
+
+  marketplaceAccounts() {
+    return api.get('/marketplace/accounts')
+  },
+
+  createMarketplaceAccount(data) {
+    return api.post('/marketplace/accounts', data)
+  },
+
+  updateMarketplaceAccount(accountKey, data) {
+    return api.put(`/marketplace/accounts/${encodeURIComponent(accountKey)}`, data)
+  },
+
+  testMarketplaceAccount(accountKey) {
+    return api.post(`/marketplace/accounts/${encodeURIComponent(accountKey)}/test`)
   },
 
   stockMaster() {

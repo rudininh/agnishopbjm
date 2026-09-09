@@ -26,6 +26,92 @@
       </ol>
     </section>
 
+    <section class="stock-master-panel" aria-labelledby="stock-master-title">
+      <div class="stock-master-heading">
+        <p class="stock-master-eyebrow">Sumber stok harian</p>
+        <h2 id="stock-master-title">Stock Master</h2>
+        <p>Catat barang masuk, penjualan, retur, barang rusak, dan koreksi di sini. Marketplace belum diperbarui otomatis.</p>
+      </div>
+
+      <input
+        v-model="stockMasterSearch"
+        type="search"
+        class="form-input"
+        placeholder="Cari SKU, nama produk, atau varian Stock Master"
+        @input="debouncedStockMasterSearch"
+      />
+
+      <p v-if="stockMasterLoading" class="stock-master-status">Mencari Stock Master...</p>
+      <p v-else-if="stockMasterError" class="stock-master-error">{{ stockMasterError }}</p>
+
+      <div v-if="stockMasterResults.length" class="stock-master-results">
+        <button
+          v-for="item in stockMasterResults"
+          :key="item.id"
+          type="button"
+          :class="['stock-master-result', { selected: selectedStockMaster?.id === item.id }]"
+          @click="selectStockMaster(item)"
+        >
+          <strong>{{ item.product_name || item.internal_sku }}</strong>
+          <span>{{ item.variant_name || 'Varian standar' }} · {{ item.internal_sku }}</span>
+          <b>{{ item.stock_qty }} unit</b>
+        </button>
+      </div>
+
+      <form v-if="selectedStockMaster" class="stock-adjustment-form" @submit.prevent="submitStockAdjustment">
+        <div class="selected-stock-master">
+          <strong>{{ selectedStockMaster.product_name || selectedStockMaster.internal_sku }}</strong>
+          <span>{{ selectedStockMaster.variant_name || 'Varian standar' }} · Stok Master {{ selectedStockMaster.stock_qty }} unit</span>
+        </div>
+
+        <div class="stock-adjustment-grid">
+          <label class="form-group">
+            <span>Arah stok</span>
+            <select v-model="stockAdjustment.direction" class="form-input">
+              <option value="increase">Tambah stok</option>
+              <option value="decrease">Kurangi stok</option>
+            </select>
+          </label>
+          <label class="form-group">
+            <span>Jumlah</span>
+            <input v-model.number="stockAdjustment.quantity" type="number" min="1" class="form-input" required />
+          </label>
+        </div>
+
+        <label class="form-group">
+          <span>Alasan</span>
+          <select v-model="stockAdjustment.reason" class="form-input" required>
+            <option value="receiving">Barang masuk</option>
+            <option value="sale">Penjualan</option>
+            <option value="return">Retur</option>
+            <option value="damaged">Barang rusak</option>
+            <option value="correction">Koreksi stok</option>
+          </select>
+        </label>
+        <label class="form-group">
+          <span>Catatan (opsional)</span>
+          <textarea v-model="stockAdjustment.note" class="form-input" rows="2" placeholder="Contoh: nomor pesanan atau penerimaan barang"></textarea>
+        </label>
+        <button type="submit" class="btn-primary" :disabled="stockAdjustmentSubmitting">
+          {{ stockAdjustmentSubmitting ? 'Mencatat...' : 'Catat Penyesuaian Stock Master' }}
+        </button>
+      </form>
+
+      <div v-if="selectedStockMaster" class="delivery-state-list">
+        <h3>Status tujuan marketplace</h3>
+        <p v-for="state in Object.values(selectedStockMaster.delivery_states || {})" :key="state.account_key">
+          <strong>{{ state.name }}:</strong> {{ formatDeliveryState(state.status) }}
+        </p>
+      </div>
+
+      <div v-if="stockAdjustmentHistory.length" class="stock-history">
+        <h3>Riwayat terakhir</h3>
+        <p v-for="entry in stockAdjustmentHistory" :key="entry.id">
+          {{ entry.delta > 0 ? '+' : '' }}{{ entry.delta }} unit · {{ entry.reason }} · stok akhir {{ entry.after_quantity }}
+        </p>
+      </div>
+    </section>
+
     <!-- Search & Filter -->
     <div class="search-section">
       <div class="search-box">
@@ -177,21 +263,13 @@
                   <span class="detail-value profit">Rp {{ formatNumber((variant.price || 0) - (variant.cost_price || 0)) }}</span>
                 </div>
                 <div class="detail-row">
-                  <span class="detail-label">Stok:</span>
+                  <span class="detail-label">Stok marketplace:</span>
                   <span class="detail-value">{{ variant.stock || 0 }} unit</span>
                 </div>
+                <p class="stock-master-notice">Untuk mengubah stok, gunakan panel Stock Master di atas. Form ini hanya untuk harga.</p>
 
                 <!-- Edit Form -->
                 <div class="edit-form">
-                  <div class="form-group">
-                    <label>Stok Baru:</label>
-                    <input 
-                      v-model.number="editForm[variant.variant_id].stock" 
-                      type="number" 
-                      min="0"
-                      class="form-input"
-                    />
-                  </div>
                   <div class="form-group">
                     <label>Harga Jual:</label>
                     <input 
@@ -247,6 +325,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import api from '@/services/api'
+import { createAdjustmentPayload, formatDeliveryState } from './mobileStockMasterState'
 
 // State
 const loading = ref(false)
@@ -260,6 +339,19 @@ const products = ref([])
 const selectedProductData = ref(null)
 const expandedVariants = ref([])
 const editForm = reactive({})
+const stockMasterSearch = ref('')
+const stockMasterResults = ref([])
+const selectedStockMaster = ref(null)
+const stockMasterLoading = ref(false)
+const stockMasterError = ref('')
+const stockAdjustmentSubmitting = ref(false)
+const stockAdjustmentHistory = ref([])
+const stockAdjustment = reactive({
+  direction: 'decrease',
+  quantity: 1,
+  reason: 'sale',
+  note: '',
+})
 const fallbackImage = '/agni-logo.png'
 const mobileAccessUrl = 'http://agnishopbjm-laravel.test/mobile/kelola-produk'
 const lanAccessUrl = 'http://192.168.18.6/mobile/kelola-produk'
@@ -339,6 +431,74 @@ const debouncedSearch = () => {
   }, 500)
 }
 
+let stockMasterSearchTimeout
+const debouncedStockMasterSearch = () => {
+  clearTimeout(stockMasterSearchTimeout)
+  stockMasterSearchTimeout = setTimeout(() => {
+    loadStockMaster()
+  }, 350)
+}
+
+const loadStockMaster = async () => {
+  if (!stockMasterSearch.value.trim()) {
+    stockMasterResults.value = []
+    return
+  }
+
+  try {
+    stockMasterLoading.value = true
+    stockMasterError.value = ''
+    const response = await api.get('/mobile/stock-master/search', {
+      params: { search: stockMasterSearch.value, per_page: 10 },
+    })
+    stockMasterResults.value = response.data.data || []
+  } catch (err) {
+    stockMasterError.value = err.response?.data?.message || 'Gagal mencari Stock Master.'
+  } finally {
+    stockMasterLoading.value = false
+  }
+}
+
+const selectStockMaster = async (item) => {
+  selectedStockMaster.value = item
+  stockAdjustmentHistory.value = []
+
+  try {
+    const response = await api.get('/mobile/stock-master/adjustments', {
+      params: { stock_master_id: item.id, limit: 5 },
+    })
+    stockAdjustmentHistory.value = response.data.data || []
+  } catch (err) {
+    stockMasterError.value = err.response?.data?.message || 'Gagal memuat riwayat stok.'
+  }
+}
+
+const submitStockAdjustment = async () => {
+  try {
+    stockAdjustmentSubmitting.value = true
+    stockMasterError.value = ''
+    const payload = createAdjustmentPayload({
+      stockMasterId: selectedStockMaster.value?.id,
+      ...stockAdjustment,
+    })
+    const response = await api.post('/mobile/stock-master/adjustments', payload)
+    const adjustment = response.data.data
+    selectedStockMaster.value = {
+      ...selectedStockMaster.value,
+      stock_qty: adjustment.after_quantity,
+      delivery_states: adjustment.delivery_states,
+    }
+    stockAdjustmentHistory.value = [adjustment, ...stockAdjustmentHistory.value].slice(0, 5)
+    stockAdjustment.quantity = 1
+    stockAdjustment.note = ''
+    showSuccess('Penyesuaian Stock Master berhasil dicatat. Marketplace belum diperbarui otomatis.')
+  } catch (err) {
+    stockMasterError.value = err.response?.data?.message || err.message || 'Gagal mencatat penyesuaian stok.'
+  } finally {
+    stockAdjustmentSubmitting.value = false
+  }
+}
+
 const selectProduct = async (product) => {
   try {
     loading.value = true
@@ -358,7 +518,6 @@ const selectProduct = async (product) => {
       // Initialize edit form for all variants
       selectedProductData.value.variants.forEach(variant => {
         editForm[variant.variant_id] = {
-          stock: variant.stock || 0,
           price: variant.price || 0,
           cost_price: variant.cost_price || 0,
         }
@@ -399,14 +558,13 @@ const updateVariant = async (variant) => {
       marketplace: selectedProductData.value.marketplace,
       product_id: selectedProductData.value.product_id,
       variant_id: variant.variant_id,
-      stock: formData.stock,
+      stock: variant.stock || 0,
       price: formData.price,
       cost_price: formData.cost_price,
     })
 
     if (response.data.success) {
       // Update local data
-      variant.stock = formData.stock
       variant.price = formData.price
       variant.cost_price = formData.cost_price
 
@@ -427,7 +585,6 @@ const updateVariant = async (variant) => {
 
 const resetForm = (variant) => {
   editForm[variant.variant_id] = {
-    stock: variant.stock || 0,
     price: variant.price || 0,
     cost_price: variant.cost_price || 0,
   }
@@ -1038,6 +1195,91 @@ onMounted(() => {
 
 .guide-steps .guide-url {
   display: block;
+}
+
+.stock-master-panel {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 12px;
+  margin: 16px;
+  padding: 16px;
+}
+
+.stock-master-heading h2,
+.delivery-state-list h3,
+.stock-history h3 {
+  color: #065f46;
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.stock-master-eyebrow {
+  color: #047857;
+  font-size: 11px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  text-transform: uppercase;
+}
+
+.stock-master-heading > p:last-child,
+.stock-master-status,
+.stock-master-error,
+.stock-master-notice {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.stock-master-error {
+  color: #b91c1c;
+}
+
+.stock-master-results,
+.delivery-state-list,
+.stock-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stock-master-result {
+  background: white;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  text-align: left;
+}
+
+.stock-master-result.selected {
+  border: 2px solid #059669;
+}
+
+.stock-master-result span,
+.selected-stock-master span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.stock-adjustment-form {
+  background: white;
+  border-radius: 10px;
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.selected-stock-master {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.stock-adjustment-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 /* Responsive adjustments */
