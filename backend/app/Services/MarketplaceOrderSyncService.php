@@ -14,6 +14,153 @@ class MarketplaceOrderSyncService
     ) {
     }
 
+    public function processShopeeOrderForAccount(string $accountKey, string $orderSn, string $eventType, array $payload = []): array
+    {
+        $accountKey = trim($accountKey);
+        $orderSn = trim($orderSn);
+        if ($orderSn === '') {
+            return ['status' => 'error', 'message' => 'order_sn Shopee kosong.', 'account_key' => $accountKey];
+        }
+
+        $detail = $this->apiService->fetchShopeeOrderDetailForAccount($accountKey, $orderSn);
+        if (($detail['status'] ?? '') !== 'success') {
+            $this->syncService->logSync('shopee_order', $accountKey, $orderSn, null, null, 'error', ($accountKey.' '.$detail['message'] ?? 'Detail order Shopee gagal diambil.'));
+            return [...$detail, 'account_key' => $accountKey];
+        }
+
+        $order = is_array($detail['order'] ?? null) ? $detail['order'] : [];
+        $orderStatus = (string) ($order['order_status'] ?? data_get($payload, 'order_status', 'UNKNOWN'));
+        $stockEvent = strtoupper($eventType);
+        $items = is_array($order['item_list'] ?? null) ? $order['item_list'] : [];
+        $results = [];
+        $failed = 0;
+        $success = 0;
+        $skipped = 0;
+
+        foreach ($items as $item) {
+            $itemId = trim((string) ($item['item_id'] ?? ''));
+            $modelId = trim((string) ($item['model_id'] ?? ''));
+            $sellerSku = trim((string) ($item['model_sku'] ?? $item['item_sku'] ?? ''));
+            $mapping = $this->syncService->findSkuMappingByShopeeModel($itemId, $modelId, true)
+                ?: ($sellerSku !== '' ? $this->syncService->findSkuMapping($sellerSku) : null);
+            if (! $mapping) {
+                $skipped++;
+                $results[] = ['status' => 'skipped', 'message' => 'SKU mapping tidak ditemukan.', 'sku' => $sellerSku ?: null];
+                continue;
+            }
+
+            $canonicalSku = $this->syncService->canonicalSku($mapping, $sellerSku);
+            if ($this->alreadyProcessedForAccount($accountKey, $orderSn, $stockEvent, $canonicalSku)) {
+                $skipped++;
+                $results[] = ['status' => 'skipped', 'message' => 'Order event sudah diproses.', 'sku' => $canonicalSku];
+                continue;
+            }
+
+            $sourceItemId = $itemId;
+            $sourceModelId = $modelId;
+            $sourceStock = $this->apiService->fetchShopeeModelStockForAccount($accountKey, $sourceItemId, $sourceModelId);
+            if (($sourceStock['status'] ?? '') !== 'success' || ! is_numeric($sourceStock['stock'] ?? null)) {
+                $failed++;
+                $message = $sourceStock['message'] ?? 'Stok sumber Shopee tidak tersedia.';
+                $this->syncService->logSync('shopee_order', $accountKey, $canonicalSku, null, null, 'error', $accountKey.' '.$orderSn.' '.$stockEvent.': '.$message);
+                $results[] = ['status' => 'error', 'message' => $message, 'sku' => $canonicalSku];
+                continue;
+            }
+
+            $this->hydrateAccountListingIds($mapping);
+            $sourceStock = max(0, (int) $sourceStock['stock']);
+            foreach ($this->targetAccountsFor($accountKey) as $targetAccountKey) {
+                $idempotencyKey = hash('sha256', implode('|', [$accountKey, $orderSn, $stockEvent, $canonicalSku, $targetAccountKey]));
+                $push = $this->syncService->pushTargetStockForAccount($mapping, $targetAccountKey, $sourceStock, true, $idempotencyKey);
+                $targetStatus = in_array(($push['status'] ?? ''), ['success', 'dry_run'], true) ? 'success' : (($push['status'] ?? '') === 'skipped' ? 'skipped' : 'error');
+                $this->syncService->logSync('shopee_order', $targetAccountKey, $canonicalSku, null, $sourceStock, $targetStatus, $accountKey.' '.$orderSn.' '.$stockEvent.' -> '.$targetAccountKey.': '.($push['message'] ?? '-'));
+                $results[] = ['status' => $targetStatus, 'target_account_key' => $targetAccountKey, 'sku' => $canonicalSku, 'stock' => $sourceStock];
+                if ($targetStatus === 'success') $success++; elseif ($targetStatus === 'error') $failed++; else $skipped++;
+            }
+        }
+
+        if ($items === []) {
+            $skipped++;
+            $this->syncService->logSync('shopee_order', $accountKey, $orderSn, null, null, 'skipped', $accountKey.' '.$orderSn.' tidak memiliki item_list.');
+        }
+
+        return [
+            'status' => $failed > 0 ? 'warning' : 'success',
+            'message' => sprintf('Order Shopee %s (%s) diproses. Success=%s skipped=%s failed=%s.', $orderSn, $accountKey, $success, $skipped, $failed),
+            'account_key' => $accountKey,
+            'order_sn' => $orderSn,
+            'order_status' => $orderStatus,
+            'success' => $success,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'items' => $results,
+        ];
+    }
+
+    public function pollShopeeOrdersForAccount(string $accountKey, int $hours = 24): array
+    {
+        $timeTo = time();
+        $timeFrom = $timeTo - (max(1, $hours) * 3600);
+        $processed = 0;
+        $success = 0;
+        $failed = 0;
+        $skipped = 0;
+        $alreadyProcessed = 0;
+        $messages = [];
+        $seen = [];
+
+        foreach (['PROCESSED', 'READY_TO_SHIP', 'CANCELLED'] as $status) {
+            $list = $this->apiService->fetchShopeeOrderSnListForAccount($accountKey, $timeFrom, $timeTo, $status);
+            if (($list['status'] ?? '') !== 'success') {
+                $failed++;
+                $messages[] = $status.': '.($list['message'] ?? 'Order list Shopee gagal diambil.');
+                continue;
+            }
+            foreach ($list['orders'] ?? [] as $order) {
+                $orderSn = trim((string) ($order['order_sn'] ?? ''));
+                if ($orderSn === '' || isset($seen[$orderSn])) continue;
+                $seen[$orderSn] = true;
+                $event = $status === 'CANCELLED' ? 'POLL_CANCEL_ORDER' : 'POLL_READY_ORDER';
+                $result = $this->processShopeeOrderForAccount($accountKey, $orderSn, $event, ['order_status' => $status]);
+                if (($result['status'] ?? '') === 'success') { $processed++; $success++; }
+                elseif (($result['status'] ?? '') === 'warning') { $processed++; $failed++; $messages[] = $orderSn.': '.($result['message'] ?? 'warning'); }
+                else { $skipped++; }
+            }
+        }
+
+        return [
+            'status' => $failed > 0 ? 'warning' : 'success',
+            'account_key' => $accountKey,
+            'processed' => $processed,
+            'success' => $success,
+            'already_processed' => $alreadyProcessed,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'messages' => $messages,
+        ];
+    }
+
+    private function targetAccountsFor(string $sourceAccountKey): array
+    {
+        return array_values(array_diff(['shopee-agnishopbjm', 'shopee-gitacollectionbjm', 'tiktok-agnishopbjm'], [$sourceAccountKey]));
+    }
+
+    private function hydrateAccountListingIds(object $mapping): void
+    {
+        if (! isset($mapping->stock_master_id) || ! \Illuminate\Support\Facades\Schema::hasTable('marketplace_listings')) return;
+        foreach (DB::table('marketplace_listings')->where('stock_master_id', $mapping->stock_master_id)->whereRaw('COALESCE(is_active, true) = true')->get() as $listing) {
+            $prefix = $listing->account_key === 'shopee-gitacollectionbjm' ? 'shopee_gita_' : ($listing->account_key === 'shopee-agnishopbjm' ? 'shopee_' : 'tiktok_');
+            $mapping->{$prefix.'product_id'} = (string) $listing->remote_product_id;
+            $mapping->{$prefix.'sku'} = (string) $listing->remote_variant_id;
+            if ($listing->account_key === 'tiktok-agnishopbjm') $mapping->tiktok_sku = (string) $listing->remote_variant_id;
+        }
+    }
+
+    private function alreadyProcessedForAccount(string $accountKey, string $orderId, string $eventType, string $sku): bool
+    {
+        return DB::table('marketplace_sync_logs')->where('source_marketplace', 'shopee_order')->where('sku', $sku)->where('status', 'success')->where('message', 'like', '%'.$accountKey.' '.$orderId.' '.$eventType.'%')->exists();
+    }
+
     public function processShopeeOrder(string $orderSn, string $eventType, array $payload = []): array
     {
         $orderSn = trim($orderSn);
@@ -341,19 +488,19 @@ class MarketplaceOrderSyncService
             $qty = max(1, (int) ($item['quantity'] ?? data_get($item, 'sku.quantity', 1)));
             $newStock = $this->stockAfterOrderEvent($stockEvent, $oldStock, $qty);
             $this->syncService->updateLocalStock($mapping, 'tiktok', $newStock);
-            $pushResult = $this->syncService->pushTargetStock($mapping, 'shopee', $newStock, true);
-            $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : 'success';
-            if ($status === 'success') {
-                $this->syncService->updateLocalStock($mapping, 'shopee', $newStock);
+            $this->hydrateAccountListingIds($mapping);
+            $targets = ['shopee-agnishopbjm', 'shopee-gitacollectionbjm'];
+            foreach ($targets as $targetAccountKey) {
+                $idempotencyKey = hash('sha256', implode('|', ['tiktok-agnishopbjm', $orderId, $stockEvent, $canonicalSku, $targetAccountKey]));
+                $pushResult = $this->syncService->pushTargetStockForAccount($mapping, $targetAccountKey, $newStock, true, $idempotencyKey);
+                $status = ($pushResult['status'] ?? '') === 'error' ? 'error' : (($pushResult['status'] ?? '') === 'skipped' ? 'skipped' : 'success');
+                $this->syncService->logSync('tiktok_order', $targetAccountKey, $canonicalSku, $oldStock, $newStock, $status, sprintf('TikTok order %s %s -> %s: stok %s -> %s. %s', $orderId, $stockEvent, $targetAccountKey, $oldStock, $newStock, $pushResult['message'] ?? '-'));
+                $results[] = ['status' => $status, 'target_account_key' => $targetAccountKey, 'sku' => $canonicalSku];
+                if ($status === 'success') $success++; elseif ($status === 'error') $failed++; else $skipped++;
             }
-            $this->syncService->logSync('tiktok_order', 'shopee', $canonicalSku, $oldStock, $newStock, $status, sprintf('TikTok order %s %s: stok %s -> %s. %s', $orderId, $stockEvent, $oldStock, $newStock, $pushResult['message'] ?? '-'));
-            $results[] = ['status' => $status, 'sku' => $canonicalSku];
-            if ($status === 'success') {
-                $success++;
+            if ($success > 0) {
                 $productRefreshRefs['tiktok_product_ids'][] = $productId ?: (string) ($mapping->tiktok_product_id ?? $mapping->mapped_tiktok_product_id ?? '');
                 $productRefreshRefs['shopee_item_ids'][] = (string) ($mapping->shopee_product_id ?? $mapping->mapped_shopee_item_id ?? '');
-            } else {
-                $failed++;
             }
         }
 
