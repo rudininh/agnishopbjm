@@ -1272,6 +1272,37 @@ class MarketplaceSyncService
         DB::table('marketplace_sync_status')->updateOrInsert(['marketplace' => $marketplace], $payload);
     }
 
+    public function pushTargetStockForAccount(object $mapping, string $targetAccountKey, int $stock, bool $forceLive = false, ?string $idempotencyKey = null): array
+    {
+        if (! $forceLive && ! $this->livePushEnabled()) {
+            return ['status' => 'dry_run', 'message' => 'Live push disabled (AUTO_SYNC_PUSH_LIVE=false).'];
+        }
+
+        $targetAccountKey = trim($targetAccountKey);
+        if (in_array($targetAccountKey, ['shopee-agnishopbjm', 'shopee-gitacollectionbjm'], true)) {
+            $prefix = $targetAccountKey === 'shopee-gitacollectionbjm' ? 'shopee_gita_' : 'shopee_';
+            $itemId = trim((string) ($mapping->{$prefix.'product_id'} ?? $mapping->shopee_product_id ?? ''));
+            $modelId = trim((string) ($mapping->{$prefix.'sku'} ?? $mapping->{$prefix.'model_id'} ?? $mapping->shopee_sku ?? ''));
+            if ($itemId === '' || $modelId === '') {
+                return ['status' => 'skipped', 'message' => 'Push Shopee dibatalkan: item/model target belum lengkap.'];
+            }
+
+            return $this->apiService->updateShopeeModelStockForAccount($targetAccountKey, $itemId, $modelId, $stock, $idempotencyKey);
+        }
+
+        if ($targetAccountKey === 'tiktok-agnishopbjm') {
+            $productId = trim((string) ($mapping->tiktok_product_id ?? $mapping->mapped_tiktok_product_id ?? ''));
+            $skuId = trim((string) ($mapping->tiktok_sku ?? $mapping->mapped_tiktok_sku_id ?? ''));
+            if ($productId === '' || $skuId === '') {
+                return ['status' => 'skipped', 'message' => 'Push TikTok dibatalkan: product/SKU target belum lengkap.'];
+            }
+
+            return $this->apiService->updateTiktokStockForAccount($targetAccountKey, $productId, $skuId, $stock, null, $idempotencyKey);
+        }
+
+        return ['status' => 'error', 'message' => 'Akun target marketplace tidak didukung.'];
+    }
+
     public function pushTargetStock(object $mapping, string $targetMarketplace, int $stock, bool $forceLive = false): array
     {
         if (! $forceLive && ! $this->livePushEnabled()) {
