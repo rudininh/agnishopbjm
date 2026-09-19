@@ -7,6 +7,7 @@ use App\Services\MarketplaceOrderSyncService;
 use App\Services\MarketplaceSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
 use Tests\TestCase;
@@ -76,5 +77,60 @@ class ThreeMarketplaceOrderSyncServiceTest extends TestCase
         $this->assertSame('warning', $result['status']);
         $this->assertSame(1, $result['success']);
         $this->assertSame(1, $result['failed']);
+    }
+
+    public function test_hydrate_account_listing_ids_populates_tiktok_and_gita_using_id_or_stock_master_id(): void
+    {
+        Schema::dropIfExists('marketplace_listings');
+        Schema::create('marketplace_listings', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('stock_master_id');
+            $table->string('account_key');
+            $table->string('remote_product_id');
+            $table->string('remote_variant_id')->default('');
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
+
+        DB::table('marketplace_listings')->insert([
+            [
+                'stock_master_id' => 77,
+                'account_key' => 'shopee-gitacollectionbjm',
+                'remote_product_id' => '1574251194',
+                'remote_variant_id' => '998877',
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'stock_master_id' => 77,
+                'account_key' => 'tiktok-agnishopbjm',
+                'remote_product_id' => '1729000111222',
+                'remote_variant_id' => '1739000333444',
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $api = Mockery::mock(MarketplaceApiService::class);
+        $sync = Mockery::mock(MarketplaceSyncService::class);
+        $service = new MarketplaceOrderSyncService($api, $sync);
+
+        $mapping = (object) [
+            'id' => 77,
+            'internal_sku' => 'INT-TEST-77',
+            'shopee_product_id' => '11',
+            'shopee_sku' => '22',
+        ];
+
+        $method = new \ReflectionMethod(MarketplaceOrderSyncService::class, 'hydrateAccountListingIds');
+        $method->setAccessible(true);
+        $method->invoke($service, $mapping);
+
+        $this->assertSame('1574251194', $mapping->shopee_gita_product_id ?? null);
+        $this->assertSame('998877', $mapping->shopee_gita_sku ?? null);
+        $this->assertSame('1729000111222', $mapping->tiktok_product_id ?? null);
+        $this->assertSame('1739000333444', $mapping->tiktok_sku ?? null);
     }
 }

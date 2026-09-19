@@ -147,9 +147,16 @@ class MarketplaceOrderSyncService
 
     private function hydrateAccountListingIds(object $mapping): void
     {
-        if (! isset($mapping->stock_master_id) || ! \Illuminate\Support\Facades\Schema::hasTable('marketplace_listings')) return;
-        foreach (DB::table('marketplace_listings')->where('stock_master_id', $mapping->stock_master_id)->whereRaw('COALESCE(is_active, true) = true')->get() as $listing) {
-            $prefix = $listing->account_key === 'shopee-gitacollectionbjm' ? 'shopee_gita_' : ($listing->account_key === 'shopee-agnishopbjm' ? 'shopee_' : 'tiktok_');
+        $stockMasterId = $mapping->stock_master_id ?? $mapping->id ?? null;
+        if (! $stockMasterId || ! \Illuminate\Support\Facades\Schema::hasTable('marketplace_listings')) return;
+        foreach (DB::table('marketplace_listings')->where('stock_master_id', $stockMasterId)->whereRaw('COALESCE(is_active, true) = true')->get() as $listing) {
+            $prefix = match ($listing->account_key) {
+                'shopee-gitacollectionbjm' => 'shopee_gita_',
+                'shopee-agnishopbjm' => 'shopee_',
+                'tiktok-agnishopbjm' => 'tiktok_',
+                default => null,
+            };
+            if ($prefix === null) continue;
             $mapping->{$prefix.'product_id'} = (string) $listing->remote_product_id;
             $mapping->{$prefix.'sku'} = (string) $listing->remote_variant_id;
             if ($listing->account_key === 'tiktok-agnishopbjm') $mapping->tiktok_sku = (string) $listing->remote_variant_id;
