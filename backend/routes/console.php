@@ -440,8 +440,5 @@ if ($stbMode) {
             ->cron($stbCron($marketplaceLiteMinutes))
             ->withoutOverlapping($stbOverlapMinutes($marketplaceLiteMinutes, 10, 120));
 
-        Schedule::command('agnishop:reconcile-marketplace-stocks')
-            ->cron($stbCron($marketplaceLiteMinutes))
-            ->withoutOverlapping($stbOverlapMinutes($marketplaceLiteMinutes, 10, 120));
     }
 }
