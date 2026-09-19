@@ -47,6 +47,15 @@ Artisan::command('agnishop:sync-orders {--hours= : Lookback order dalam jam}', f
     return in_array(($result['status'] ?? 'success'), ['success', 'skipped'], true) ? 0 : 1;
 });
 
+Artisan::command('agnishop:reconcile-marketplace-stocks', function (): int {
+    $result = app(StbSyncWorkerService::class)->reconcileMarketplaceStocks();
+    $this->info($result['message'] ?? 'Rekonsiliasi marketplace selesai.');
+    foreach (($result['context'] ?? []) as $key => $value) {
+        $this->line($key.': '.(is_scalar($value) || $value === null ? (string) $value : json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+    }
+    return in_array(($result['status'] ?? 'error'), ['success', 'skipped'], true) ? 0 : 1;
+});
+
 Artisan::command('agnishop:sync-marketplace-lite', function (): int {
     $result = app(StbSyncWorkerService::class)->syncMarketplaceLite();
 
@@ -428,6 +437,10 @@ if ($stbMode) {
         $marketplaceLiteMinutes = (int) config('stb.intervals.marketplace_lite_minutes', 60);
 
         Schedule::command('agnishop:sync-marketplace-lite')
+            ->cron($stbCron($marketplaceLiteMinutes))
+            ->withoutOverlapping($stbOverlapMinutes($marketplaceLiteMinutes, 10, 120));
+
+        Schedule::command('agnishop:reconcile-marketplace-stocks')
             ->cron($stbCron($marketplaceLiteMinutes))
             ->withoutOverlapping($stbOverlapMinutes($marketplaceLiteMinutes, 10, 120));
     }

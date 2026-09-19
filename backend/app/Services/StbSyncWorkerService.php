@@ -13,6 +13,7 @@ class StbSyncWorkerService
         private readonly StockConsistencyService $stockConsistencyService,
         private readonly StbRuntimeService $runtime,
         private readonly MarketplaceOperationLeaseService $marketplaceOperationLease,
+        private readonly ?ThreeMarketplaceStockReconciliationService $threeMarketplaceReconciliation = null,
     ) {
     }
 
@@ -69,6 +70,27 @@ class StbSyncWorkerService
                 'tiktok' => $this->compactResult($tiktok),
                 'refresh' => $this->compactResult($refresh),
             ]);
+        } finally {
+            $this->marketplaceOperationLease->release($lease['token']);
+        }
+    }
+
+    public function reconcileMarketplaceStocks(): array
+    {
+        $this->runtime->heartbeat('agnishop:reconcile-marketplace-stocks', true);
+        if (! (bool) config('stb.features.marketplace_sync', true)) {
+            return $this->finish('stb_marketplace_reconciliation', 'marketplace_stock', 'skipped', 'Marketplace reconciliation STB disabled dari environment.', []);
+        }
+
+        $lease = $this->marketplaceOperationLease->acquire('stb_marketplace_sync', $this->marketplaceLeaseSeconds());
+        if (! $lease['acquired']) return $this->marketplaceOperationBusyResult('stb_marketplace_reconciliation', 'marketplace_stock', $lease);
+        try {
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $this->refreshTokens();
+            $service = $this->threeMarketplaceReconciliation ?: app(ThreeMarketplaceStockReconciliationService::class);
+            $result = $this->retry('three_marketplace_reconciliation', fn (): array => $service->reconcile());
+            $status = ($result['status'] ?? '') === 'success' ? 'success' : 'warning';
+            return $this->finish('stb_marketplace_reconciliation', 'marketplace_stock', $status, $result['message'] ?? 'Rekonsiliasi marketplace selesai.', $this->compactResult($result));
         } finally {
             $this->marketplaceOperationLease->release($lease['token']);
         }
