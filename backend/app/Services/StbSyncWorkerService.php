@@ -40,7 +40,7 @@ class StbSyncWorkerService
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
             $this->refreshTokens();
 
-            $shopee = $this->retry('poll_shopee_orders', fn (): array => $this->orderSyncService->pollShopeeReadyOrders($hours));
+            $shopee = $this->retry('poll_shopee_orders', fn (): array => $this->orderSyncService->pollShopeeOrdersForAccount('shopee-agnishopbjm', $hours));
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
             $shopeeGita = $this->retry('poll_shopee_gita_orders', fn (): array => $this->orderSyncService->pollShopeeOrdersForAccount('shopee-gitacollectionbjm', $hours));
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
@@ -54,10 +54,11 @@ class StbSyncWorkerService
                 + (int) ($shopeeGita['failed'] ?? 0)
                 + (int) ($tiktok['failed'] ?? 0)
                 + (int) ($refresh['failed'] ?? 0);
-            $status = $this->resultStatus([$shopee, $tiktok, $refresh], $failed);
+            $status = $this->resultStatus([$shopee, $shopeeGita, $tiktok, $refresh], $failed);
             $message = sprintf(
-                'STB order sync selesai. Shopee baru=%s, TikTok baru=%s, refresh=%s, gagal=%s.',
+                'STB order sync selesai. Shopee Agni baru=%s, Shopee Gita baru=%s, TikTok baru=%s, refresh=%s, gagal=%s.',
                 (int) ($shopee['processed'] ?? 0),
+                (int) ($shopeeGita['processed'] ?? 0),
                 (int) ($tiktok['processed'] ?? 0),
                 (int) ($refresh['processed'] ?? 0),
                 $failed

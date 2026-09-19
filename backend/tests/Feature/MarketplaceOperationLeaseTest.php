@@ -115,7 +115,8 @@ class MarketplaceOperationLeaseTest extends TestCase
     public function test_stb_sync_releases_its_lease_when_finishing_throws(): void
     {
         $orders = Mockery::mock(MarketplaceOrderSyncService::class);
-        $orders->shouldReceive('pollShopeeReadyOrders')->once()->andReturn(['status' => 'ok', 'processed' => 0, 'failed' => 0]);
+        $orders->shouldReceive('pollShopeeOrdersForAccount')->once()->with('shopee-agnishopbjm', 24)->andReturn(['status' => 'ok', 'processed' => 0, 'failed' => 0]);
+        $orders->shouldReceive('pollShopeeOrdersForAccount')->once()->with('shopee-gitacollectionbjm', 24)->andReturn(['status' => 'ok', 'processed' => 0, 'failed' => 0]);
         $orders->shouldReceive('pollTiktokUpdatedOrders')->once()->andReturn(['status' => 'ok', 'processed' => 0, 'failed' => 0]);
         $orders->shouldReceive('processPendingProductCacheRefreshes')->once()->andReturn(['status' => 'ok', 'processed' => 0, 'failed' => 0]);
 
@@ -150,6 +151,7 @@ class MarketplaceOperationLeaseTest extends TestCase
         app(MarketplaceOperationLeaseService::class)->acquire('gitashop_mass_upload', 120);
 
         $orders = Mockery::mock(MarketplaceOrderSyncService::class);
+        $orders->shouldNotReceive('pollShopeeOrdersForAccount');
         $orders->shouldNotReceive('pollShopeeReadyOrders');
         $orders->shouldNotReceive('pollTiktokUpdatedOrders');
         $orders->shouldNotReceive('processPendingProductCacheRefreshes');

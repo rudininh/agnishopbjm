@@ -56,7 +56,10 @@ const labelMarketplace = (value) => {
     tiktok_order: 'TikTok Order',
     tiktok_stock_refresh: 'TikTok Stock Refresh',
     shopee: 'Shopee',
-    tiktok: 'TikTok'
+    tiktok: 'TikTok',
+    'shopee-agnishopbjm': 'Shopee AgniShopBJM',
+    'shopee-gitacollectionbjm': 'Shopee GitaCollectionBJM',
+    'tiktok-agnishopbjm': 'TikTok AgniShopBJM'
   }
 
   return labels[text] || value || '-'
