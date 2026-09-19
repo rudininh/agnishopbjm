@@ -532,6 +532,165 @@ class MarketplaceApiService
         return $orderPayload;
     }
 
+    public function updateShopeeModelStockForAccount(string $accountKey, string $itemId, string $modelId, int $stock, ?string $idempotencyKey = null): array
+    {
+        $token = $this->activeShopeeTokenForAccount($accountKey);
+        if (! $token) {
+            return ['status' => 'error', 'message' => 'Token Shopee aktif untuk akun ini belum tersedia.'];
+        }
+
+        $body = [
+            'item_id' => is_numeric($itemId) ? (int) $itemId : $itemId,
+            'model' => [[
+                'model_id' => is_numeric($modelId) ? (int) $modelId : $modelId,
+                'normal_stock' => max(0, $stock),
+            ]],
+        ];
+        $response = $this->shopeeSignedPostForAccount($accountKey, (int) $token->shop_id, (string) $token->access_token, '/api/v2/product/update_model', $body, $idempotencyKey);
+        $ok = ($response['error'] ?? '') === '' && trim((string) ($response['error'] ?? '')) === '';
+
+        return [
+            'status' => $ok ? 'success' : 'error',
+            'message' => $ok ? 'Live push stok Shopee berhasil dikirim.' : ($response['message'] ?? $response['error'] ?? 'Push stok Shopee gagal.'),
+            'response' => $this->publicMarketplaceResponse($response),
+        ];
+    }
+
+    public function updateTiktokStockForAccount(string $accountKey, string $productId, string $skuId, int $stock, ?string $warehouseId = null, ?string $idempotencyKey = null): array
+    {
+        try {
+            $context = app(\App\Services\MarketplaceAccountRegistry::class)->tiktokContext($accountKey);
+        } catch (\Throwable $exception) {
+            return ['status' => 'error', 'message' => $exception->getMessage()];
+        }
+
+        $token = $this->activeTiktokTokenForAccount($accountKey);
+        $shop = $this->tiktokShopForAccount($accountKey);
+        $warehouseId = trim((string) ($warehouseId ?: $context['warehouse_id'] ?? ''));
+        $shopCipher = trim((string) ($shop->cipher ?? $shop->shop_cipher ?? ''));
+        if (! $token || trim((string) ($token->access_token ?? '')) === '' || ! $shop || trim((string) ($shop->shop_id ?? '')) === '' || $shopCipher === '' || $warehouseId === '') {
+            return ['status' => 'error', 'message' => 'Token, identitas toko, cipher, atau warehouse TikTok belum tersedia.'];
+        }
+
+        $productId = trim($productId);
+        $skuId = trim($skuId);
+        $path = '/product/202309/products/'.$productId.'/inventory/update';
+        $body = ['skus' => [['id' => $skuId, 'inventory' => [['warehouse_id' => $warehouseId, 'quantity' => max(0, $stock)]]]]];
+        $bodyString = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $query = [
+            'app_key' => $context['app_key'],
+            'access_token' => (string) $token->access_token,
+            'shop_cipher' => $shopCipher,
+            'timestamp' => time(),
+        ];
+        $query['sign'] = $this->generateTiktokSign($path, $query, (string) $context['app_secret'], $bodyString);
+
+        try {
+            $request = Http::timeout(45)->withHeaders([
+                'x-tts-access-token' => (string) $token->access_token,
+                ...($idempotencyKey ? ['X-Idempotency-Key' => $idempotencyKey] : []),
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])->withBody($bodyString, 'application/json')->post(rtrim((string) $context['api_host'], '/').$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986));
+        } catch (ConnectionException) {
+            return ['status' => 'error', 'message' => 'Koneksi ke TikTok gagal.'];
+        }
+        $response = $request->json();
+        $ok = $request->successful() && is_array($response) && (int) ($response['code'] ?? -1) === 0;
+
+        return [
+            'status' => $ok ? 'success' : 'error',
+            'message' => $ok ? 'Live push stok TikTok berhasil dikirim.' : (is_array($response) ? ($response['message'] ?? 'Push stok TikTok gagal.') : 'TikTok tidak mengembalikan JSON valid.'),
+            'response' => is_array($response) ? $this->publicMarketplaceResponse($response) : [],
+        ];
+    }
+
+    public function fetchShopeeOrderDetailForAccount(string $accountKey, string $orderSn): array
+    {
+        $token = $this->activeShopeeTokenForAccount($accountKey);
+        if (! $token) {
+            return ['status' => 'error', 'message' => 'Token Shopee aktif untuk akun ini belum tersedia.'];
+        }
+
+        $response = $this->shopeeSignedGetForAccount($accountKey, (int) $token->shop_id, (string) $token->access_token, '/api/v2/order/get_order_detail', [
+            'order_sn_list' => trim($orderSn),
+            'response_optional_fields' => 'order_status,item_list,recipient_address,package_list,shipping_carrier,update_time',
+        ]);
+
+        if (($response['error'] ?? '') !== '') {
+            return ['status' => 'error', 'message' => $response['message'] ?? $response['error'], 'response' => $response];
+        }
+
+        $orders = data_get($response, 'response.order_list', []);
+        $order = is_array($orders) ? ($orders[0] ?? null) : null;
+        if (! is_array($order)) {
+            return ['status' => 'error', 'message' => 'Detail order Shopee tidak ditemukan.', 'response' => $response];
+        }
+
+        return ['status' => 'success', 'order' => $order, 'response' => $response, 'account_key' => $accountKey];
+    }
+
+    public function fetchShopeeOrderSnListForAccount(string $accountKey, int $timeFrom, int $timeTo, ?string $orderStatus = null): array
+    {
+        $token = $this->activeShopeeTokenForAccount($accountKey);
+        if (! $token) {
+            return ['status' => 'error', 'message' => 'Token Shopee aktif untuk akun ini belum tersedia.', 'account_key' => $accountKey];
+        }
+
+        $cursor = '';
+        $orders = [];
+        do {
+            $params = [
+                'time_range_field' => 'update_time',
+                'time_from' => $timeFrom,
+                'time_to' => $timeTo,
+                'page_size' => 50,
+            ];
+            if ($cursor !== '') {
+                $params['cursor'] = $cursor;
+            }
+            if ($orderStatus) {
+                $params['order_status'] = $orderStatus;
+            }
+
+            $response = $this->shopeeSignedGetForAccount($accountKey, (int) $token->shop_id, (string) $token->access_token, '/api/v2/order/get_order_list', $params);
+            if (($response['error'] ?? '') !== '') {
+                return ['status' => 'error', 'message' => $response['message'] ?? $response['error'], 'response' => $response, 'account_key' => $accountKey];
+            }
+
+            $orders = array_merge($orders, data_get($response, 'response.order_list', []));
+            $more = (bool) data_get($response, 'response.more', false);
+            $cursor = (string) data_get($response, 'response.next_cursor', '');
+        } while ($more && $cursor !== '');
+
+        return ['status' => 'success', 'orders' => $orders, 'account_key' => $accountKey];
+    }
+
+    public function fetchShopeeModelStockForAccount(string $accountKey, string $itemId, string $modelId): array
+    {
+        $cacheKey = $accountKey.'\0'.$itemId;
+        if (isset($this->shopeeModelStockCache[$cacheKey])) {
+            return $this->stockFromCachedShopeeModels($cacheKey, $modelId);
+        }
+
+        $token = $this->activeShopeeTokenForAccount($accountKey);
+        if (! $token) {
+            return ['status' => 'error', 'message' => 'Token Shopee aktif untuk akun ini belum tersedia.', 'account_key' => $accountKey];
+        }
+
+        $response = $this->shopeeSignedGetForAccount($accountKey, (int) $token->shop_id, (string) $token->access_token, '/api/v2/product/get_model_list', [
+            'item_id' => is_numeric($itemId) ? (int) $itemId : $itemId,
+        ]);
+        if (($response['error'] ?? '') !== '') {
+            return ['status' => 'error', 'message' => $response['message'] ?? $response['error'], 'response' => $response, 'account_key' => $accountKey];
+        }
+
+        $models = data_get($response, 'response.model', data_get($response, 'response.model_list', []));
+        $this->shopeeModelStockCache[$cacheKey] = is_array($models) ? $models : [];
+
+        return $this->stockFromCachedShopeeModels($cacheKey, $modelId, $response);
+    }
+
     public function fetchShopeeOrderDetail(string $orderSn): array
     {
         $token = $this->activeShopeeToken();
@@ -873,6 +1032,96 @@ class MarketplaceApiService
         } while ($pageToken !== '');
 
         return ['status' => 'success', 'orders' => $orders];
+    }
+
+    private function activeTiktokTokenForAccount(string $accountKey): ?object
+    {
+        $query = DB::table('tiktok_tokens')->whereRaw('COALESCE(is_active, true) = true');
+        if (Schema::hasColumn('tiktok_tokens', 'account_key')) {
+            $query->where('account_key', trim($accountKey));
+        }
+
+        return $query->orderByDesc('created_at')->first();
+    }
+
+    private function tiktokShopForAccount(string $accountKey): ?object
+    {
+        $query = DB::table('tiktok_shops')->orderByDesc('updated_at');
+        if (Schema::hasColumn('tiktok_shops', 'account_key')) {
+            $query->where('account_key', trim($accountKey));
+        }
+
+        return $query->first();
+    }
+
+    private function activeShopeeTokenForAccount(string $accountKey): ?object
+    {
+        $query = DB::table('shopee_tokens')->whereRaw('COALESCE(is_active, true) = true');
+        if (Schema::hasColumn('shopee_tokens', 'account_key')) {
+            $query->where('account_key', trim($accountKey));
+        }
+
+        return $query->orderByDesc('created_at')->first();
+    }
+
+    private function shopeeSignedPostForAccount(string $accountKey, int $shopId, string $accessToken, string $path, array $body = [], ?string $idempotencyKey = null): array
+    {
+        try {
+            $context = app(\App\Services\MarketplaceAccountRegistry::class)->shopeeContext($accountKey);
+        } catch (\Throwable $exception) {
+            return ['error' => 'invalid_context', 'message' => $exception->getMessage()];
+        }
+
+        $timestamp = time();
+        $query = [
+            'partner_id' => (int) $context['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+        ];
+        $query['sign'] = $this->generateShopeeApiSign((int) $context['partner_id'], (string) $context['partner_key'], $path, $timestamp, $accessToken, $shopId);
+        try {
+            $request = Http::timeout(45)->acceptJson()->withHeaders($idempotencyKey ? ['X-Idempotency-Key' => $idempotencyKey] : [])->post(rtrim((string) $context['host'], '/').$path.'?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986), $body);
+        } catch (ConnectionException) {
+            return ['error' => 'connection_failed', 'message' => 'Koneksi ke Shopee gagal.'];
+        }
+        $data = $request->json();
+        if (! is_array($data)) {
+            return ['error' => 'invalid_json', 'message' => 'Shopee tidak mengembalikan JSON valid.', '_http_status' => $request->status()];
+        }
+
+        return [...$data, '_http_status' => $request->status()];
+    }
+
+    private function shopeeSignedGetForAccount(string $accountKey, int $shopId, string $accessToken, string $path, array $params = []): array
+    {
+        try {
+            $context = app(\App\Services\MarketplaceAccountRegistry::class)->shopeeContext($accountKey);
+        } catch (\Throwable $exception) {
+            return ['error' => 'invalid_context', 'message' => $exception->getMessage()];
+        }
+
+        $timestamp = time();
+        $query = [
+            'partner_id' => (int) $context['partner_id'],
+            'timestamp' => $timestamp,
+            'access_token' => $accessToken,
+            'shop_id' => $shopId,
+            ...$params,
+        ];
+        $query['sign'] = $this->generateShopeeApiSign((int) $context['partner_id'], (string) $context['partner_key'], $path, $timestamp, $accessToken, $shopId);
+
+        try {
+            $response = Http::timeout(45)->acceptJson()->get(rtrim((string) $context['host'], '/').$path, $query);
+        } catch (ConnectionException) {
+            return ['error' => 'connection_failed', 'message' => 'Koneksi ke Shopee gagal.'];
+        }
+        $data = $response->json();
+        if (! is_array($data)) {
+            return ['error' => 'invalid_json', 'message' => 'Shopee tidak mengembalikan JSON valid.', '_http_status' => $response->status()];
+        }
+
+        return [...$data, '_http_status' => $response->status()];
     }
 
     private function activeShopeeToken(): ?object

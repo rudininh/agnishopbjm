@@ -13,6 +13,7 @@ class StbSyncWorkerService
         private readonly StockConsistencyService $stockConsistencyService,
         private readonly StbRuntimeService $runtime,
         private readonly MarketplaceOperationLeaseService $marketplaceOperationLease,
+        private readonly ?ThreeMarketplaceStockReconciliationService $threeMarketplaceReconciliation = null,
     ) {
     }
 
@@ -41,6 +42,8 @@ class StbSyncWorkerService
 
             $shopee = $this->retry('poll_shopee_orders', fn (): array => $this->orderSyncService->pollShopeeReadyOrders($hours));
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $shopeeGita = $this->retry('poll_shopee_gita_orders', fn (): array => $this->orderSyncService->pollShopeeOrdersForAccount('shopee-gitacollectionbjm', $hours));
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
             $tiktok = $this->retry('poll_tiktok_orders', fn (): array => $this->orderSyncService->pollTiktokUpdatedOrders($hours));
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
             $refresh = $this->retry('pending_product_refresh', fn (): array => $this->orderSyncService->processPendingProductCacheRefreshes(
@@ -48,6 +51,7 @@ class StbSyncWorkerService
             ));
 
             $failed = (int) ($shopee['failed'] ?? 0)
+                + (int) ($shopeeGita['failed'] ?? 0)
                 + (int) ($tiktok['failed'] ?? 0)
                 + (int) ($refresh['failed'] ?? 0);
             $status = $this->resultStatus([$shopee, $tiktok, $refresh], $failed);
@@ -62,9 +66,31 @@ class StbSyncWorkerService
             return $this->finish('stb_order_sync', 'marketplace_orders', $status, $message, [
                 'hours' => $hours,
                 'shopee' => $this->compactResult($shopee),
+                'shopee_gita' => $this->compactResult($shopeeGita),
                 'tiktok' => $this->compactResult($tiktok),
                 'refresh' => $this->compactResult($refresh),
             ]);
+        } finally {
+            $this->marketplaceOperationLease->release($lease['token']);
+        }
+    }
+
+    public function reconcileMarketplaceStocks(): array
+    {
+        $this->runtime->heartbeat('agnishop:reconcile-marketplace-stocks', true);
+        if (! (bool) config('stb.features.marketplace_sync', true)) {
+            return $this->finish('stb_marketplace_reconciliation', 'marketplace_stock', 'skipped', 'Marketplace reconciliation STB disabled dari environment.', []);
+        }
+
+        $lease = $this->marketplaceOperationLease->acquire('stb_marketplace_sync', $this->marketplaceLeaseSeconds());
+        if (! $lease['acquired']) return $this->marketplaceOperationBusyResult('stb_marketplace_reconciliation', 'marketplace_stock', $lease);
+        try {
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $this->refreshTokens();
+            $service = $this->threeMarketplaceReconciliation ?: app(ThreeMarketplaceStockReconciliationService::class);
+            $result = $this->retry('three_marketplace_reconciliation', fn (): array => $service->reconcile());
+            $status = ($result['status'] ?? '') === 'success' ? 'success' : 'warning';
+            return $this->finish('stb_marketplace_reconciliation', 'marketplace_stock', $status, $result['message'] ?? 'Rekonsiliasi marketplace selesai.', $this->compactResult($result));
         } finally {
             $this->marketplaceOperationLease->release($lease['token']);
         }
@@ -89,15 +115,20 @@ class StbSyncWorkerService
             $result = $this->retry('sync_marketplace_lite', function (): array {
                 return app(OmnichannelController::class)->syncMarketplaceCachesForSkuMapping();
             });
+            $reconciliation = $this->retry('three_marketplace_reconciliation', function (): array {
+                return ($this->threeMarketplaceReconciliation ?: app(ThreeMarketplaceStockReconciliationService::class))->reconcile();
+            });
 
-            $status = in_array(($result['status'] ?? ''), ['ok', 'success'], true) ? 'success' : 'warning';
+            $status = in_array(($result['status'] ?? ''), ['ok', 'success'], true) && ($reconciliation['status'] ?? '') === 'success' ? 'success' : 'warning';
             $message = sprintf(
-                'STB marketplace lite selesai. Shopee=%s TikTok=%s.',
+                'STB marketplace lite selesai. Shopee=%s TikTok=%s. Rekonsiliasi pushed=%s failed=%s.',
                 $result['shopee']['message'] ?? $result['shopee']['status'] ?? '-',
-                $result['tiktok']['message'] ?? $result['tiktok']['status'] ?? '-'
+                $result['tiktok']['message'] ?? $result['tiktok']['status'] ?? '-',
+                (int) ($reconciliation['pushed'] ?? 0),
+                (int) ($reconciliation['failed'] ?? 0)
             );
 
-            return $this->finish('stb_marketplace_lite', 'marketplace_cache', $status, $message, $this->compactResult($result));
+            return $this->finish('stb_marketplace_lite', 'marketplace_cache', $status, $message, ['cache' => $this->compactResult($result), 'reconciliation' => $this->compactResult($reconciliation)]);
         } finally {
             $this->marketplaceOperationLease->release($lease['token']);
         }

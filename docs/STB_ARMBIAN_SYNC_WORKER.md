@@ -136,6 +136,7 @@ Mode STB menambahkan command berikut:
 php artisan agnishop:stb-heartbeat
 php artisan agnishop:sync-orders
 php artisan agnishop:sync-marketplace-lite
+php artisan agnishop:reconcile-marketplace-stocks  # manual diagnostic
 php artisan agnishop:safety-check-lite
 php artisan agnishop:runtime-status
 php artisan agnishop:push-stb-mapping
