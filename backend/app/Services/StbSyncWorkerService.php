@@ -41,6 +41,8 @@ class StbSyncWorkerService
 
             $shopee = $this->retry('poll_shopee_orders', fn (): array => $this->orderSyncService->pollShopeeReadyOrders($hours));
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
+            $shopeeGita = $this->retry('poll_shopee_gita_orders', fn (): array => $this->orderSyncService->pollShopeeOrdersForAccount('shopee-gitacollectionbjm', $hours));
+            $this->renewMarketplaceLeaseOrThrow($lease['token']);
             $tiktok = $this->retry('poll_tiktok_orders', fn (): array => $this->orderSyncService->pollTiktokUpdatedOrders($hours));
             $this->renewMarketplaceLeaseOrThrow($lease['token']);
             $refresh = $this->retry('pending_product_refresh', fn (): array => $this->orderSyncService->processPendingProductCacheRefreshes(
@@ -48,6 +50,7 @@ class StbSyncWorkerService
             ));
 
             $failed = (int) ($shopee['failed'] ?? 0)
+                + (int) ($shopeeGita['failed'] ?? 0)
                 + (int) ($tiktok['failed'] ?? 0)
                 + (int) ($refresh['failed'] ?? 0);
             $status = $this->resultStatus([$shopee, $tiktok, $refresh], $failed);
@@ -62,6 +65,7 @@ class StbSyncWorkerService
             return $this->finish('stb_order_sync', 'marketplace_orders', $status, $message, [
                 'hours' => $hours,
                 'shopee' => $this->compactResult($shopee),
+                'shopee_gita' => $this->compactResult($shopeeGita),
                 'tiktok' => $this->compactResult($tiktok),
                 'refresh' => $this->compactResult($refresh),
             ]);

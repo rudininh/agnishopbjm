@@ -236,6 +236,8 @@ class MarketplaceOrderSyncService
 
     public function pollShopeeReadyOrders(int $hours = 24): array
     {
+        return $this->pollShopeeOrdersForAccount('shopee-agnishopbjm', $hours);
+
         $timeTo = time();
         $timeFrom = $timeTo - (max(1, $hours) * 3600);
         $statuses = ['PROCESSED', 'READY_TO_SHIP', 'CANCELLED'];
