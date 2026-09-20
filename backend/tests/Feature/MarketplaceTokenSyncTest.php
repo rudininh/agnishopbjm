@@ -315,4 +315,180 @@ class MarketplaceTokenSyncTest extends TestCase
             'tiktok' => [],
         ];
     }
+    public function test_stb_token_import_requires_worker_enabled_sync_and_valid_bearer_token(): void
+    {
+        config([
+            'stb.sync_worker' => false,
+            'stb.token_sync_enabled' => true,
+            'stb.token_sync_token' => 'push-secret',
+        ]);
+
+        $this->withToken('push-secret')
+            ->postJson('/api/runtime/marketplace-token-import', ['source' => 'pc'])
+            ->assertStatus(409);
+
+        config(['stb.sync_worker' => true, 'stb.token_sync_enabled' => false]);
+
+        $this->withToken('push-secret')
+            ->postJson('/api/runtime/marketplace-token-import', ['source' => 'pc'])
+            ->assertForbidden();
+
+        config(['stb.token_sync_enabled' => true]);
+        $this->flushHeaders();
+
+        $this->postJson('/api/runtime/marketplace-token-import', ['source' => 'pc'])
+            ->assertUnauthorized();
+        $this->withToken('wrong-secret')
+            ->postJson('/api/runtime/marketplace-token-import', ['source' => 'pc'])
+            ->assertUnauthorized();
+    }
+
+    public function test_stb_imports_valid_pc_gita_token_without_returning_credentials(): void
+    {
+        $this->configureStbTokenImport();
+        $this->insertShopeeToken('shopee-gitacollectionbjm', 987654321, 'old-access', 'old-refresh', true);
+
+        $response = $this->withToken('push-secret')
+            ->postJson('/api/runtime/marketplace-token-import', $this->pcPayload([
+                'account_key' => 'shopee-gitacollectionbjm',
+                'account_name' => 'Shopee GitaCollectionBJM',
+                'shop_id' => 987654321,
+                'access_token' => 'new-access',
+                'refresh_token' => 'new-refresh',
+                'access_token_expire_at' => now()->addHours(4)->toISOString(),
+                'refresh_token_expire_at' => now()->addDays(30)->toISOString(),
+                'updated_at' => now()->addMinute()->toISOString(),
+            ]))
+            ->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('source', 'pc')
+            ->assertJsonPath('shopee.updated', 1);
+
+        $this->assertDatabaseHas('shopee_tokens', [
+            'account_key' => 'shopee-gitacollectionbjm',
+            'shop_id' => 987654321,
+            'access_token' => 'new-access',
+            'is_active' => true,
+        ]);
+        $this->assertDatabaseMissing('shopee_tokens', [
+            'access_token' => 'old-access',
+            'is_active' => true,
+        ]);
+        $this->assertStringNotContainsString('new-access', $response->getContent());
+        $this->assertStringNotContainsString('new-refresh', $response->getContent());
+    }
+
+    public function test_stb_import_skips_unknown_account_key_without_persisting_it(): void
+    {
+        $this->configureStbTokenImport();
+
+        $this->withToken('push-secret')
+            ->postJson('/api/runtime/marketplace-token-import', $this->pcPayload([
+                'account_key' => 'shopee-unregistered',
+                'shop_id' => 123,
+                'access_token' => 'unknown-access',
+                'refresh_token' => 'unknown-refresh',
+                'updated_at' => now()->toISOString(),
+            ]))
+            ->assertOk()
+            ->assertJsonPath('shopee.updated', 0)
+            ->assertJsonPath('shopee.unchanged', 1);
+
+        $this->assertDatabaseMissing('shopee_tokens', [
+            'account_key' => 'shopee-unregistered',
+        ]);
+    }
+
+    public function test_pc_push_posts_active_allowlisted_tokens_with_bearer_authentication(): void
+    {
+        $this->configurePcTokenPush();
+        $this->insertShopeeToken('shopee-gitacollectionbjm', 987654321, 'gita-access', 'gita-refresh', true);
+        $this->insertShopeeToken('shopee-unregistered', 123, 'unknown-access', 'unknown-refresh', true);
+        Http::fake([
+            'http://10.0.0.2:8088/*' => Http::response([
+                'status' => 'success',
+                'source' => 'pc',
+                'shopee' => ['updated' => 1, 'unchanged' => 0, 'skipped_stale' => 0],
+                'tiktok' => ['updated' => 0, 'unchanged' => 0, 'skipped_stale' => 0],
+            ], 200),
+        ]);
+
+        $result = app(\App\Services\MarketplaceTokenSyncService::class)->pushToStb();
+
+        $this->assertSame('success', $result['status']);
+        $this->assertSame(1, $result['shopee']['updated']);
+        $this->assertStringNotContainsString('gita-access', json_encode($result));
+        $this->assertStringNotContainsString('gita-refresh', json_encode($result));
+        Http::assertSent(function ($request): bool {
+            $data = $request->data();
+
+            return $request->hasHeader('Authorization', 'Bearer push-secret')
+                && $request->method() === 'POST'
+                && $request->url() === 'http://10.0.0.2:8088/api/runtime/marketplace-token-import'
+                && ($data['source'] ?? null) === 'pc'
+                && ($data['shopee'][0]['account_key'] ?? null) === 'shopee-gitacollectionbjm'
+                && ! str_contains(json_encode($data), 'shopee-unregistered');
+        });
+    }
+
+    public function test_pc_push_returns_sanitized_failure_when_stb_cannot_be_reached(): void
+    {
+        $this->configurePcTokenPush();
+        Http::fake(fn () => throw new \RuntimeException('connection failed'));
+
+        $result = app(\App\Services\MarketplaceTokenSyncService::class)->pushToStb();
+
+        $this->assertSame('error', $result['status']);
+        $this->assertSame('STB tidak dapat dihubungi.', $result['message']);
+        $this->assertStringNotContainsString('push-secret', json_encode($result));
+    }
+
+    public function test_pc_push_command_does_not_print_marketplace_credentials(): void
+    {
+        $this->configurePcTokenPush();
+        $this->insertShopeeToken('shopee-gitacollectionbjm', 987654321, 'command-access', 'command-refresh', true);
+        Http::fake([
+            'http://10.0.0.2:8088/*' => Http::response([
+                'status' => 'success',
+                'source' => 'pc',
+                'shopee' => ['updated' => 1, 'unchanged' => 0, 'skipped_stale' => 0],
+                'tiktok' => ['updated' => 0, 'unchanged' => 0, 'skipped_stale' => 0],
+            ], 200),
+        ]);
+
+        $this->artisan('agnishop:push-marketplace-tokens-to-stb')
+            ->expectsOutput('Token marketplace PC ke STB: success')
+            ->doesntExpectOutputToContain('command-access')
+            ->doesntExpectOutputToContain('command-refresh')
+            ->assertExitCode(0);
+    }
+
+    private function configureStbTokenImport(): void
+    {
+        config([
+            'stb.sync_worker' => true,
+            'stb.token_sync_enabled' => true,
+            'stb.token_sync_token' => 'push-secret',
+        ]);
+    }
+
+    private function configurePcTokenPush(): void
+    {
+        config([
+            'stb.token_sync_enabled' => true,
+            'stb.token_sync_push_url' => 'http://10.0.0.2:8088/api/runtime/marketplace-token-import',
+            'stb.token_sync_token' => 'push-secret',
+            'stb.token_sync_timeout_seconds' => 15,
+        ]);
+    }
+
+    private function pcPayload(array $shopeeToken): array
+    {
+        return [
+            'source' => 'pc',
+            'generated_at' => now()->toISOString(),
+            'shopee' => [$shopeeToken],
+            'tiktok' => [],
+        ];
+    }
 }

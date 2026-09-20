@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Schema;
 
 class MarketplaceTokenSyncService
 {
+    private const ALLOWED_ACCOUNT_KEYS = ['shopee-agnishopbjm', 'shopee-gitacollectionbjm', 'tiktok-agnishopbjm'];
     public function pullFromStb(): array
     {
         $summary = $this->summary();
@@ -58,6 +59,98 @@ class MarketplaceTokenSyncService
         } finally {
             $lock->release();
         }
+    }
+
+    public function pushToStb(): array
+    {
+        $summary = $this->summary('pc');
+
+        if (! (bool) config('stb.token_sync_enabled', false)) {
+            return $this->finalizeSummary($summary, 'error', 'Sinkron token STB belum diaktifkan.');
+        }
+
+        $url = trim((string) config('stb.token_sync_push_url', ''));
+        $token = trim((string) config('stb.token_sync_token', ''));
+        if ($url === '' || $token === '') {
+            return $this->finalizeSummary($summary, 'error', 'URL push atau token sinkron STB belum dikonfigurasi.');
+        }
+
+        try {
+            $response = Http::acceptJson()
+                ->withToken($token)
+                ->timeout((int) config('stb.token_sync_timeout_seconds', 15))
+                ->post($url, $this->exportForStb());
+        } catch (\Throwable) {
+            return $this->finalizeSummary($summary, 'error', 'STB tidak dapat dihubungi.');
+        }
+
+        $payload = $response->json();
+        if ($response->status() === 404) {
+            return $this->finalizeSummary($summary, 'error', 'Endpoint import token STB belum tersedia. Perbarui aplikasi di STB.');
+        }
+
+        if (! $response->successful() || ! is_array($payload) || ($payload['source'] ?? null) !== 'pc') {
+            return $this->finalizeSummary($summary, 'error', 'Respons import token dari STB tidak valid.');
+        }
+
+        $summary['shopee'] = $this->sanitizeChannelSummary((array) ($payload['shopee'] ?? []));
+        $summary['tiktok'] = $this->sanitizeChannelSummary((array) ($payload['tiktok'] ?? []));
+        $status = (string) ($payload['status'] ?? 'success');
+        if (! in_array($status, ['success', 'unchanged', 'skipped'], true)) {
+            $status = 'success';
+        }
+
+        return $this->finalizeSummary($summary, $status, (string) ($payload['message'] ?? 'Token marketplace PC berhasil dikirim ke STB.'));
+    }
+
+    public function importFromPc(array $payload): array
+    {
+        $summary = $this->summary('pc');
+
+        if (($payload['source'] ?? null) !== 'pc') {
+            return $this->saveStatus($summary, 'error', 'Payload token PC tidak valid.');
+        }
+
+        $summary['shopee'] = $this->importShopeeTokens((array) ($payload['shopee'] ?? []));
+        $summary['tiktok'] = $this->importTiktokTokens((array) ($payload['tiktok'] ?? []));
+        $status = $summary['shopee']['updated'] > 0 || $summary['tiktok']['updated'] > 0 ? 'success' : 'unchanged';
+
+        return $this->saveStatus($summary, $status, $status === 'success'
+            ? 'Token marketplace dari PC berhasil disinkronisasi ke STB.'
+            : 'Token marketplace STB sudah paling baru.');
+    }
+
+    public function exportForStb(): array
+    {
+        return [
+            'source' => 'pc',
+            'generated_at' => now()->toISOString(),
+            'shopee' => $this->activeTokens('shopee_tokens', [
+                'account_key',
+                'account_name',
+                'shop_id',
+                'access_token',
+                'refresh_token',
+                'access_token_expire_at',
+                'refresh_token_expire_at',
+                'expire_at',
+                'request_id',
+                'updated_at',
+            ], ['account_key', 'shop_id', 'updated_at']),
+            'tiktok' => $this->activeTokens('tiktok_tokens', [
+                'account_key',
+                'account_name',
+                'shop_id',
+                'open_id',
+                'access_token',
+                'refresh_token',
+                'access_token_expire_at',
+                'refresh_token_expire_at',
+                'expire_at',
+                'request_id',
+                'updated_at',
+            ], ['account_key', 'shop_id', 'updated_at']),
+        ];
     }
 
     public function status(): array
@@ -139,6 +232,7 @@ class MarketplaceTokenSyncService
         }
 
         return $query->get()
+            ->filter(fn (object $token): bool => $this->isAllowedAccountKey((string) ($token->account_key ?? '')))
             ->map(static fn (object $token): array => (array) $token)
             ->values()
             ->all();
@@ -156,7 +250,7 @@ class MarketplaceTokenSyncService
 
             $accountKey = trim((string) ($token['account_key'] ?? ''));
             $shopId = (int) ($token['shop_id'] ?? 0);
-            if ($accountKey === '' || $shopId <= 0) {
+            if ($accountKey === '' || $shopId <= 0 || ! $this->isAllowedAccountKey($accountKey)) {
                 $summary['unchanged'] += 1;
                 continue;
             }
@@ -233,7 +327,7 @@ class MarketplaceTokenSyncService
             $accountKey = trim((string) ($token['account_key'] ?? ''));
             $openId = trim((string) ($token['open_id'] ?? ''));
             $shopId = trim((string) ($token['shop_id'] ?? ''));
-            if ($accountKey === '' || ($openId === '' && $shopId === '')) {
+            if ($accountKey === '' || ($openId === '' && $shopId === '') || ! $this->isAllowedAccountKey($accountKey)) {
                 $summary['unchanged'] += 1;
                 continue;
             }
@@ -276,6 +370,20 @@ class MarketplaceTokenSyncService
         return $summary;
     }
 
+    private function isAllowedAccountKey(string $accountKey): bool
+    {
+        return in_array($accountKey, self::ALLOWED_ACCOUNT_KEYS, true);
+    }
+
+    private function sanitizeChannelSummary(array $summary): array
+    {
+        return [
+            'updated' => max(0, (int) ($summary['updated'] ?? 0)),
+            'unchanged' => max(0, (int) ($summary['unchanged'] ?? 0)),
+            'skipped_stale' => max(0, (int) ($summary['skipped_stale'] ?? 0)),
+        ];
+    }
+
     private function hasRequiredTokenFields(array $token): bool
     {
         return trim((string) ($token['access_token'] ?? '')) !== ''
@@ -295,11 +403,11 @@ class MarketplaceTokenSyncService
         }
     }
 
-    private function summary(): array
+    private function summary(string $source = 'stb'): array
     {
         return [
             'status' => 'unchanged',
-            'source' => 'stb',
+            'source' => $source,
             'shopee' => $this->emptyChannelSummary(),
             'tiktok' => $this->emptyChannelSummary(),
             'last_succeeded_at' => null,
@@ -312,15 +420,25 @@ class MarketplaceTokenSyncService
         return ['updated' => 0, 'unchanged' => 0, 'skipped_stale' => 0];
     }
 
+    private function finalizeSummary(array $summary, string $status, string $message): array
+    {
+        $success = in_array($status, ['success', 'unchanged'], true);
+        $summary['status'] = $status;
+        $summary['last_succeeded_at'] = $success ? now()->toISOString() : null;
+        $summary['message'] = $message;
+
+        return $summary;
+    }
+
     private function saveStatus(array $summary, string $status, string $message): array
     {
         $success = in_array($status, ['success', 'unchanged'], true);
         $now = now();
         $lastSucceededAt = $success
             ? $now
-            : DB::table('marketplace_token_sync_statuses')->where('source', 'stb')->value('last_succeeded_at');
+            : DB::table('marketplace_token_sync_statuses')->where('source', $summary['source'] ?? 'stb')->value('last_succeeded_at');
         DB::table('marketplace_token_sync_statuses')->updateOrInsert(
-            ['source' => 'stb'],
+            ['source' => $summary['source'] ?? 'stb'],
             [
                 'status' => $status,
                 'last_attempted_at' => $now,

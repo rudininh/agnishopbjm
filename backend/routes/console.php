@@ -35,6 +35,16 @@ Artisan::command('agnishop:pull-stb-marketplace-tokens', function (): int {
     return in_array(($result['status'] ?? 'error'), ['success', 'unchanged', 'skipped'], true) ? 0 : 1;
 });
 
+Artisan::command('agnishop:push-marketplace-tokens-to-stb', function (): int {
+    $result = app(MarketplaceTokenSyncService::class)->pushToStb();
+    $this->info('Token marketplace PC ke STB: '.($result['status'] ?? 'error'));
+    $this->line($result['message'] ?? '');
+    $this->line('Shopee updated='.(int) ($result['shopee']['updated'] ?? 0));
+    $this->line('TikTok updated='.(int) ($result['tiktok']['updated'] ?? 0));
+
+    return in_array(($result['status'] ?? 'error'), ['success', 'unchanged', 'skipped'], true) ? 0 : 1;
+});
+
 Artisan::command('agnishop:sync-orders {--hours= : Lookback order dalam jam}', function (): int {
     $hours = (int) ($this->option('hours') ?: config('stb.worker.hours', 24));
     $result = app(StbSyncWorkerService::class)->syncOrders($hours);

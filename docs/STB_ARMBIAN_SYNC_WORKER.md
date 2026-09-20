@@ -151,6 +151,42 @@ Fungsi:
 - `agnishop:stb-heartbeat`: menyimpan heartbeat STB agar dashboard utama tahu worker hidup.
 - `agnishop:push-stb-mapping`: dijalankan dari PC utama untuk mengirim mapping/cache produk ke endpoint STB.
 
+## Sync Token Marketplace PC ke STB
+
+Fitur ini mengirim token aktif Shopee Agni, Shopee Gita, dan TikTok dari **PC utama** ke STB tanpa menampilkan token di terminal atau log.
+
+1. Pada STB, isi `/opt/agnishopbjm/backend/.env` dengan nilai berikut lalu jalankan `php artisan optimize:clear`:
+
+```env
+STB_SYNC_WORKER=true
+STB_TOKEN_SYNC_ENABLED=true
+STB_TOKEN_SYNC_TOKEN=<secret-panjang-yang-sama>
+```
+
+2. Pada PC utama, isi `.env` backend dengan nilai berikut lalu jalankan `php artisan optimize:clear`:
+
+```env
+STB_TOKEN_SYNC_ENABLED=true
+STB_TOKEN_SYNC_PUSH_URL=http://IP-STB:8088/api/runtime/marketplace-token-import
+STB_TOKEN_SYNC_TOKEN=<secret-panjang-yang-sama>
+```
+
+3. Jalankan **di PC utama**, bukan STB:
+
+```bash
+cd C:/laragon/www/agnishopbjm/backend
+php artisan agnishop:push-marketplace-tokens-to-stb
+```
+
+4. Setelah output `Token marketplace PC ke STB: success`, jalankan di STB:
+
+```bash
+cd /opt/agnishopbjm/backend
+php artisan agnishop:sync-orders --hours=24
+```
+
+Jangan pernah menempelkan nilai token ke chat. Batasi endpoint STB hanya ke IP PC pada firewall dan gunakan HTTPS bila tersedia.
+
 ## Sync Mapping PC ke STB
 
 Set token yang sama di PC dan STB:
